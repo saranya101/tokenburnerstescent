@@ -1,0 +1,8 @@
+{ "schemaVersion": "1", "status": "SAT", "plan": {
+  "schemaVersion": "1", "id": "plan-apple", "goalContractId": "goal-apple", "goalContractVersion": 1, "bankStateVersion": 10,
+  "compilerVersion": "1.0.0", "policyVersion": "1.0.0", "operationLibraryVersion": "1.0.0",
+  "steps": [{ "id": "step-buy-aapl", "sequence": 0, "action": "BUY_ASSET", "dependsOn": [], "reversible": false, "parameters": { "sourceAccountId": "acc-brokerage", "assetId": "asset-aapl", "quantity": "10.5", "maximumSpend": { "currency": "USD", "minorUnits": "250000" } } }],
+  "validity": { "requiredQuoteIds": [] },
+  "projectedOutcome": { "goalSatisfied": true, "acquiredAssets": [{ "assetId": "asset-aapl", "quantity": "10.5" }], "paidObligationIds": [], "projectedAvailableBalances": [], "warnings": [] },
+  "planHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+} }

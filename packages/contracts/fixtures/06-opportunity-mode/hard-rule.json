@@ -1,0 +1,4 @@
+{
+  "schemaVersion": "1", "id": "rule-min-liquidity", "userId": "user-1", "type": "MIN_AVAILABLE_BALANCE", "enabled": true,
+  "money": { "currency": "SGD", "minorUnits": "500000" }, "accountId": "acc-savings"
+}

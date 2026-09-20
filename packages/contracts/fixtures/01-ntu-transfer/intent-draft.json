@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "1", "originalText": "Send NTU USD 5,000 and keep total cost below SGD 6,900",
+  "goal": { "type": "DELIVER_MONEY", "amount": { "currency": "USD", "minorUnits": "500000" }, "recipientReference": "NTU" },
+  "constraints": [{ "type": "MAX_TOTAL_COST", "money": { "currency": "SGD", "minorUnits": "690000" } }],
+  "preferences": [{ "type": "MINIMIZE_TOTAL_COST" }],
+  "references": [{ "reference": "NTU", "expectedEntityType": "BENEFICIARY" }]
+}

@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "1", "userId": "user-1", "stateVersion": 11, "capturedAt": "2026-09-20T04:02:00Z",
+  "accounts": [{ "id": "acc-usd", "type": "CHECKING", "currency": "USD", "ledgerMinorUnits": "200000", "availableMinorUnits": "200000", "status": "ACTIVE", "capabilities": ["SEND_TRANSFER"] }],
+  "beneficiaries": [{ "id": "ben-ntu", "name": "NTU", "supportedCurrencies": ["USD"], "status": "ACTIVE" }],
+  "assets": [], "holdings": [], "obligations": [], "serviceAvailability": { "transfers": true, "fx": false, "billPayments": true, "investments": false }, "fxQuotes": []
+}

@@ -1,0 +1,6 @@
+{
+  "schemaVersion": "1", "id": "approval-ntu", "userId": "user-1", "goalContractId": "goal-ntu", "goalContractVersion": 1,
+  "goalContractHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "financialPlanId": "plan-ntu",
+  "financialPlanHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bankStateVersion": 7,
+  "method": "PASSKEY", "approvedAt": "2026-09-20T01:03:00Z", "expiresAt": "2026-09-20T01:08:00Z", "signatureReference": "sig-ntu-1"
+}

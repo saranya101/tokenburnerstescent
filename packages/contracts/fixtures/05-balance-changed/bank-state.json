@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "1", "userId": "user-1", "stateVersion": 8, "capturedAt": "2026-09-20T05:05:00Z",
+  "accounts": [
+    { "id": "acc-checking", "type": "CHECKING", "currency": "SGD", "ledgerMinorUnits": "75000", "availableMinorUnits": "25000", "status": "ACTIVE", "capabilities": ["SEND_TRANSFER"] },
+    { "id": "acc-savings", "type": "SAVINGS", "currency": "SGD", "ledgerMinorUnits": "100000", "availableMinorUnits": "100000", "status": "ACTIVE", "capabilities": ["RECEIVE_TRANSFER"] }
+  ],
+  "beneficiaries": [], "assets": [], "holdings": [], "obligations": [], "serviceAvailability": { "transfers": true, "fx": true, "billPayments": true, "investments": true }, "fxQuotes": []
+}

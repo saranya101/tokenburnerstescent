@@ -1,0 +1,6 @@
+{
+  "name": "@parlance/web", "version": "0.0.0", "private": true,
+  "scripts": { "dev": "next dev -p 3000", "build": "next build --webpack", "start": "next start -p 3000", "lint": "eslint .", "typecheck": "tsc --noEmit", "test": "vitest run --passWithNoTests" },
+  "dependencies": { "@parlance/contracts": "workspace:*", "next": "^16.0.0", "react": "^19.2.0", "react-dom": "^19.2.0" },
+  "devDependencies": { "@types/node": "^24.0.0", "@types/react": "^19.2.0", "@types/react-dom": "^19.2.0", "tailwindcss": "^4.1.0", "@tailwindcss/postcss": "^4.1.0" }
+}

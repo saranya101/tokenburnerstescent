@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "1", "id": "plan-balance-change", "goalContractId": "goal-balance-change", "goalContractVersion": 1, "bankStateVersion": 7,
+  "compilerVersion": "1.0.0", "policyVersion": "1.0.0", "operationLibraryVersion": "1.0.0",
+  "steps": [{ "id": "step-move", "sequence": 0, "action": "MOVE_FUNDS", "dependsOn": [], "reversible": true, "parameters": { "sourceAccountId": "acc-checking", "destinationAccountId": "acc-savings", "amount": { "currency": "SGD", "minorUnits": "50000" } } }],
+  "validity": { "requiredQuoteIds": [] }, "projectedOutcome": { "goalSatisfied": true, "acquiredAssets": [], "paidObligationIds": [], "projectedAvailableBalances": [], "warnings": [] },
+  "planHash": "2222222222222222222222222222222222222222222222222222222222222222"
+}

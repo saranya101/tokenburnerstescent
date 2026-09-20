@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1", "userId": "user-1", "stateVersion": 7, "capturedAt": "2026-09-20T01:02:00Z",
+  "accounts": [
+    { "id": "acc-sgd", "type": "CHECKING", "currency": "SGD", "ledgerMinorUnits": "1000000", "availableMinorUnits": "1000000", "status": "ACTIVE", "capabilities": ["SEND_TRANSFER", "CONVERT_FX"] },
+    { "id": "acc-usd", "type": "WALLET", "currency": "USD", "ledgerMinorUnits": "0", "availableMinorUnits": "0", "status": "ACTIVE", "capabilities": ["SEND_TRANSFER", "RECEIVE_TRANSFER"] }
+  ],
+  "beneficiaries": [{ "id": "ben-ntu", "name": "Nanyang Technological University", "supportedCurrencies": ["USD", "SGD"], "status": "ACTIVE" }],
+  "assets": [], "holdings": [], "obligations": [],
+  "serviceAvailability": { "transfers": true, "fx": true, "billPayments": true, "investments": true },
+  "fxQuotes": [{ "id": "quote-sgd-usd-1", "fromCurrency": "SGD", "toCurrency": "USD", "rate": "0.75", "fee": { "currency": "SGD", "minorUnits": "100" }, "expiresAt": "2026-09-20T01:10:00Z" }]
+}

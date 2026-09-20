@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "1", "id": "plan-ntu", "goalContractId": "goal-ntu", "goalContractVersion": 1, "bankStateVersion": 7,
+  "compilerVersion": "1.0.0", "policyVersion": "1.0.0", "operationLibraryVersion": "1.0.0",
+  "steps": [
+    { "id": "step-fx", "sequence": 0, "action": "FX_CONVERT", "dependsOn": [], "reversible": false, "parameters": { "accountId": "acc-sgd", "fromAmount": { "currency": "SGD", "minorUnits": "666667" }, "toCurrency": "USD", "quoteId": "quote-sgd-usd-1" } },
+    { "id": "step-transfer", "sequence": 1, "action": "TRANSFER", "dependsOn": ["step-fx"], "reversible": false, "parameters": { "sourceAccountId": "acc-usd", "beneficiaryId": "ben-ntu", "amount": { "currency": "USD", "minorUnits": "500000" } } }
+  ],
+  "validity": { "validUntil": "2026-09-20T01:10:00Z", "requiredQuoteIds": ["quote-sgd-usd-1"] },
+  "projectedOutcome": { "goalSatisfied": true, "deliveredMoney": { "currency": "USD", "minorUnits": "500000" }, "acquiredAssets": [], "paidObligationIds": [], "projectedAvailableBalances": [{ "accountId": "acc-sgd", "money": { "currency": "SGD", "minorUnits": "333233" } }], "warnings": [] },
+  "planHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}

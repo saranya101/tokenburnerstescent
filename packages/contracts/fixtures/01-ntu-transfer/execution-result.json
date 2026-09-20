@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "1", "executionId": "exec-ntu", "planId": "plan-ntu", "status": "COMPLETED", "startedStateVersion": 7, "finalStateVersion": 9,
+  "steps": [
+    { "stepId": "step-fx", "status": "SETTLED", "idempotencyKey": "exec-ntu-fx", "bankReference": "bank-fx-1" },
+    { "stepId": "step-transfer", "status": "SETTLED", "idempotencyKey": "exec-ntu-transfer", "bankReference": "bank-transfer-1" }
+  ],
+  "goalOutcome": { "achieved": true, "summary": "USD 5,000 delivered to NTU.", "deliveredMoney": { "currency": "USD", "minorUnits": "500000" } }
+}

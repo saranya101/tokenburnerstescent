@@ -1,0 +1,5 @@
+{
+  "schemaVersion": "1", "executionId": "exec-balance-change", "planId": "plan-balance-change", "status": "FAILED", "startedStateVersion": 8,
+  "steps": [{ "stepId": "step-move", "status": "FAILED", "idempotencyKey": "exec-balance-change-step", "errorCode": "STATE_VERSION_CHANGED" }],
+  "goalOutcome": { "achieved": false, "summary": "Execution stopped because bank state changed after approval." }
+}

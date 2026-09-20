@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "1", "id": "goal-ntu", "userId": "user-1", "version": 1, "sourceIntentDraftId": "intent-ntu",
+  "goal": { "type": "DELIVER_MONEY", "amount": { "currency": "USD", "minorUnits": "500000" }, "recipientReference": "NTU" },
+  "constraints": [{ "type": "MAX_TOTAL_COST", "money": { "currency": "SGD", "minorUnits": "690000" } }],
+  "preferences": [{ "type": "MINIMIZE_TOTAL_COST" }],
+  "entityBindings": [{ "schemaVersion": "1", "reference": "NTU", "entityType": "BENEFICIARY", "entityId": "ben-ntu", "resolutionMethod": "USER_CONFIRMED", "confidence": "1.0", "confirmed": true }],
+  "status": "CONFIRMED", "contractHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "createdAt": "2026-09-20T01:00:00Z", "confirmedAt": "2026-09-20T01:01:00Z"
+}

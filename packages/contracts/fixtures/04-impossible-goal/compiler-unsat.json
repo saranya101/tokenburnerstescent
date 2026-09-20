@@ -1,0 +1,5 @@
+{
+  "schemaVersion": "1", "status": "UNSAT",
+  "reason": { "code": "INSUFFICIENT_AVAILABLE_BALANCE", "message": "No account can fund the goal while preserving the required available balance.", "details": { "stateVersion": 11 } },
+  "relaxations": [{ "constraintType": "MIN_AVAILABLE_BALANCE", "suggestion": "Reduce the delivery amount or lower the minimum available balance." }]
+}

@@ -1,0 +1,471 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum GoalStatus {
+  DRAFT
+  AWAITING_CLARIFICATION
+  AWAITING_GOAL_CONFIRMATION
+  CONFIRMED
+  PLANNING
+  AWAITING_APPROVAL
+  AUTHORIZED
+  EXECUTING
+  PAUSED
+  REAPPROVAL_REQUIRED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum PlanStatus {
+  DRAFT
+  READY
+  SUPERSEDED
+  FAILED
+}
+
+enum ExecutionRunStatus {
+  AUTHORIZED
+  EXECUTING
+  PAUSED
+  REAPPROVAL_REQUIRED
+  COMPLETED
+  FAILED
+}
+
+enum ExecutionStepStatus {
+  PENDING
+  ACCEPTED
+  SETTLED
+  FAILED
+  UNKNOWN
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+enum AccountStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum BeneficiaryStatus {
+  ACTIVE
+  BLOCKED
+  PENDING_VERIFICATION
+}
+
+enum ApprovalMethod {
+  BIOMETRIC
+  PASSKEY
+  PIN
+  EXTERNAL_SIGNATURE
+}
+
+model User {
+  id                 String              @id @default(cuid())
+  externalRef        String?             @unique
+  accounts           Account[]
+  beneficiaries      Beneficiary[]
+  holdings           Holding[]
+  entityAliases      EntityAlias[]
+  hardRules          UserHardRule[]
+  conversations      Conversation[]
+  intentDrafts       IntentDraftRecord[]
+  goalContracts      GoalContract[]
+  bankStateSnapshots BankStateSnapshot[]
+  approvals          Approval[]
+  executionRuns      ExecutionRun[]
+  opportunities      Opportunity[]
+  bankServiceState   BankServiceState?
+  fxQuotes           FxQuote[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+model Account {
+  id                  String        @id @default(cuid())
+  userId              String
+  user                User          @relation(fields: [userId], references: [id])
+  providerRef         String
+  type                String
+  currency            String
+  ledgerMinorUnits    BigInt
+  availableMinorUnits BigInt
+  status              AccountStatus
+  capabilities        Json
+  stateVersion        Int           @default(0)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@unique([userId, providerRef])
+  @@index([userId, status])
+}
+
+model Beneficiary {
+  id                  String            @id @default(cuid())
+  userId              String
+  user                User              @relation(fields: [userId], references: [id])
+  providerRef         String?
+  name                String
+  supportedCurrencies Json
+  status              BeneficiaryStatus
+  version             Int               @default(1)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@index([userId, status])
+}
+
+model Asset {
+  id                 String    @id @default(cuid())
+  symbol             String    @unique
+  name               String
+  assetType          String
+  tradable           Boolean
+  settlementCurrency String
+  metadata           Json?
+  holdings           Holding[]
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+model Holding {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  assetId      String
+  asset        Asset    @relation(fields: [assetId], references: [id])
+  quantity     Decimal  @db.Decimal(36, 18)
+  stateVersion Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, assetId])
+}
+
+model EntityAlias {
+  id         String                       @id @default(cuid())
+  userId     String
+  user       User                         @relation(fields: [userId], references: [id])
+  entityType String
+  entityId   String
+  alias      String
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime                     @default(now())
+  updatedAt  DateTime                     @updatedAt
+
+  @@index([userId, alias])
+}
+
+model UserHardRule {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String
+  payload   Json
+  version   Int      @default(1)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, enabled])
+}
+
+model Conversation {
+  id           String              @id @default(cuid())
+  userId       String
+  user         User                @relation(fields: [userId], references: [id])
+  messages     Message[]
+  intentDrafts IntentDraftRecord[]
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  role           String
+  content        String
+  traceId        String?
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+model IntentDraftRecord {
+  id             String         @id @default(cuid())
+  userId         String
+  user           User           @relation(fields: [userId], references: [id])
+  conversationId String
+  conversation   Conversation   @relation(fields: [conversationId], references: [id])
+  schemaVersion  String
+  payload        Json
+  status         String
+  goalContracts  GoalContract[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+model GoalContract {
+  id                  String              @id @default(cuid())
+  contractKey         String
+  version             Int
+  userId              String
+  user                User                @relation(fields: [userId], references: [id])
+  sourceIntentDraftId String?
+  sourceIntentDraft   IntentDraftRecord?  @relation(fields: [sourceIntentDraftId], references: [id])
+  status              GoalStatus
+  schemaVersion       String
+  goalPayload         Json
+  preferences         Json
+  contractHash        String
+  constraints         GoalConstraint[]
+  entityBindings      GoalEntityBinding[]
+  financialPlans      FinancialPlan[]
+  approvals           Approval[]
+  createdAt           DateTime            @default(now())
+  confirmedAt         DateTime?
+  updatedAt           DateTime            @updatedAt
+
+  @@unique([contractKey, version])
+  @@index([userId, status])
+}
+
+model GoalConstraint {
+  id             String       @id @default(cuid())
+  goalContractId String
+  goalContract   GoalContract @relation(fields: [goalContractId], references: [id])
+  type           String
+  payload        Json
+  createdAt      DateTime     @default(now())
+
+  @@index([goalContractId])
+}
+
+model GoalEntityBinding {
+  id               String       @id @default(cuid())
+  goalContractId   String
+  goalContract     GoalContract @relation(fields: [goalContractId], references: [id])
+  reference        String
+  entityType       String
+  entityId         String
+  resolutionMethod String
+  confidence       Decimal?     @db.Decimal(8, 7)
+  confirmed        Boolean
+  createdAt        DateTime     @default(now())
+
+  @@unique([goalContractId, reference])
+}
+
+model BankStateSnapshot {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  schemaVersion String
+  stateVersion  Int
+  snapshot      Json
+  snapshotHash  String?
+  traceId       String?
+  capturedAt    DateTime
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, stateVersion])
+}
+
+model FinancialPlan {
+  id                      String              @id @default(cuid())
+  goalContractRowId       String
+  goalContract            GoalContract        @relation(fields: [goalContractRowId], references: [id])
+  goalContractKey         String
+  status                  PlanStatus          @default(DRAFT)
+  schemaVersion           String
+  goalContractVersion     Int
+  bankStateVersion        Int
+  compilerVersion         String
+  policyVersion           String
+  operationLibraryVersion String
+  validity                Json
+  projectedOutcome        Json
+  planHash                String              @unique
+  traceId                 String?
+  steps                   FinancialPlanStep[]
+  approvals               Approval[]
+  executionRuns           ExecutionRun[]
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  @@index([goalContractRowId, status])
+  @@index([goalContractKey, goalContractVersion])
+}
+
+model FinancialPlanStep {
+  id             String          @id @default(cuid())
+  planId         String
+  plan           FinancialPlan   @relation(fields: [planId], references: [id])
+  sequence       Int
+  action         String
+  dependsOn      Json
+  reversible     Boolean
+  parameters     Json
+  executionSteps ExecutionStep[]
+  createdAt      DateTime        @default(now())
+
+  @@unique([planId, sequence])
+}
+
+model Approval {
+  id                  String         @id @default(cuid())
+  userId              String
+  user                User           @relation(fields: [userId], references: [id])
+  goalContractRowId   String
+  goalContract        GoalContract   @relation(fields: [goalContractRowId], references: [id])
+  goalContractKey     String
+  goalContractVersion Int
+  goalContractHash    String
+  financialPlanId     String
+  financialPlan       FinancialPlan  @relation(fields: [financialPlanId], references: [id])
+  financialPlanHash   String
+  bankStateVersion    Int
+  method              ApprovalMethod
+  signatureReference  String
+  approvedAt          DateTime
+  expiresAt           DateTime
+  revokedAt           DateTime?
+  traceId             String?
+  executionRuns       ExecutionRun[]
+  createdAt           DateTime       @default(now())
+
+  @@index([userId, expiresAt])
+}
+
+model ExecutionRun {
+  id                  String             @id @default(cuid())
+  userId              String
+  user                User               @relation(fields: [userId], references: [id])
+  planId              String
+  plan                FinancialPlan      @relation(fields: [planId], references: [id])
+  approvalId          String
+  approval            Approval           @relation(fields: [approvalId], references: [id])
+  status              ExecutionRunStatus
+  startedStateVersion Int
+  finalStateVersion   Int?
+  goalOutcome         Json?
+  traceId             String
+  steps               ExecutionStep[]
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@index([userId, status])
+}
+
+model ExecutionStep {
+  id             String              @id @default(cuid())
+  executionRunId String
+  executionRun   ExecutionRun        @relation(fields: [executionRunId], references: [id])
+  planStepId     String
+  planStep       FinancialPlanStep   @relation(fields: [planStepId], references: [id])
+  status         ExecutionStepStatus @default(PENDING)
+  idempotencyKey String              @unique
+  bankReference  String?
+  errorCode      String?
+  traceId        String
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@unique([executionRunId, planStepId])
+}
+
+model IdempotencyRecord {
+  id          String    @id @default(cuid())
+  key         String    @unique
+  scope       String
+  requestHash String
+  response    Json?
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime?
+}
+
+model AuditEvent {
+  id            String   @id @default(cuid())
+  eventType     String
+  aggregateType String
+  aggregateId   String
+  traceId       String
+  payload       Json
+  occurredAt    DateTime @default(now())
+
+  @@index([aggregateType, aggregateId, occurredAt])
+}
+
+model OutboxEvent {
+  id          String       @id @default(cuid())
+  topic       String
+  aggregateId String
+  traceId     String
+  payload     Json
+  status      OutboxStatus @default(PENDING)
+  attempts    Int          @default(0)
+  publishedAt DateTime?
+  lastError   String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model Opportunity {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  stateVersion Int
+  type         String
+  payload      Json
+  status       String   @default("OPEN")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId, status])
+}
+
+model BankServiceState {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id])
+  stateVersion Int
+  transfers    Boolean
+  fx           Boolean
+  billPayments Boolean
+  investments  Boolean
+  updatedAt    DateTime @updatedAt
+}
+
+model FxQuote {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  providerRef   String   @unique
+  fromCurrency  String
+  toCurrency    String
+  rate          Decimal  @db.Decimal(36, 18)
+  feeCurrency   String?
+  feeMinorUnits BigInt?
+  stateVersion  Int
+  quotedAt      DateTime
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+
+  @@index([userId, expiresAt])
+}

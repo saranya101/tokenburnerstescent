@@ -1,0 +1,1 @@
+export default function Home() { return <section className="card"><h2>Architecture scaffold</h2><p>Language creates a goal draft. Only the deterministic compiler may construct financial operations.</p></section>; }

@@ -1,0 +1,5 @@
+{
+  "schemaVersion": "1", "originalText": "Send John SGD 100",
+  "goal": { "type": "DELIVER_MONEY", "amount": { "currency": "SGD", "minorUnits": "10000" }, "recipientReference": "John" },
+  "constraints": [], "preferences": [], "references": [{ "reference": "John", "expectedEntityType": "BENEFICIARY" }]
+}

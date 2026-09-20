@@ -1,0 +1,24 @@
+{
+  "name": "parlance",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint && pnpm compiler:lint",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test && pnpm compiler:test",
+    "compiler:dev": "cd services/compiler && uvicorn app.main:app --reload --port 8001",
+    "compiler:lint": "cd services/compiler && ./.venv/bin/ruff check . && ./.venv/bin/ruff format --check .",
+    "compiler:test": "cd services/compiler && ./.venv/bin/pytest"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "eslint": "^9.39.0",
+    "globals": "^16.5.0",
+    "turbo": "^2.6.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.48.0",
+    "vitest": "^4.0.0"
+  }
+}

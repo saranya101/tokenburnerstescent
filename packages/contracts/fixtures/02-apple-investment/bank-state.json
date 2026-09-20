@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "1", "userId": "user-1", "stateVersion": 10, "capturedAt": "2026-09-20T02:02:00Z",
+  "accounts": [{ "id": "acc-brokerage", "type": "BROKERAGE", "currency": "USD", "ledgerMinorUnits": "500000", "availableMinorUnits": "500000", "status": "ACTIVE", "capabilities": ["TRADE_ASSET"] }],
+  "beneficiaries": [], "assets": [{ "id": "asset-aapl", "symbol": "AAPL", "name": "Apple Inc.", "assetType": "EQUITY", "tradable": true, "settlementCurrency": "USD" }],
+  "holdings": [{ "assetId": "asset-aapl", "quantity": "2.25" }], "obligations": [],
+  "serviceAvailability": { "transfers": true, "fx": true, "billPayments": true, "investments": true }, "fxQuotes": []
+}
