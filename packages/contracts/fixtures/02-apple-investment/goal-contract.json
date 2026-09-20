@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1", "id": "goal-apple", "userId": "user-1", "version": 1,
-  "goal": { "type": "ACQUIRE_ASSET", "assetReference": "Apple", "quantity": "10.5", "maxSpend": { "currency": "USD", "minorUnits": "250000" } },
-  "constraints": [], "preferences": [{ "type": "PREFER_ACCOUNT", "accountReference": "brokerage" }],
+  "goal": { "type": "ACQUIRE_ASSET", "assetId": "asset-aapl", "budget": { "currency": "USD", "minorUnits": "250000" } },
+  "constraints": [], "preferences": [{ "type": "PREFER_ACCOUNT", "accountId": "acc-brokerage" }],
   "entityBindings": [
     { "schemaVersion": "1", "reference": "Apple", "entityType": "ASSET", "entityId": "asset-aapl", "resolutionMethod": "EXACT", "confidence": "1", "confirmed": true },
     { "schemaVersion": "1", "reference": "brokerage", "entityType": "ACCOUNT", "entityId": "acc-brokerage", "resolutionMethod": "USER_CONFIRMED", "confirmed": true }

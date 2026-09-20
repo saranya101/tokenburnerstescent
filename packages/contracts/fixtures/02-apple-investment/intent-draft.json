@@ -1,6 +1,6 @@
 {
-  "schemaVersion": "1", "originalText": "Buy 10.5 shares of Apple using my brokerage account",
-  "goal": { "type": "ACQUIRE_ASSET", "assetReference": "Apple", "quantity": "10.5", "maxSpend": { "currency": "USD", "minorUnits": "250000" } },
+  "schemaVersion": "1", "originalText": "Invest up to USD 2,500 in Apple using my brokerage account",
+  "goal": { "type": "ACQUIRE_ASSET", "assetReference": "Apple", "budget": { "currency": "USD", "minorUnits": "250000" } },
   "constraints": [], "preferences": [{ "type": "PREFER_ACCOUNT", "accountReference": "brokerage" }],
   "references": [{ "reference": "Apple", "expectedEntityType": "ASSET" }, { "reference": "brokerage", "expectedEntityType": "ACCOUNT" }]
 }

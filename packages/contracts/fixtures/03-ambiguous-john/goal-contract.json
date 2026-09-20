@@ -1,6 +1,0 @@
-{
-  "schemaVersion": "1", "id": "goal-john", "userId": "user-1", "version": 1,
-  "goal": { "type": "DELIVER_MONEY", "amount": { "currency": "SGD", "minorUnits": "10000" }, "recipientReference": "John" },
-  "constraints": [], "preferences": [], "entityBindings": [], "status": "AWAITING_CLARIFICATION",
-  "contractHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "createdAt": "2026-09-20T03:00:00Z"
-}
