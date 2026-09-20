@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1", "id": "goal-impossible", "userId": "user-1", "version": 1,
-  "goal": { "type": "DELIVER_MONEY", "amount": { "currency": "USD", "minorUnits": "999999999" }, "recipientReference": "NTU" },
-  "constraints": [{ "type": "MIN_AVAILABLE_BALANCE", "money": { "currency": "USD", "minorUnits": "100000" }, "accountReference": "usd-account" }],
+  "goal": { "type": "DELIVER_MONEY", "amount": { "currency": "USD", "minorUnits": "999999999" }, "recipientId": "ben-ntu" },
+  "constraints": [{ "type": "MIN_AVAILABLE_BALANCE", "money": { "currency": "USD", "minorUnits": "100000" }, "accountId": "acc-usd" }],
   "preferences": [], "entityBindings": [{ "schemaVersion": "1", "reference": "NTU", "entityType": "BENEFICIARY", "entityId": "ben-ntu", "resolutionMethod": "USER_CONFIRMED", "confirmed": true }],
   "status": "CONFIRMED", "contractHash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "createdAt": "2026-09-20T04:00:00Z", "confirmedAt": "2026-09-20T04:01:00Z"
 }

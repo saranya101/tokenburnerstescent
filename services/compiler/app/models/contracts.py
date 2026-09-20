@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def to_camel(value: str) -> str:
@@ -20,88 +20,123 @@ class MoneyV1(ContractModel):
     minor_units: str = Field(pattern=r"^-?(0|[1-9]\d*)$")
 
 
-class DeliverMoneyGoalV1(ContractModel):
+class DeliverMoneyIntentGoalV1(ContractModel):
     type: Literal["DELIVER_MONEY"]
     amount: MoneyV1
     recipient_reference: str
 
 
-class AcquireAssetGoalV1(ContractModel):
+class AcquireAssetIntentGoalV1(ContractModel):
     type: Literal["ACQUIRE_ASSET"]
     asset_reference: str
-    quantity: str = Field(pattern=r"^(0|[1-9]\d*)(\.\d+)?$")
-    max_spend: MoneyV1 | None = None
+    budget: MoneyV1 | None = None
+    quantity: str | None = Field(default=None, pattern=r"^(0|[1-9]\d*)(\.\d+)?$")
+
+    @model_validator(mode="after")
+    def require_budget_or_quantity(self) -> Self:
+        if self.budget is None and self.quantity is None:
+            raise ValueError("ACQUIRE_ASSET requires budget, quantity, or both")
+        return self
 
 
-class PayBillGoalV1(ContractModel):
+class PayBillIntentGoalV1(ContractModel):
     type: Literal["PAY_BILL"]
-    obligation_reference: str
+    biller_reference: str
     amount: MoneyV1 | None = None
 
 
-class MoveFundsGoalV1(ContractModel):
+class MoveFundsIntentGoalV1(ContractModel):
     type: Literal["MOVE_FUNDS"]
     amount: MoneyV1
     source_account_reference: str | None = None
     destination_account_reference: str
 
 
-GoalV1 = Annotated[
-    DeliverMoneyGoalV1 | AcquireAssetGoalV1 | PayBillGoalV1 | MoveFundsGoalV1,
+IntentGoalV1 = Annotated[
+    DeliverMoneyIntentGoalV1
+    | AcquireAssetIntentGoalV1
+    | PayBillIntentGoalV1
+    | MoveFundsIntentGoalV1,
     Field(discriminator="type"),
 ]
 
 
-class MaxTotalCostV1(ContractModel):
+class MaxTotalCostIntentV1(ContractModel):
     type: Literal["MAX_TOTAL_COST"]
     money: MoneyV1
 
 
-class MinAvailableBalanceV1(ContractModel):
+class MinAvailableBalanceIntentV1(ContractModel):
     type: Literal["MIN_AVAILABLE_BALANCE"]
     money: MoneyV1
     account_reference: str | None = None
 
 
-class ExcludedAccountV1(ContractModel):
+class ExcludedAccountIntentV1(ContractModel):
     type: Literal["EXCLUDED_ACCOUNT"]
     account_reference: str
 
 
-class MaxLockInDaysV1(ContractModel):
+class MaxLockInDaysIntentV1(ContractModel):
     type: Literal["MAX_LOCK_IN_DAYS"]
     days: int = Field(ge=0)
 
 
-GoalConstraintV1 = Annotated[
-    MaxTotalCostV1 | MinAvailableBalanceV1 | ExcludedAccountV1 | MaxLockInDaysV1,
+IntentGoalConstraintV1 = Annotated[
+    MaxTotalCostIntentV1
+    | MinAvailableBalanceIntentV1
+    | ExcludedAccountIntentV1
+    | MaxLockInDaysIntentV1,
     Field(discriminator="type"),
 ]
 
 
-class PreferenceV1(ContractModel):
-    type: Literal["MINIMIZE_TOTAL_COST", "MINIMIZE_FX", "FASTEST", "PREFER_ACCOUNT"]
-    account_reference: str | None = None
+class MinimizeTotalCostIntentPreferenceV1(ContractModel):
+    type: Literal["MINIMIZE_TOTAL_COST"]
+
+
+class MinimizeFxIntentPreferenceV1(ContractModel):
+    type: Literal["MINIMIZE_FX"]
+
+
+class FastestIntentPreferenceV1(ContractModel):
+    type: Literal["FASTEST"]
+
+
+class PreferAccountIntentPreferenceV1(ContractModel):
+    type: Literal["PREFER_ACCOUNT"]
+    account_reference: str
+
+
+IntentPreferenceV1 = Annotated[
+    MinimizeTotalCostIntentPreferenceV1
+    | MinimizeFxIntentPreferenceV1
+    | FastestIntentPreferenceV1
+    | PreferAccountIntentPreferenceV1,
+    Field(discriminator="type"),
+]
 
 
 class IntentReferenceV1(ContractModel):
     reference: str
-    expected_entity_type: Literal["ACCOUNT", "BENEFICIARY", "ASSET", "OBLIGATION"] | None = None
+    expected_entity_type: (
+        Literal["ACCOUNT", "BENEFICIARY", "ASSET", "BILLER", "OBLIGATION"] | None
+    ) = None
 
 
 class IntentDraftV1(ContractModel):
     schema_version: Literal["1"]
     original_text: str
-    goal: GoalV1
-    constraints: list[GoalConstraintV1]
-    preferences: list[PreferenceV1]
+    goal: IntentGoalV1
+    constraints: list[IntentGoalConstraintV1]
+    preferences: list[IntentPreferenceV1]
     references: list[IntentReferenceV1]
 
 
 class EntityBinding(ContractModel):
     schema_version: Literal["1"]
     reference: str
-    entity_type: Literal["ACCOUNT", "BENEFICIARY", "ASSET", "OBLIGATION"]
+    entity_type: Literal["ACCOUNT", "BENEFICIARY", "ASSET", "BILLER", "OBLIGATION"]
     entity_id: str
     resolution_method: Literal["EXACT", "ALIAS", "SEMANTIC", "USER_CONFIRMED"]
     confidence: str | None = Field(default=None, pattern=r"^(0|[1-9]\d*)(\.\d+)?$")
@@ -142,15 +177,112 @@ HardRule = Annotated[
 ]
 
 
+class DeliverMoneyGroundedGoalV1(ContractModel):
+    type: Literal["DELIVER_MONEY"]
+    amount: MoneyV1
+    recipient_id: str
+
+
+class AcquireAssetGroundedGoalV1(ContractModel):
+    type: Literal["ACQUIRE_ASSET"]
+    asset_id: str
+    budget: MoneyV1 | None = None
+    quantity: str | None = Field(default=None, pattern=r"^(0|[1-9]\d*)(\.\d+)?$")
+
+    @model_validator(mode="after")
+    def require_budget_or_quantity(self) -> Self:
+        if self.budget is None and self.quantity is None:
+            raise ValueError("ACQUIRE_ASSET requires budget, quantity, or both")
+        return self
+
+
+class PayBillGroundedGoalV1(ContractModel):
+    type: Literal["PAY_BILL"]
+    biller_id: str
+    amount: MoneyV1 | None = None
+
+
+class MoveFundsGroundedGoalV1(ContractModel):
+    type: Literal["MOVE_FUNDS"]
+    amount: MoneyV1
+    source_account_id: str | None = None
+    destination_account_id: str
+
+
+GroundedGoalV1 = Annotated[
+    DeliverMoneyGroundedGoalV1
+    | AcquireAssetGroundedGoalV1
+    | PayBillGroundedGoalV1
+    | MoveFundsGroundedGoalV1,
+    Field(discriminator="type"),
+]
+
+
+class MaxTotalCostGroundedV1(ContractModel):
+    type: Literal["MAX_TOTAL_COST"]
+    money: MoneyV1
+
+
+class MinAvailableBalanceGroundedV1(ContractModel):
+    type: Literal["MIN_AVAILABLE_BALANCE"]
+    money: MoneyV1
+    account_id: str | None = None
+
+
+class ExcludedAccountGroundedV1(ContractModel):
+    type: Literal["EXCLUDED_ACCOUNT"]
+    account_id: str
+
+
+class MaxLockInDaysGroundedV1(ContractModel):
+    type: Literal["MAX_LOCK_IN_DAYS"]
+    days: int = Field(ge=0)
+
+
+GroundedGoalConstraintV1 = Annotated[
+    MaxTotalCostGroundedV1
+    | MinAvailableBalanceGroundedV1
+    | ExcludedAccountGroundedV1
+    | MaxLockInDaysGroundedV1,
+    Field(discriminator="type"),
+]
+
+
+class MinimizeTotalCostGroundedPreferenceV1(ContractModel):
+    type: Literal["MINIMIZE_TOTAL_COST"]
+
+
+class MinimizeFxGroundedPreferenceV1(ContractModel):
+    type: Literal["MINIMIZE_FX"]
+
+
+class FastestGroundedPreferenceV1(ContractModel):
+    type: Literal["FASTEST"]
+
+
+class PreferAccountGroundedPreferenceV1(ContractModel):
+    type: Literal["PREFER_ACCOUNT"]
+    account_id: str
+
+
+GroundedPreferenceV1 = Annotated[
+    MinimizeTotalCostGroundedPreferenceV1
+    | MinimizeFxGroundedPreferenceV1
+    | FastestGroundedPreferenceV1
+    | PreferAccountGroundedPreferenceV1,
+    Field(discriminator="type"),
+]
+
+
 class GoalContractV1(ContractModel):
     schema_version: Literal["1"]
     id: str
     user_id: str
     version: int = Field(gt=0)
     source_intent_draft_id: str | None = None
-    goal: GoalV1
-    constraints: list[GoalConstraintV1]
-    preferences: list[PreferenceV1]
+    goal: GroundedGoalV1
+    constraints: list[GroundedGoalConstraintV1]
+    preferences: list[GroundedPreferenceV1]
     entity_bindings: list[EntityBinding]
     status: Literal[
         "DRAFT",

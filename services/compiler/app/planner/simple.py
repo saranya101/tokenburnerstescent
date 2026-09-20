@@ -8,10 +8,10 @@ from app.models.contracts import (
     CompilerResultV1,
     CompilerSatV1,
     CompilerUnsatV1,
-    DeliverMoneyGoalV1,
+    DeliverMoneyGroundedGoalV1,
     FinancialPlanV1,
     GoalContractV1,
-    MinAvailableBalanceV1,
+    MinAvailableBalanceGroundedV1,
     MoneyV1,
     PlanValidityV1,
     ProjectedOutcomeV1,
@@ -32,7 +32,7 @@ def compile_goal(goal: GoalContractV1, snapshot: BankStateSnapshotV1) -> Compile
             ),
             relaxations=[],
         )
-    if not isinstance(goal.goal, DeliverMoneyGoalV1):
+    if not isinstance(goal.goal, DeliverMoneyGroundedGoalV1):
         return CompilerUnsatV1(
             schemaVersion="1",
             status="UNSAT",
@@ -59,21 +59,11 @@ def compile_goal(goal: GoalContractV1, snapshot: BankStateSnapshotV1) -> Compile
         (
             int(item.money.minor_units)
             for item in goal.constraints
-            if isinstance(item, MinAvailableBalanceV1) and item.money.currency == currency
+            if isinstance(item, MinAvailableBalanceGroundedV1) and item.money.currency == currency
         ),
         default=0,
     )
-    binding = next(
-        (
-            item
-            for item in goal.entity_bindings
-            if item.reference == goal.goal.recipient_reference
-            and item.entity_type == "BENEFICIARY"
-            and item.confirmed
-        ),
-        None,
-    )
-    if account is None or binding is None or int(account.available_minor_units) - amount < minimum:
+    if account is None or int(account.available_minor_units) - amount < minimum:
         return CompilerUnsatV1(
             schemaVersion="1",
             status="UNSAT",
@@ -101,7 +91,7 @@ def compile_goal(goal: GoalContractV1, snapshot: BankStateSnapshotV1) -> Compile
         reversible=False,
         parameters={
             "sourceAccountId": account.id,
-            "beneficiaryId": binding.entity_id,
+            "beneficiaryId": goal.goal.recipient_id,
             "amount": goal.goal.amount.model_dump(mode="json", by_alias=True),
         },
     )
