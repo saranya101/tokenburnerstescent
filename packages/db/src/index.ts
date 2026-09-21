@@ -1,3 +1,19 @@
+import { PrismaClient } from "@prisma/client";
+
+export { Prisma, PrismaClient } from "@prisma/client";
+
+let client: PrismaClient | undefined;
+
+export function getPrismaClient(): PrismaClient {
+  client ??= new PrismaClient();
+  return client;
+}
+
+export async function disconnectPrisma(): Promise<void> {
+  await client?.$disconnect();
+  client = undefined;
+}
+
 export interface ExecutionTransitionInput { executionId: string; nextStatus: string; auditType: string; traceId: string; payload: Record<string, unknown>; outboxTopic: string; }
 export interface TransactionalWriter {
   updateExecution(id: string, status: string): Promise<void>;

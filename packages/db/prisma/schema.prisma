@@ -315,6 +315,7 @@ model FinancialPlanStep {
   id             String          @id @default(cuid())
   planId         String
   plan           FinancialPlan   @relation(fields: [planId], references: [id])
+  stepKey        String
   sequence       Int
   action         String
   dependsOn      Json
@@ -324,6 +325,7 @@ model FinancialPlanStep {
   createdAt      DateTime        @default(now())
 
   @@unique([planId, sequence])
+  @@unique([planId, stepKey])
 }
 
 model Approval {
@@ -381,6 +383,7 @@ model ExecutionStep {
   idempotencyKey String              @unique
   bankReference  String?
   errorCode      String?
+  resultingStateVersion Int?
   traceId        String
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
