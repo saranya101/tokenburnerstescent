@@ -50,6 +50,7 @@ enum ExecutionStepStatus {
 
 enum OutboxStatus {
   PENDING
+  PROCESSING
   PUBLISHED
   FAILED
 }
@@ -421,12 +422,15 @@ model OutboxEvent {
   payload     Json
   status      OutboxStatus @default(PENDING)
   attempts    Int          @default(0)
+  claimToken String?
+  claimedAt  DateTime?
   publishedAt DateTime?
   lastError   String?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
   @@index([status, createdAt])
+  @@index([status, claimedAt])
 }
 
 model Opportunity {

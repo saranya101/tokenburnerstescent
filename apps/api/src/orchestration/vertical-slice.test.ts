@@ -11,23 +11,25 @@ import { hashGoalContract } from "../security/canonical-hash.js";
 const fixture = (name: string): unknown => JSON.parse(readFileSync(join(process.cwd(), "../../packages/contracts/fixtures/01-ntu-transfer", name), "utf8"));
 
 class MemoryRepository implements ParlanceRepository {
-  goal: StoredGoal; plan?: StoredPlan; approval?: StoredApproval; execution?: StoredExecution; audit: unknown[] = []; snapshot?: BankStateSnapshotV1; idempotency = new Map<string, string>();
+  goal: StoredGoal; plan?: StoredPlan; approval?: StoredApproval; execution?: StoredExecution; audit: unknown[] = []; snapshot?: BankStateSnapshotV1; idempotency = new Map<string, { hash: string; response?: unknown }>();
   constructor(goal: GoalContractV1) { this.goal = { rowId: "goal-row", contract: goal }; }
   async getConfirmedGoal(id: string) { return id === this.goal.contract.id ? this.goal : null; }
   async saveSnapshot(value: BankStateSnapshotV1) { this.snapshot = value; }
   async savePlan(goalRowId: string, plan: FinancialPlanV1) { this.plan = { goalRowId, plan }; this.audit.push("PLAN_COMPILED"); }
   async saveCompilationFailure(_row: string, result: Exclude<CompilerResult, { status: "SAT" }>) { this.audit.push(result.status); }
   async getPlan(id: string) { return this.plan?.plan.id === id ? this.plan : null; }
-  async approvePlan(input: { goalRowId: string; approval: ApprovalV1; executionId: string; traceId: string }) { this.approval = { approval: input.approval }; this.execution = { approvalId: input.approval.id, traceId: input.traceId, result: ExecutionResultV1.parse({ schemaVersion: "1", executionId: input.executionId, planId: input.approval.financialPlanId, status: "PENDING", startedStateVersion: input.approval.bankStateVersion, steps: [], goalOutcome: { achieved: false, summary: "Execution has not completed." } }) }; this.audit.push("PLAN_APPROVED"); return this.execution; }
+  async approvePlan(input: { goalRowId: string; approval: ApprovalV1; executionId: string; traceId: string }) { this.approval = { approval: input.approval }; this.execution = { approvalId: input.approval.id, traceId: input.traceId, executionState: "AUTHORIZED", result: ExecutionResultV1.parse({ schemaVersion: "1", executionId: input.executionId, planId: input.approval.financialPlanId, status: "PENDING", startedStateVersion: input.approval.bankStateVersion, steps: [], goalOutcome: { achieved: false, summary: "Execution has not completed." } }) }; this.audit.push("PLAN_APPROVED"); return this.execution; }
   async getApproval(id: string) { return this.approval?.approval.id === id ? this.approval : null; }
   async getExecution(id: string) { return this.execution?.result.executionId === id ? this.execution : null; }
-  async claimIdempotency(input: { key: string; scope: string; requestHash: string }) { const prior = this.idempotency.get(input.key); if (!prior) { this.idempotency.set(input.key, input.requestHash); return "CLAIMED" as const; } return prior === input.requestHash ? "REPLAY" as const : "CONFLICT" as const; }
-  async completeIdempotency() {}
-  async startExecution() { if (this.execution) this.execution.result = { ...this.execution.result, status: "EXECUTING" }; this.audit.push("EXECUTION_STARTED"); }
+  async claimIdempotency(input: { key: string; scope: string; requestHash: string }) { const prior = this.idempotency.get(input.key); if (!prior) { this.idempotency.set(input.key, { hash: input.requestHash }); return { status: "CLAIMED" as const }; } return prior.hash === input.requestHash ? { status: "REPLAY" as const, ...(prior.response === undefined ? {} : { response: prior.response }) } : { status: "CONFLICT" as const }; }
+  async completeIdempotency(key: string, response: unknown) { const prior = this.idempotency.get(key); if (prior) prior.response = response; }
+  async startExecution() { if (this.execution) { this.execution.result = { ...this.execution.result, status: "EXECUTING" }; this.execution.executionState = "EXECUTING"; } this.audit.push("EXECUTION_STARTED"); }
   async recordStep(input: Parameters<ParlanceRepository["recordStep"]>[0]) { if (!this.execution) return; const next = { stepId: input.planStepId, status: input.status, idempotencyKey: input.idempotencyKey, ...(input.bankReference ? { bankReference: input.bankReference } : {}), ...(input.errorCode ? { errorCode: input.errorCode } : {}) }; this.execution.result = { ...this.execution.result, steps: [...this.execution.result.steps.filter((item) => item.stepId !== input.planStepId), next] }; this.audit.push(`STEP_${input.status}`); }
-  async finishExecution(input: Parameters<ParlanceRepository["finishExecution"]>[0]) { if (this.execution) this.execution.result = input.result; this.audit.push(`EXECUTION_${input.result.status}`); }
+  async finishExecution(input: Parameters<ParlanceRepository["finishExecution"]>[0]) { if (this.execution) { this.execution.result = input.result; this.execution.executionState = input.result.status === "COMPLETED" ? "COMPLETED" : "FAILED"; } this.audit.push(`EXECUTION_${input.result.status}`); }
   async listExecutions() { return this.execution ? [this.execution] : []; }
+  async listRecoverableExecutions() { return this.execution && !["COMPLETED", "FAILED"].includes(this.execution.executionState) ? [this.execution] : []; }
   async listAudit() { return this.audit; }
+  async isReady() { return true; }
 }
 
 async function bankAdapter(): Promise<BankPort> {
@@ -48,4 +50,5 @@ describe("NTU transfer vertical slice", () => {
     const repeated = await executionService.run(authorized.execution.executionId, "trace-ntu"); expect(repeated).toEqual(completed); expect(repository.audit.filter((item) => item === "EXECUTION_COMPLETED")).toHaveLength(1);
     expect(repository.snapshot?.stateVersion).toBe(7); expect(repository.audit).toContain("PLAN_APPROVED");
   });
+  it("allows only one local claim for concurrent identical execution attempts", async () => { const raw = GoalContractV1.parse(fixture("goal-contract.json")); const repository = new MemoryRepository({ ...raw, contractHash: hashGoalContract(raw) }); const claims = await Promise.all([repository.claimIdempotency({ key: "same-step", scope: "BANK_EXECUTION_STEP", requestHash: "same-request" }), repository.claimIdempotency({ key: "same-step", scope: "BANK_EXECUTION_STEP", requestHash: "same-request" })]); expect(claims.filter((claim) => claim.status === "CLAIMED")).toHaveLength(1); expect(claims.filter((claim) => claim.status === "REPLAY")).toHaveLength(1); });
 });

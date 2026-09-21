@@ -3,7 +3,9 @@ import type { ApprovalV1, BankStateSnapshotV1, CompilerResultV1, ExecutionResult
 export interface StoredGoal { rowId: string; contract: GoalContractV1 }
 export interface StoredPlan { goalRowId: string; plan: FinancialPlanV1 }
 export interface StoredApproval { approval: ApprovalV1; revokedAt?: string }
-export interface StoredExecution { result: ExecutionResultV1; approvalId: string; traceId: string }
+export type RecoverableExecutionState = "AUTHORIZED" | "EXECUTING" | "PAUSED" | "REAPPROVAL_REQUIRED";
+export interface StoredExecution { result: ExecutionResultV1; approvalId: string; traceId: string; executionState: RecoverableExecutionState | "COMPLETED" | "FAILED" }
+export type IdempotencyClaim = { status: "CLAIMED" } | { status: "REPLAY"; response?: unknown } | { status: "CONFLICT" };
 
 export interface ParlanceRepository {
   getConfirmedGoal(contractId: string): Promise<StoredGoal | null>;
@@ -14,13 +16,15 @@ export interface ParlanceRepository {
   approvePlan(input: { goalRowId: string; approval: ApprovalV1; executionId: string; traceId: string }): Promise<StoredExecution>;
   getApproval(approvalId: string): Promise<StoredApproval | null>;
   getExecution(executionId: string): Promise<StoredExecution | null>;
-  claimIdempotency(input: { key: string; scope: string; requestHash: string }): Promise<"CLAIMED" | "REPLAY" | "CONFLICT">;
+  claimIdempotency(input: { key: string; scope: string; requestHash: string }): Promise<IdempotencyClaim>;
   completeIdempotency(key: string, response: unknown): Promise<void>;
   startExecution(executionId: string, traceId: string): Promise<void>;
   recordStep(input: { executionId: string; planStepId: string; stepId: string; idempotencyKey: string; status: "PENDING" | "ACCEPTED" | "SETTLED" | "FAILED" | "UNKNOWN"; bankReference?: string; errorCode?: string; resultingStateVersion?: number; traceId: string }): Promise<void>;
   finishExecution(input: { executionId: string; result: ExecutionResultV1; traceId: string }): Promise<void>;
   listExecutions(): Promise<StoredExecution[]>;
+  listRecoverableExecutions(): Promise<StoredExecution[]>;
   listAudit(): Promise<unknown[]>;
+  isReady(): Promise<boolean>;
 }
 
 export interface CompilerPort { compile(goal: GoalContractV1, state: BankStateSnapshotV1, traceId: string): Promise<CompilerResultV1> }

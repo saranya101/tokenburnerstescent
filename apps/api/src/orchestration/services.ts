@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ApprovalV1, CompilerResultV1, ExecutionResultV1, type FinancialPlanStepV1, type FinancialPlanV1, type GoalContractV1 } from "@parlance/contracts";
 import { canonicalHash, hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
 import { verifyExecutionAuthorization } from "../execution/gateway.js";
-import type { BankPort, CompilerPort, ParlanceRepository } from "./ports.js";
+import type { BankPort, BankWriteResult, CompilerPort, ParlanceRepository } from "./ports.js";
 
 export class CompilationService {
   constructor(private readonly repository: ParlanceRepository, private readonly bank: BankPort, private readonly compiler: CompilerPort) {}
@@ -43,6 +43,13 @@ function bankOperation(userId: string, step: FinancialPlanStepV1): { path: "fx" 
   throw new Error("UNSUPPORTED_OPERATION");
 }
 
+function bankWriteResult(value: unknown): BankWriteResult {
+  if (typeof value !== "object" || value === null) throw new Error("IDEMPOTENCY_RESPONSE_INVALID");
+  const item = value as Record<string, unknown>;
+  if (item.accepted !== true || typeof item.bankReference !== "string" || typeof item.stateVersion !== "number") throw new Error("IDEMPOTENCY_RESPONSE_INVALID");
+  return { accepted: true, bankReference: item.bankReference, stateVersion: item.stateVersion };
+}
+
 export class ExecutionService {
   constructor(private readonly repository: ParlanceRepository, private readonly bank: BankPort) {}
   async run(executionId: string, traceId: string) {
@@ -59,10 +66,13 @@ export class ExecutionService {
     for (const [index, step] of storedPlan.plan.steps.entries()) {
       const idempotencyKey = canonicalHash({ executionId, stepId: step.id }); const stepId = `${executionId}:${step.id}`;
       verifyExecutionAuthorization({ goal: storedGoal.contract, plan: storedPlan.plan, approval: approval.approval, ...(approval.revokedAt ? { approvalRevokedAt: approval.revokedAt } : {}), currentStateVersion: snapshot.stateVersion, revalidated: index > 0, executionState: "EXECUTING", idempotencyKey });
+      const operation = bankOperation(storedGoal.contract.userId, step); const claim = await this.repository.claimIdempotency({ key: idempotencyKey, scope: "BANK_EXECUTION_STEP", requestHash: canonicalHash(operation.payload) });
+      if (claim.status === "CONFLICT") throw new Error("IDEMPOTENCY_CONFLICT");
+      if (claim.status === "REPLAY" && claim.response === undefined) throw new Error("IDEMPOTENCY_IN_PROGRESS");
       await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "PENDING", traceId });
       try {
-        const operation = bankOperation(storedGoal.contract.userId, step); const claim = await this.repository.claimIdempotency({ key: idempotencyKey, scope: "BANK_EXECUTION_STEP", requestHash: canonicalHash(operation.payload) }); if (claim === "CONFLICT") throw new Error("IDEMPOTENCY_CONFLICT");
-        const result = await this.bank.execute(operation.path, operation.payload, idempotencyKey, traceId); await this.repository.completeIdempotency(idempotencyKey, result);
+        const result = claim.status === "REPLAY" ? bankWriteResult(claim.response) : await this.bank.execute(operation.path, operation.payload, idempotencyKey, traceId);
+        if (claim.status === "CLAIMED") await this.repository.completeIdempotency(idempotencyKey, result);
         await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "ACCEPTED", bankReference: result.bankReference, resultingStateVersion: result.stateVersion, traceId });
         snapshot = await this.bank.getState(storedGoal.contract.userId, traceId); if (snapshot.stateVersion !== result.stateVersion) throw new Error("BANK_STATE_VERSION_MISMATCH");
         await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "SETTLED", bankReference: result.bankReference, resultingStateVersion: result.stateVersion, traceId });
@@ -80,6 +90,7 @@ export class ExecutionService {
   }
   get(id: string) { return this.repository.getExecution(id); }
   list() { return this.repository.listExecutions(); }
+  listRecoverable() { return this.repository.listRecoverableExecutions(); }
 }
 
 function outcome(goal: GoalContractV1, plan: FinancialPlanV1): ExecutionResultV1["goalOutcome"] {
