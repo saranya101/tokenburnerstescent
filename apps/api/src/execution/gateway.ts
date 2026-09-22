@@ -1,7 +1,12 @@
-import type { ApprovalV1, FinancialActionV1, FinancialPlanV1, GoalContractV1 } from "@parlance/contracts";
+import type { ApprovalV1, FinancialActionV1, FinancialPlanStepV1, FinancialPlanV1, GoalContractV1 } from "@parlance/contracts";
+import { canonicalJson } from "../security/canonical-hash.js";
+import type { BankPort, BankWriteResult } from "../orchestration/ports.js";
 const ALLOWLIST = new Set<FinancialActionV1>(["TRANSFER", "FX_CONVERT", "MOVE_FUNDS", "PAY_BILL", "BUY_ASSET", "SELL_ASSET"]);
-export interface ExecutionAuthorization { goal: GoalContractV1; plan: FinancialPlanV1; approval: ApprovalV1; approvalRevokedAt?: string; currentStateVersion: number; revalidated: boolean; executionState: "AUTHORIZED" | "EXECUTING"; idempotencyKey: string; }
-export function verifyExecutionAuthorization(input: ExecutionAuthorization): void {
+export interface ExecutionApproval { goal: GoalContractV1; plan: FinancialPlanV1; approval: ApprovalV1; approvalRevokedAt?: string; executionState: "AUTHORIZED" | "EXECUTING" }
+export interface ExecutionAuthorization extends ExecutionApproval { expectedStateVersion: number; currentStateVersion: number; revalidationSucceeded: boolean; idempotencyKey: string; proposedStep: FinancialPlanStepV1 }
+export interface BankOperation { path: "fx" | "transfer" | "payment" | "buy"; payload: unknown }
+
+export function verifyExecutionApproval(input: ExecutionApproval): void {
   if (input.goal.status !== "CONFIRMED") throw new Error("Goal is not confirmed");
   if (input.approvalRevokedAt) throw new Error("Approval revoked");
   if (Date.parse(input.approval.approvedAt) > Date.now()) throw new Error("Approval is not active yet");
@@ -11,9 +16,32 @@ export function verifyExecutionAuthorization(input: ExecutionAuthorization): voi
   if (input.approval.goalContractVersion !== input.goal.version || input.plan.goalContractVersion !== input.goal.version) throw new Error("Goal version mismatch");
   if (input.approval.goalContractHash !== input.goal.contractHash) throw new Error("Goal hash mismatch");
   if (input.approval.financialPlanHash !== input.plan.planHash) throw new Error("Plan hash mismatch");
-  if (input.approval.bankStateVersion !== input.currentStateVersion && !input.revalidated) throw new Error("State version is stale");
-  if (!input.idempotencyKey) throw new Error("Idempotency key required");
   if (!input.plan.steps.every((step) => ALLOWLIST.has(step.action))) throw new Error("Operation is not allowlisted");
   if (!(["AUTHORIZED", "EXECUTING"] as const).includes(input.executionState)) throw new Error("Invalid execution state");
   // TODO(security): require cryptographic/biometric approval evidence before production writes.
+}
+
+export function verifyExecutionAuthorization(input: ExecutionAuthorization): void {
+  verifyExecutionApproval(input);
+  if (input.expectedStateVersion !== input.currentStateVersion && !input.revalidationSucceeded) throw new Error("State version is stale");
+  if (!input.idempotencyKey) throw new Error("Idempotency key required");
+  const approvedStep = input.plan.steps.find((step) => step.id === input.proposedStep.id);
+  if (!approvedStep || canonicalJson(approvedStep) !== canonicalJson(input.proposedStep)) throw new Error("UNAPPROVED_EXECUTABLE_ACTION");
+}
+
+export function bankOperation(userId: string, step: FinancialPlanStepV1): BankOperation {
+  if (step.action === "FX_CONVERT") return { path: "fx", payload: { userId, ...step.parameters } };
+  if (step.action === "TRANSFER" || step.action === "MOVE_FUNDS") return { path: "transfer", payload: { userId, ...step.parameters } };
+  if (step.action === "PAY_BILL") return { path: "payment", payload: { userId, ...step.parameters } };
+  if (step.action === "BUY_ASSET") return { path: "buy", payload: { userId, ...step.parameters } };
+  throw new Error("UNSUPPORTED_OPERATION");
+}
+
+export class ExecutionGateway {
+  constructor(private readonly bank: BankPort) {}
+  async execute(input: ExecutionAuthorization, traceId: string): Promise<BankWriteResult> {
+    verifyExecutionAuthorization(input);
+    const operation = bankOperation(input.goal.userId, input.proposedStep);
+    return this.bank.execute(operation.path, operation.payload, input.idempotencyKey, traceId);
+  }
 }

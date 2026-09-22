@@ -15,8 +15,22 @@ const PaymentBody = z.object({ userId: Id, sourceAccountId: Id, obligationId: Id
 const BuyBody = z.object({ userId: Id, sourceAccountId: Id, assetId: Id, quantity: z.string().regex(/^\d+(?:\.\d+)?$/), maximumSpend: MoneyV1 }).strict();
 type WriteBody = z.infer<typeof FxBody> | z.infer<typeof TransferBody> | z.infer<typeof PaymentBody> | z.infer<typeof BuyBody>;
 const QuoteBody = z.object({ userId: Id, fromCurrency: z.string().length(3), toCurrency: z.string().length(3), amount: MoneyV1 }).strict();
+// Definition order is the mock bank's deterministic first-account FX destination rule and snapshot order.
+const ACCOUNT_DEFINITIONS = [
+  { id: "acc-sgd", type: "CHECKING" as const, currency: "SGD", capabilities: ["SEND_TRANSFER", "RECEIVE_TRANSFER", "CONVERT_FX", "PAY_BILL", "TRADE_ASSET"] as const },
+  { id: "acc-usd", type: "CHECKING" as const, currency: "USD", capabilities: ["SEND_TRANSFER", "RECEIVE_TRANSFER", "CONVERT_FX", "TRADE_ASSET"] as const },
+];
+const fxDestinationAccountId = (currency: string): string | undefined => ACCOUNT_DEFINITIONS.find((account) => account.currency === currency)?.id;
 const initialState = (): State => ({ stateVersion: 7, balances: { "acc-sgd": 2_000_000n, "acc-usd": 500_000n }, holdings: {}, scenarios: new Set() });
 const requestHash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const addDecimalStrings = (left: string, right: string): string => {
+  const parts = (value: string) => { const [integer, fraction = ""] = value.split("."); return { numerator: BigInt(`${integer}${fraction}`), scale: fraction.length }; };
+  const a = parts(left); const b = parts(right); const scale = Math.max(a.scale, b.scale);
+  const sum = a.numerator * 10n ** BigInt(scale - a.scale) + b.numerator * 10n ** BigInt(scale - b.scale);
+  if (scale === 0) return sum.toString();
+  const digits = sum.toString().padStart(scale + 1, "0"); const integer = digits.slice(0, -scale); const fraction = digits.slice(-scale).replace(/0+$/, "");
+  return fraction ? `${integer}.${fraction}` : integer;
+};
 
 export function buildApp() {
   const states = new Map<string, State>(); const idempotency = new Map<string, StoredResponse>();
@@ -26,10 +40,7 @@ export function buildApp() {
   app.get("/health", async () => ({ status: "ok", service: "mock-bank" })); app.get("/ready", async () => ({ status: "ready" }));
   app.get("/v1/state/:userId", async (request) => { const { userId } = z.object({ userId: Id }).parse(request.params); const state = getState(userId); return BankStateSnapshotV1.parse({
     schemaVersion: "1", userId, stateVersion: state.stateVersion, capturedAt: new Date().toISOString(),
-    accounts: [
-      { id: "acc-sgd", type: "CHECKING", currency: "SGD", ledgerMinorUnits: state.balances["acc-sgd"]!.toString(), availableMinorUnits: state.balances["acc-sgd"]!.toString(), status: "ACTIVE", capabilities: ["SEND_TRANSFER", "RECEIVE_TRANSFER", "CONVERT_FX", "PAY_BILL", "TRADE_ASSET"] },
-      { id: "acc-usd", type: "CHECKING", currency: "USD", ledgerMinorUnits: state.balances["acc-usd"]!.toString(), availableMinorUnits: state.balances["acc-usd"]!.toString(), status: "ACTIVE", capabilities: ["SEND_TRANSFER", "RECEIVE_TRANSFER", "CONVERT_FX"] },
-    ], beneficiaries: [{ id: "ben-ntu", name: "Nanyang Technological University", supportedCurrencies: ["USD"], status: "ACTIVE" }], assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: true, settlementCurrency: "USD" }],
+    accounts: ACCOUNT_DEFINITIONS.map((account) => ({ ...account, capabilities: [...account.capabilities], ledgerMinorUnits: state.balances[account.id]!.toString(), availableMinorUnits: state.balances[account.id]!.toString(), status: "ACTIVE" as const })), beneficiaries: [{ id: "ben-ntu", name: "Nanyang Technological University", supportedCurrencies: ["USD"], status: "ACTIVE" }], assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: true, settlementCurrency: "USD" }],
     holdings: Object.entries(state.holdings).map(([assetId, quantity]) => ({ assetId, quantity })), obligations: [], serviceAvailability: { transfers: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), fx: !state.scenarios.has("FX_UNAVAILABLE"), billPayments: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), investments: !state.scenarios.has("ASSET_UNAVAILABLE") },
     fxQuotes: [{ id: `q-${userId}-${state.stateVersion}`, fromCurrency: "SGD", toCurrency: "USD", rate: "0.75", expiresAt: new Date(Date.now() + 60_000).toISOString() }],
   }); });
@@ -42,9 +53,9 @@ export function buildApp() {
     try { mutate(state, body); } catch (error) { return reply.code(409).send({ code: error instanceof Error ? error.message : "WRITE_REJECTED" }); }
     state.stateVersion += 1; const response = { accepted: true as const, bankReference: `mock-${key}`, stateVersion: state.stateVersion }; idempotency.set(key, { requestHash: hash, response }); return response;
   });
-  execute("fx", FxBody, "FX_UNAVAILABLE", (state, body) => { debit(state, body.accountId, body.fromAmount); const target = body.toCurrency === "USD" ? "acc-usd" : "acc-sgd"; state.balances[target] = (state.balances[target] ?? 0n) + BigInt(body.fromAmount.minorUnits) * 75n / 100n; });
+  execute("fx", FxBody, "FX_UNAVAILABLE", (state, body) => { debit(state, body.accountId, body.fromAmount); const target = fxDestinationAccountId(body.toCurrency); if (!target) throw new Error("FX_DESTINATION_ACCOUNT_NOT_FOUND"); state.balances[target] = (state.balances[target] ?? 0n) + BigInt(body.fromAmount.minorUnits) * 75n / 100n; });
   execute("transfer", TransferBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => { debit(state, body.sourceAccountId, body.amount); if ("destinationAccountId" in body) state.balances[body.destinationAccountId] = (state.balances[body.destinationAccountId] ?? 0n) + BigInt(body.amount.minorUnits); });
-  execute("payment", PaymentBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => debit(state, body.sourceAccountId, body.amount)); execute("buy", BuyBody, "ASSET_UNAVAILABLE", (state, body) => { debit(state, body.sourceAccountId, body.maximumSpend); state.holdings[body.assetId] = body.quantity; });
+  execute("payment", PaymentBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => debit(state, body.sourceAccountId, body.amount)); execute("buy", BuyBody, "ASSET_UNAVAILABLE", (state, body) => { debit(state, body.sourceAccountId, body.maximumSpend); state.holdings[body.assetId] = addDecimalStrings(state.holdings[body.assetId] ?? "0", body.quantity); });
   app.post("/v1/admin/scenarios/:userId", async (request) => { const { userId } = z.object({ userId: Id }).parse(request.params); const body = z.object({ scenarios: z.array(z.enum(["FX_UNAVAILABLE", "TRANSFER_RAIL_UNAVAILABLE", "ASSET_UNAVAILABLE", "BALANCE_CHANGED", "QUOTE_EXPIRED"])) }).parse(request.body); const state = getState(userId); state.scenarios = new Set(body.scenarios); return { scenarios: [...state.scenarios] }; });
   return app;
 }

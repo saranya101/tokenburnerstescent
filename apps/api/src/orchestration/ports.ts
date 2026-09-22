@@ -16,9 +16,12 @@ export interface ParlanceRepository {
   approvePlan(input: { goalRowId: string; approval: ApprovalV1; executionId: string; traceId: string }): Promise<StoredExecution>;
   getApproval(approvalId: string): Promise<StoredApproval | null>;
   getExecution(executionId: string): Promise<StoredExecution | null>;
+  getLatestSettledStateVersion(executionId: string): Promise<number | null>;
   claimIdempotency(input: { key: string; scope: string; requestHash: string }): Promise<IdempotencyClaim>;
   completeIdempotency(key: string, response: unknown): Promise<void>;
   startExecution(executionId: string, traceId: string): Promise<void>;
+  blockExecution(input: { executionId: string; state: "PAUSED" | "REAPPROVAL_REQUIRED"; reason: string; explanation: string; result: ExecutionResultV1; traceId: string }): Promise<void>;
+  recordExecutionAudit(input: { executionId: string; eventType: string; traceId: string; payload: Record<string, unknown> }): Promise<void>;
   recordStep(input: { executionId: string; planStepId: string; stepId: string; idempotencyKey: string; status: "PENDING" | "ACCEPTED" | "SETTLED" | "FAILED" | "UNKNOWN"; bankReference?: string; errorCode?: string; resultingStateVersion?: number; traceId: string }): Promise<void>;
   finishExecution(input: { executionId: string; result: ExecutionResultV1; traceId: string }): Promise<void>;
   listExecutions(): Promise<StoredExecution[]>;

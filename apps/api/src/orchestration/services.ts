@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { ApprovalV1, CompilerResultV1, ExecutionResultV1, type FinancialPlanStepV1, type FinancialPlanV1, type GoalContractV1 } from "@parlance/contracts";
+import { ApprovalV1, CompilerResultV1, ExecutionResultV1, type FinancialPlanV1, type GoalContractV1 } from "@parlance/contracts";
 import { canonicalHash, hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
-import { verifyExecutionAuthorization } from "../execution/gateway.js";
+import { bankOperation, ExecutionGateway, verifyExecutionApproval, verifyExecutionAuthorization } from "../execution/gateway.js";
+import { assertCompilerBinding, materiallyEquivalentRoute, simulateFinancialStep, stepPreservesConstraints, terminalStepSatisfiesGoal, type RevalidationOutcome } from "../execution/goal-preservation.js";
 import type { BankPort, BankWriteResult, CompilerPort, ParlanceRepository } from "./ports.js";
 
 export class CompilationService {
@@ -34,15 +35,6 @@ export class ApprovalService {
   }
 }
 
-function bankOperation(userId: string, step: FinancialPlanStepV1): { path: "fx" | "transfer" | "payment" | "buy"; payload: unknown } {
-  if (step.action === "FX_CONVERT") return { path: "fx", payload: { userId, ...step.parameters } };
-  if (step.action === "TRANSFER") return { path: "transfer", payload: { userId, ...step.parameters } };
-  if (step.action === "MOVE_FUNDS") return { path: "transfer", payload: { userId, ...step.parameters } };
-  if (step.action === "PAY_BILL") return { path: "payment", payload: { userId, ...step.parameters } };
-  if (step.action === "BUY_ASSET") return { path: "buy", payload: { userId, ...step.parameters } };
-  throw new Error("UNSUPPORTED_OPERATION");
-}
-
 function bankWriteResult(value: unknown): BankWriteResult {
   if (typeof value !== "object" || value === null) throw new Error("IDEMPOTENCY_RESPONSE_INVALID");
   const item = value as Record<string, unknown>;
@@ -51,33 +43,83 @@ function bankWriteResult(value: unknown): BankWriteResult {
 }
 
 export class ExecutionService {
-  constructor(private readonly repository: ParlanceRepository, private readonly bank: BankPort) {}
+  constructor(private readonly repository: ParlanceRepository, private readonly bank: BankPort, private readonly compiler: CompilerPort) {}
   async run(executionId: string, traceId: string) {
     const execution = await this.repository.getExecution(executionId); if (!execution) throw new Error("EXECUTION_NOT_FOUND");
-    if (["COMPLETED", "FAILED"].includes(execution.result.status)) return execution.result;
+    if (["COMPLETED", "FAILED", "PAUSED", "REAPPROVAL_REQUIRED"].includes(execution.executionState)) return execution.result;
     const approval = await this.repository.getApproval(execution.approvalId); if (!approval) throw new Error("APPROVAL_NOT_FOUND");
     const storedPlan = await this.repository.getPlan(execution.result.planId); if (!storedPlan) throw new Error("PLAN_NOT_FOUND");
     const storedGoal = await this.repository.getConfirmedGoal(storedPlan.plan.goalContractId); if (!storedGoal) throw new Error("CONFIRMED_GOAL_NOT_FOUND");
-    let snapshot = await this.bank.getState(storedGoal.contract.userId, traceId);
-    const firstStep = storedPlan.plan.steps[0];
-    if (firstStep) verifyExecutionAuthorization({ goal: storedGoal.contract, plan: storedPlan.plan, approval: approval.approval, ...(approval.revokedAt ? { approvalRevokedAt: approval.revokedAt } : {}), currentStateVersion: snapshot.stateVersion, revalidated: false, executionState: "AUTHORIZED", idempotencyKey: canonicalHash({ executionId, stepId: firstStep.id }) });
-    await this.repository.startExecution(executionId, traceId);
-    const stepResults: ExecutionResultV1["steps"] = [];
+    if (hashGoalContract(storedGoal.contract) !== storedGoal.contract.contractHash) throw new Error("GOAL_HASH_MISMATCH");
+    if (hashFinancialPlan(storedPlan.plan) !== storedPlan.plan.planHash) throw new Error("PLAN_HASH_MISMATCH");
+    const executionState = execution.executionState === "EXECUTING" ? "EXECUTING" : "AUTHORIZED";
+    const approvalVerification = { goal: storedGoal.contract, plan: storedPlan.plan, approval: approval.approval, ...(approval.revokedAt ? { approvalRevokedAt: approval.revokedAt } : {}), executionState } as const;
+    verifyExecutionApproval(approvalVerification);
+    const audit = (eventType: string, payload: Record<string, unknown>) => this.repository.recordExecutionAudit({ executionId, eventType, traceId, payload: { timestamp: new Date().toISOString(), traceId, executionId, ...payload } });
+    await audit("EXECUTION_GOAL_HASH_VERIFIED", { category: "AUTHORIZATION", outcome: "VERIFIED", goalHashVerified: true });
+    await audit("EXECUTION_PLAN_HASH_VERIFIED", { category: "AUTHORIZATION", outcome: "VERIFIED", planHashVerified: true });
+    let snapshot = await this.bank.getState(storedGoal.contract.userId, traceId); await this.repository.saveSnapshot(snapshot, traceId);
+    await audit("EXECUTION_LATEST_STATE_LOADED", { category: "STATE_CHECK", outcome: "LOADED", approvedStateVersion: approval.approval.bankStateVersion, observedStateVersion: snapshot.stateVersion });
+    await audit("EXECUTION_APPROVAL_VERIFIED", { category: "AUTHORIZATION", outcome: "VERIFIED", approvalVerified: true, approvedStateVersion: approval.approval.bankStateVersion });
+    const stepResults: ExecutionResultV1["steps"] = [...execution.result.steps.filter((item) => item.status === "SETTLED")];
+    const persistedSettledStateVersion = await this.repository.getLatestSettledStateVersion(executionId);
+    let expectedStateVersion = persistedSettledStateVersion ?? approval.approval.bankStateVersion;
+    let executionStarted = execution.executionState === "EXECUTING";
+    const executionGateway = new ExecutionGateway(this.bank);
+
+    const stop = async (index: number, outcome: RevalidationOutcome, state: "PAUSED" | "REAPPROVAL_REQUIRED", reason: string, explanation: string) => {
+      const step = storedPlan.plan.steps[index]!; const idempotencyKey = canonicalHash({ executionId, stepId: step.id });
+      const blockedStep = { stepId: step.id, status: "UNKNOWN" as const, idempotencyKey, errorCode: reason };
+      await this.repository.recordStep({ executionId, planStepId: step.id, stepId: `${executionId}:${step.id}`, idempotencyKey, status: "UNKNOWN", errorCode: reason, traceId });
+      await audit("EXECUTION_BANK_OPERATION_PREVENTED", { category: "EXECUTION", outcome, stepKey: step.id, reason, explanation });
+      const result = ExecutionResultV1.parse({ schemaVersion: "1", executionId, planId: storedPlan.plan.id, status: "UNKNOWN", startedStateVersion: execution.result.startedStateVersion, finalStateVersion: snapshot.stateVersion, steps: [...stepResults, blockedStep], goalOutcome: { achieved: false, summary: explanation } });
+      await this.repository.blockExecution({ executionId, state, reason, explanation, result, traceId }); return result;
+    };
+
     for (const [index, step] of storedPlan.plan.steps.entries()) {
+      if (stepResults.some((item) => item.stepId === step.id && item.status === "SETTLED")) continue;
+      snapshot = await this.bank.getState(storedGoal.contract.userId, traceId); await this.repository.saveSnapshot(snapshot, traceId);
+      await audit("EXECUTION_LATEST_STATE_LOADED", { category: "STATE_CHECK", outcome: "LOADED", stepKey: step.id, approvedStateVersion: approval.approval.bankStateVersion, expectedStateVersion, observedStateVersion: snapshot.stateVersion });
+      const stateChanged = snapshot.stateVersion !== expectedStateVersion;
+      let revalidationSucceeded = false;
+      if (stateChanged) {
+        const replanned = CompilerResultV1.parse(await this.compiler.compile(storedGoal.contract, snapshot, traceId)); assertCompilerBinding(replanned, storedGoal.contract.id, storedGoal.contract.version, snapshot.stateVersion);
+        if (replanned.status === "POLICY_BLOCKED") return stop(index, "POLICY_BLOCKED", "PAUSED", replanned.reason.code, "Policy no longer permits the approved route in the latest account state.");
+        if (replanned.status === "UNSAT") return stop(index, "GOAL_NO_LONGER_ACHIEVABLE", "PAUSED", replanned.reason.code, "The latest account state can no longer satisfy the confirmed goal.");
+        if (!materiallyEquivalentRoute(replanned.plan.steps, storedPlan.plan.steps.slice(index))) return stop(index, "REPLAN_REQUIRED", "REAPPROVAL_REQUIRED", "MATERIAL_PLAN_CHANGE", "The safe route changed materially and requires your approval again.");
+        revalidationSucceeded = true;
+        await audit("EXECUTION_STATE_CHANGE_REVALIDATED", { category: "STATE_CHECK", outcome: "STATE_CHANGED", stepKey: step.id, approvedStateVersion: approval.approval.bankStateVersion, observedStateVersion: snapshot.stateVersion, reason: "MATERIALLY_EQUIVALENT_ROUTE", explanation: "State changed, but the approved financial route remains materially equivalent." });
+      }
       const idempotencyKey = canonicalHash({ executionId, stepId: step.id }); const stepId = `${executionId}:${step.id}`;
-      verifyExecutionAuthorization({ goal: storedGoal.contract, plan: storedPlan.plan, approval: approval.approval, ...(approval.revokedAt ? { approvalRevokedAt: approval.revokedAt } : {}), currentStateVersion: snapshot.stateVersion, revalidated: index > 0, executionState: "EXECUTING", idempotencyKey });
+      let authorization = { ...approvalVerification, executionState: executionStarted ? "EXECUTING" as const : "AUTHORIZED" as const, expectedStateVersion, currentStateVersion: snapshot.stateVersion, revalidationSucceeded, idempotencyKey, proposedStep: step };
+      verifyExecutionAuthorization(authorization);
+      if (!executionStarted) { await this.repository.startExecution(executionId, traceId); executionStarted = true; authorization = { ...authorization, executionState: "EXECUTING" }; }
+      await audit("GOAL_PRESERVATION_SIMULATION_STARTED", { category: "GOAL_PRESERVATION", outcome: "STARTED", stepKey: step.id, observedStateVersion: snapshot.stateVersion });
+      const simulation = simulateFinancialStep(snapshot, step);
+      if (simulation.outcome === "POLICY_BLOCKED") { await audit("GOAL_PRESERVATION_SIMULATION_RESULT", { category: "GOAL_PRESERVATION", outcome: simulation.outcome, stepKey: step.id, reason: simulation.reason, explanation: simulation.explanation }); return stop(index, simulation.outcome, "PAUSED", simulation.reason, simulation.explanation); }
+      if (!stepPreservesConstraints(storedGoal.contract, step, simulation.snapshot)) { const explanation = "Executing this step would violate or cannot prove a confirmed goal constraint."; await audit("GOAL_PRESERVATION_SIMULATION_RESULT", { category: "GOAL_PRESERVATION", outcome: "POLICY_BLOCKED", stepKey: step.id, reason: "GOAL_CONSTRAINT_VIOLATION", explanation }); return stop(index, "POLICY_BLOCKED", "PAUSED", "GOAL_CONSTRAINT_VIOLATION", explanation); }
+      const remainingSteps = storedPlan.plan.steps.slice(index + 1);
+      if (remainingSteps.length === 0 && !terminalStepSatisfiesGoal(storedGoal.contract, step, simulation.snapshot)) { const explanation = "The final approved step no longer completes the confirmed goal or its constraints."; await audit("GOAL_PRESERVATION_SIMULATION_RESULT", { category: "GOAL_PRESERVATION", outcome: "GOAL_NO_LONGER_ACHIEVABLE", stepKey: step.id, reason: "TERMINAL_GOAL_CHECK_FAILED", explanation }); return stop(index, "GOAL_NO_LONGER_ACHIEVABLE", "PAUSED", "TERMINAL_GOAL_CHECK_FAILED", explanation); }
+      if (remainingSteps.length > 0) {
+        const preservation = CompilerResultV1.parse(await this.compiler.compile(storedGoal.contract, simulation.snapshot, traceId)); assertCompilerBinding(preservation, storedGoal.contract.id, storedGoal.contract.version, simulation.snapshot.stateVersion);
+        if (preservation.status !== "SAT") { const outcome = preservation.status === "POLICY_BLOCKED" ? "POLICY_BLOCKED" : "GOAL_NO_LONGER_ACHIEVABLE"; const explanation = preservation.status === "POLICY_BLOCKED" ? "Executing this step would violate policy for the remaining confirmed goal." : "Executing this step would leave the remaining confirmed goal no longer achievable."; await audit("GOAL_PRESERVATION_SIMULATION_RESULT", { category: "GOAL_PRESERVATION", outcome, stepKey: step.id, reason: preservation.reason.code, explanation }); return stop(index, outcome, "PAUSED", preservation.reason.code, explanation); }
+      }
+      await audit("GOAL_PRESERVATION_SIMULATION_RESULT", { category: "GOAL_PRESERVATION", outcome: "SAFE_TO_EXECUTE", stepKey: step.id, reason: "GOAL_REMAINS_SATISFIABLE", explanation: "The deterministic simulation confirms the remaining goal is still achievable." });
+      await audit("EXECUTION_STEP_ALLOWED", { category: "EXECUTION", outcome: "SAFE_TO_EXECUTE", stepKey: step.id, idempotencyKey });
       const operation = bankOperation(storedGoal.contract.userId, step); const claim = await this.repository.claimIdempotency({ key: idempotencyKey, scope: "BANK_EXECUTION_STEP", requestHash: canonicalHash(operation.payload) });
       if (claim.status === "CONFLICT") throw new Error("IDEMPOTENCY_CONFLICT");
       if (claim.status === "REPLAY" && claim.response === undefined) throw new Error("IDEMPOTENCY_IN_PROGRESS");
       await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "PENDING", traceId });
       try {
-        const result = claim.status === "REPLAY" ? bankWriteResult(claim.response) : await this.bank.execute(operation.path, operation.payload, idempotencyKey, traceId);
+        const result = claim.status === "REPLAY" ? bankWriteResult(claim.response) : await executionGateway.execute(authorization, traceId);
         if (claim.status === "CLAIMED") await this.repository.completeIdempotency(idempotencyKey, result);
         await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "ACCEPTED", bankReference: result.bankReference, resultingStateVersion: result.stateVersion, traceId });
+        await audit("EXECUTION_BANK_OPERATION_EXECUTED", { category: "EXECUTION", outcome: "EXECUTED", stepKey: step.id, idempotencyKey, bankReference: result.bankReference });
         snapshot = await this.bank.getState(storedGoal.contract.userId, traceId); if (snapshot.stateVersion !== result.stateVersion) throw new Error("BANK_STATE_VERSION_MISMATCH");
+        await this.repository.saveSnapshot(snapshot, traceId); await audit("EXECUTION_STATE_REFRESHED", { category: "STATE_CHECK", outcome: "REFRESHED", stepKey: step.id, observedStateVersion: snapshot.stateVersion });
         await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "SETTLED", bankReference: result.bankReference, resultingStateVersion: result.stateVersion, traceId });
         stepResults.push({ stepId: step.id, status: "SETTLED", idempotencyKey, bankReference: result.bankReference });
-        // Revalidation hook: replace this trusted post-write refresh with compiler revalidation when that contract exists.
+        expectedStateVersion = result.stateVersion; await audit("EXECUTION_RECONCILIATION_RESULT", { category: "RECONCILIATION", outcome: "MATCHED", stepKey: step.id, bankReference: result.bankReference, expectedStateVersion: result.stateVersion, observedStateVersion: snapshot.stateVersion });
       } catch (error) {
         const errorCode = error instanceof Error && /^[A-Z][A-Z0-9_]*$/.test(error.message) ? error.message : "BANK_WRITE_FAILED";
         await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "FAILED", errorCode, traceId });
@@ -89,6 +131,12 @@ export class ExecutionService {
     await this.repository.finishExecution({ executionId, result: completed, traceId }); return completed;
   }
   get(id: string) { return this.repository.getExecution(id); }
+  async detail(id: string) {
+    const execution = await this.repository.getExecution(id); if (!execution) return null;
+    const plan = await this.repository.getPlan(execution.result.planId); const goal = plan ? await this.repository.getConfirmedGoal(plan.plan.goalContractId) : null;
+    const audit = (await this.repository.listAudit()).filter((item) => typeof item === "object" && item !== null && (("aggregateId" in item && item.aggregateId === id) || ("traceId" in item && item.traceId === execution.traceId)));
+    return { state: execution.executionState, traceId: execution.traceId, result: execution.result, goal: goal?.contract, plan: plan?.plan, audit };
+  }
   list() { return this.repository.listExecutions(); }
   listRecoverable() { return this.repository.listRecoverableExecutions(); }
 }

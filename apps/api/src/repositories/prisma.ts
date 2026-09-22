@@ -88,9 +88,21 @@ export class PrismaParlanceRepository implements ParlanceRepository {
   }
   async getApproval(id: string): Promise<StoredApproval | null> { const row = await this.db.approval.findUnique({ where: { id } }); return row ? mapApproval(row) : null; }
   async getExecution(id: string): Promise<StoredExecution | null> { const row = await this.db.executionRun.findUnique({ where: { id }, include: { steps: { include: { planStep: true } } } }); return row ? mapExecution(row) : null; }
+  async getLatestSettledStateVersion(executionId: string): Promise<number | null> { const step = await this.db.executionStep.findFirst({ where: { executionRunId: executionId, status: "SETTLED", resultingStateVersion: { not: null } }, orderBy: { planStep: { sequence: "desc" } }, select: { resultingStateVersion: true } }); return step?.resultingStateVersion ?? null; }
   async claimIdempotency(input: { key: string; scope: string; requestHash: string }): ReturnType<ParlanceRepository["claimIdempotency"]> { const prior = await this.db.idempotencyRecord.findUnique({ where: { key: input.key } }); if (prior) return prior.scope === input.scope && prior.requestHash === input.requestHash ? { status: "REPLAY", ...(prior.response === null ? {} : { response: prior.response }) } : { status: "CONFLICT" }; try { await this.db.idempotencyRecord.create({ data: input }); return { status: "CLAIMED" }; } catch (error) { if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error; const raced = await this.db.idempotencyRecord.findUniqueOrThrow({ where: { key: input.key } }); return raced.scope === input.scope && raced.requestHash === input.requestHash ? { status: "REPLAY", ...(raced.response === null ? {} : { response: raced.response }) } : { status: "CONFLICT" }; } }
   async completeIdempotency(key: string, response: unknown): Promise<void> { await this.db.idempotencyRecord.update({ where: { key }, data: { response: json(response) } }); }
   async startExecution(id: string, traceId: string): Promise<void> { const e = event("EXECUTION_STARTED", "ExecutionRun", id, traceId, { status: "EXECUTING" }); await this.db.$transaction(async (tx) => { await tx.executionRun.update({ where: { id }, data: { status: "EXECUTING" } }); this.options.afterExecutionUpdate?.(); await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox }); }); }
+  async blockExecution(input: Parameters<ParlanceRepository["blockExecution"]>[0]): Promise<void> {
+    const payload = { state: input.state, reason: input.reason, explanation: input.explanation };
+    const e = event("EXECUTION_BLOCKED", "ExecutionRun", input.executionId, input.traceId, payload);
+    await this.db.$transaction(async (tx) => {
+      await tx.executionRun.update({ where: { id: input.executionId }, data: { status: input.state, ...(input.result.finalStateVersion === undefined ? {} : { finalStateVersion: input.result.finalStateVersion }), goalOutcome: json(input.result.goalOutcome) } });
+      await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox });
+    });
+  }
+  async recordExecutionAudit(input: Parameters<ParlanceRepository["recordExecutionAudit"]>[0]): Promise<void> {
+    await this.db.auditEvent.create({ data: { eventType: input.eventType, aggregateType: "ExecutionRun", aggregateId: input.executionId, traceId: input.traceId, payload: json(input.payload) } });
+  }
   async recordStep(input: Parameters<ParlanceRepository["recordStep"]>[0]): Promise<void> {
     const planStep = await this.db.financialPlanStep.findFirstOrThrow({ where: { plan: { executionRuns: { some: { id: input.executionId } } }, stepKey: input.planStepId } });
     const data = { status: input.status, ...(input.bankReference ? { bankReference: input.bankReference } : {}), ...(input.errorCode ? { errorCode: input.errorCode } : {}), ...(input.resultingStateVersion === undefined ? {} : { resultingStateVersion: input.resultingStateVersion }), traceId: input.traceId };
