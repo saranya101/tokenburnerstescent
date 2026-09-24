@@ -30,6 +30,8 @@ Canonical Zod schemas live in `packages/contracts/src`. Matching Pydantic models
 
 An `ACQUIRE_ASSET` goal accepts `budget`, `quantity`, or both, but never neither. Budget-only delegates feasible quantity calculation to the deterministic compiler. Quantity-only delegates funding calculation. When both are present, quantity is the target and budget is the hard spending maximum.
 
+An executable `FX_CONVERT` step binds `sourceAccountId`, `destinationAccountId`, `sourceMoney`, `targetCurrency`, and `quoteId`. The destination account is the exact account credited by deterministic simulation and authorized for execution; it cannot be inferred from the target currency at execution time.
+
 ## Persistence mapping
 
 Wire `GoalContractV1.id` is a stable logical ID and maps to Prisma `GoalContract.contractKey`; Prisma `GoalContract.id` is a row ID. Revisions are unique by `(contractKey, version)`. Plans and approvals retain `goalContractRowId` for relations plus `goalContractKey` and `goalContractVersion` for exact contract binding.

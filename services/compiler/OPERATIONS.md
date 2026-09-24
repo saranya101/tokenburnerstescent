@@ -1,0 +1,9 @@
+# Phase C1 operation simulation
+
+`app.operations.models` holds concrete, canonical-ID operation inputs. `apply_operation` accepts a `BankStateSnapshotV1` or a prior `SimulatedState` and returns an `OperationResult` with either a new state or structured violations. `app.operations.library` lists required inputs, preconditions, effects, availability, fees, reversibility, and possible violation codes. It does not execute any bank action.
+
+The simulator stores each result as immutable JSON. `to_snapshot()` returns a fresh model; changing it cannot change the simulated state or the original input. Simulation keeps `stateVersion` and `capturedAt` from the input snapshot. `applied_operations` records the local simulated sequence, not a persisted bank version. Quote expiry is evaluated at `capturedAt`, since the contract carries no separate simulation clock.
+
+Amounts and fees are integer minor units. Quantities and quote rates are `Decimal`. FX conversion multiplies source minor units by the quote rate, then rounds once to a target minor unit with `ROUND_HALF_EVEN`. Quote fees debit the source currency separately. This assumes the quote rate relates minor units directly; V1 has no currency exponent table. Trade `price` is an explicit total settlement amount for the concrete quantity, and `fee` is explicit. No market-price lookup occurs.
+
+The corrected FX plan step binds a canonical destination account, matching the internal FX input. V1 has no market prices, so buy and sell inputs require explicit total prices. The snapshot has obligations but no biller registry: bill payments target an existing obligation, reduce its remaining amount, and mark it `PAID` at zero. An `ACTIVE` beneficiary is the V1 representation of a verified beneficiary. No settlement, compensation, or route planning is inferred.
