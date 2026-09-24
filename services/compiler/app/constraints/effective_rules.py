@@ -13,10 +13,16 @@ _RULE_ORDER = {
 
 
 def merge_effective_rules(
-    goal: GoalContractV1, hard_rules: tuple[HardRule, ...] = ()
+    goal: GoalContractV1 | None,
+    hard_rules: tuple[HardRule, ...] = (),
+    *,
+    user_id: str | None = None,
 ) -> EffectiveConstraintSet:
+    owner = goal.user_id if goal is not None else user_id
+    if owner is None:
+        raise ValueError("user_id is required when merging persistent rules without a goal")
     candidates: list[EffectiveRule] = []
-    for index, constraint in enumerate(goal.constraints):
+    for index, constraint in enumerate(goal.constraints if goal is not None else ()):
         origin = (RuleOrigin("REQUEST", f"{goal.id}:{goal.version}:{index}"),)
         if constraint.type in ("MAX_TOTAL_COST", "MIN_AVAILABLE_BALANCE"):
             candidates.append(
@@ -35,7 +41,7 @@ def merge_effective_rules(
         else:
             candidates.append(EffectiveRule(constraint.type, origin, days=constraint.days))
     for hard_rule in hard_rules:
-        if not hard_rule.enabled or hard_rule.user_id != goal.user_id:
+        if not hard_rule.enabled or hard_rule.user_id != owner:
             continue
         origin = (RuleOrigin("PERSISTENT_USER_RULE", hard_rule.id),)
         if hard_rule.type in ("MIN_AVAILABLE_BALANCE", "MAX_SINGLE_TRANSACTION"):

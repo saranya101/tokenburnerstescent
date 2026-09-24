@@ -352,6 +352,32 @@ def _no_solution_reason(
         if not any(account.id == target.destination_account_id for account in snapshot.accounts):
             return _unsat("NO_ELIGIBLE_DESTINATION_ACCOUNT")
     if isinstance(target, DeliverMoneyGroundedGoalV1):
+        # Candidate enumeration skips inactive accounts. When a fully funded
+        # matching source is frozen, preserve the bank-policy classification
+        # even though no candidate reached the policy engine.
+        restricted_sources = [
+            account
+            for account in snapshot.accounts
+            if account.currency == target.amount.currency
+            and "SEND_TRANSFER" in account.capabilities
+            and account.status != "ACTIVE"
+            and min(int(account.available_minor_units), int(account.ledger_minor_units))
+            >= int(target.amount.minor_units)
+        ]
+        funded_active_source = any(
+            account.currency == target.amount.currency
+            and "SEND_TRANSFER" in account.capabilities
+            and account.status == "ACTIVE"
+            and min(int(account.available_minor_units), int(account.ledger_minor_units))
+            >= int(target.amount.minor_units)
+            for account in snapshot.accounts
+        )
+        if restricted_sources and not funded_active_source:
+            source = sorted(restricted_sources, key=lambda account: account.id)[0]
+            return _blocked(
+                "ACCOUNT_FROZEN" if source.status == "FROZEN" else "ACCOUNT_INACTIVE",
+                accountId=source.id,
+            )
         matching_quotes = [
             quote for quote in snapshot.fx_quotes if quote.to_currency == target.amount.currency
         ]
@@ -433,8 +459,21 @@ def compile_with_diagnostics(
         return CompileOutcome(_unsat("STATE_USER_MISMATCH"), None)
     if not isinstance(goal.goal, (DeliverMoneyGroundedGoalV1, MoveFundsGroundedGoalV1)):
         return CompileOutcome(_unsat("UNSUPPORTED_GOAL", goalType=goal.goal.type), None)
-    if int(goal.goal.amount.minor_units) <= 0:
+    try:
+        requested_amount = int(goal.goal.amount.minor_units)
+    except ValueError:
         return CompileOutcome(_unsat("INVALID_AMOUNT"), None)
+    if requested_amount <= 0:
+        return CompileOutcome(_unsat("INVALID_AMOUNT"), None)
+    try:
+        invalid_balance = any(
+            int(account.available_minor_units) < 0 or int(account.ledger_minor_units) < 0
+            for account in snapshot.accounts
+        )
+    except ValueError:
+        invalid_balance = True
+    if invalid_balance:
+        return CompileOutcome(_unsat("INVALID_STATE_AMOUNT"), None)
     if any(rule.enabled and rule.user_id != goal.user_id for rule in hard_rules):
         return CompileOutcome(_unsat("HARD_RULE_USER_MISMATCH"), None)
     policy = policy or PolicyEngine()

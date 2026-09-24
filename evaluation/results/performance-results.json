@@ -1,0 +1,680 @@
+{
+  "benchmarks": [
+    {
+      "accounts": 4,
+      "candidateActionsEvaluated": 84,
+      "compileLatencyMs": 15.163666,
+      "graph": "SMALL",
+      "maxStates": 150,
+      "quotes": 2,
+      "reason": "AMBIGUOUS_VALID_PLANS",
+      "searchDepthReached": 4,
+      "statesExplored": 41,
+      "status": "UNSAT"
+    },
+    {
+      "accounts": 12,
+      "candidateActionsEvaluated": 1844,
+      "compileLatencyMs": 383.584833,
+      "graph": "MEDIUM",
+      "maxStates": 150,
+      "quotes": 2,
+      "reason": "MAX_STATES_EXPLORED",
+      "searchDepthReached": 2,
+      "statesExplored": 150,
+      "status": "UNSAT"
+    },
+    {
+      "accounts": 36,
+      "candidateActionsEvaluated": 6362,
+      "compileLatencyMs": 2364.087583,
+      "graph": "LARGE_HACKATHON",
+      "maxStates": 150,
+      "quotes": 2,
+      "reason": "MAX_STATES_EXPLORED",
+      "searchDepthReached": 2,
+      "statesExplored": 150,
+      "status": "UNSAT"
+    }
+  ],
+  "caseMeasurements": [
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.959833,
+      "preflightLatencyMs": 0.114625,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "direct_transfer",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 2,
+      "compileLatencyMs": 0.473375,
+      "preflightLatencyMs": 0.213042,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "fx_transfer",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 2,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 2,
+      "compileLatencyMs": 0.369208,
+      "preflightLatencyMs": 0.133292,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "move_transfer",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 2,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 3,
+      "compileLatencyMs": 0.621208,
+      "preflightLatencyMs": 0.252625,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "move_fx_transfer",
+      "searchDepthReached": 2,
+      "solverCalls": 0,
+      "statesExplored": 3,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.219125,
+      "preflightLatencyMs": 0.073833,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "grounded_move",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.144791,
+      "prunedByConstraint": 1,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "excluded_account",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.137833,
+      "prunedByConstraint": 1,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "minimum_reserve",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.236875,
+      "preflightLatencyMs": 0.086625,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "exact_reserve_boundary",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 2,
+      "compileLatencyMs": 0.3155,
+      "prunedByConstraint": 1,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "max_cost_too_low",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 2,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 2,
+      "compileLatencyMs": 0.433625,
+      "preflightLatencyMs": 0.220833,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "exact_max_cost",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 2,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.258125,
+      "preflightLatencyMs": 0.091583,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "simultaneous_constraints",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.132625,
+      "prunedByConstraint": 1,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "max_single_transaction_low",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.246833,
+      "preflightLatencyMs": 0.081792,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "max_single_transaction_exact",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 0,
+      "compileLatencyMs": 0.07575,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "frozen_source",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.086458,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 1,
+      "prunedVisitedStates": 0,
+      "scenarioId": "blocked_beneficiary",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.085791,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 1,
+      "prunedVisitedStates": 0,
+      "scenarioId": "unverified_beneficiary",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.083625,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 1,
+      "prunedVisitedStates": 0,
+      "scenarioId": "transfer_unavailable",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.124667,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 1,
+      "prunedVisitedStates": 0,
+      "scenarioId": "fx_unavailable",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 2,
+      "compileLatencyMs": 0.383666,
+      "preflightLatencyMs": 0.184,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "valid_quote",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 2,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 0,
+      "compileLatencyMs": 0.091084,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "expired_quote",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 0,
+      "compileLatencyMs": 0.071666,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "missing_quote",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 2,
+      "compileLatencyMs": 0.391333,
+      "preflightLatencyMs": 0.181959,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "quote_rate_changed",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 2,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 0,
+      "compileLatencyMs": 0.084625,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "no_fx_destination",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 4,
+      "compileLatencyMs": 0.720416,
+      "preflightLatencyMs": 0.196125,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "equivalent_routes",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 3,
+      "validPlansFound": 2
+    },
+    {
+      "candidateActionsEvaluated": 2,
+      "compileLatencyMs": 0.294417,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "material_ambiguity",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 2
+    },
+    {
+      "candidateActionsEvaluated": 6,
+      "compileLatencyMs": 0.8935,
+      "preflightLatencyMs": 0.093583,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "minimize_fx",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 3,
+      "validPlansFound": 4
+    },
+    {
+      "candidateActionsEvaluated": 4,
+      "compileLatencyMs": 0.822875,
+      "preflightLatencyMs": 0.234125,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "minimize_cost",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 3,
+      "validPlansFound": 2
+    },
+    {
+      "candidateActionsEvaluated": 2,
+      "compileLatencyMs": 0.371083,
+      "preflightLatencyMs": 0.081875,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "prefer_account",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 2
+    },
+    {
+      "candidateActionsEvaluated": 5124,
+      "compileLatencyMs": 520.768625,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 420,
+      "scenarioId": "loop_graph",
+      "searchDepthReached": 4,
+      "solverCalls": 0,
+      "statesExplored": 1000,
+      "validPlansFound": 144
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.224375,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "depth_bound",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 2,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.183042,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "state_bound",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 0,
+      "compileLatencyMs": 0.075417,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "insufficient_funds",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 2,
+      "compileLatencyMs": 0.283417,
+      "prunedByConstraint": 1,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "fx_reserve_violation",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 2,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 1,
+      "compileLatencyMs": 0.164375,
+      "prunedByConstraint": 1,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "fx_excluded",
+      "searchDepthReached": 0,
+      "solverCalls": 0,
+      "statesExplored": 1,
+      "validPlansFound": 0
+    },
+    {
+      "candidateActionsEvaluated": 2,
+      "compileLatencyMs": 0.480209,
+      "preflightLatencyMs": 0.248,
+      "prunedByConstraint": 0,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "fx_multiple_constraints",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 2,
+      "validPlansFound": 1
+    },
+    {
+      "candidateActionsEvaluated": 2,
+      "compileLatencyMs": 0.283416,
+      "prunedByConstraint": 1,
+      "prunedByPolicy": 0,
+      "prunedVisitedStates": 0,
+      "scenarioId": "mixed_cost_attribution",
+      "searchDepthReached": 1,
+      "solverCalls": 0,
+      "statesExplored": 2,
+      "validPlansFound": 0
+    },
+    {
+      "preflightLatencyMs": 0.191084,
+      "scenarioId": "whole_plan_preflight"
+    },
+    {
+      "preflightLatencyMs": 0.03375,
+      "scenarioId": "tampered_plan_preflight"
+    },
+    {
+      "preflightLatencyMs": 0.039333,
+      "scenarioId": "expired_quote_preflight"
+    },
+    {
+      "revalidationLatencyMs": 0.09425,
+      "scenarioId": "irrelevant_version"
+    },
+    {
+      "revalidationLatencyMs": 0.138708,
+      "scenarioId": "balance_drop"
+    },
+    {
+      "revalidationLatencyMs": 0.338333,
+      "scenarioId": "alternate_balance"
+    },
+    {
+      "revalidationLatencyMs": 0.125625,
+      "scenarioId": "quote_expiry"
+    },
+    {
+      "revalidationLatencyMs": 0.496709,
+      "scenarioId": "quote_replacement"
+    },
+    {
+      "revalidationLatencyMs": 0.316875,
+      "scenarioId": "service_outage"
+    },
+    {
+      "revalidationLatencyMs": 0.312292,
+      "scenarioId": "beneficiary_blocked_later"
+    },
+    {
+      "goalPreservationLatencyMs": 0.195875,
+      "scenarioId": "goal_preservation_transfer_outage"
+    },
+    {
+      "goalPreservationLatencyMs": 0.444667,
+      "scenarioId": "preserve_valid_fx"
+    },
+    {
+      "goalPreservationLatencyMs": 0.203125,
+      "scenarioId": "preserve_beneficiary_blocked"
+    },
+    {
+      "goalPreservationLatencyMs": 0.182041,
+      "scenarioId": "preserve_destination_lost"
+    },
+    {
+      "revalidationLatencyMs": 0.363042,
+      "scenarioId": "replan_alternate_source"
+    },
+    {
+      "revalidationLatencyMs": 0.545417,
+      "scenarioId": "replan_new_quote"
+    },
+    {
+      "revalidationLatencyMs": 0.210167,
+      "scenarioId": "replan_no_alternative"
+    },
+    {
+      "relaxationLatencyMs": 0.7755,
+      "scenarioId": "relax_cost_one_unit"
+    },
+    {
+      "relaxationLatencyMs": 4.977084,
+      "scenarioId": "relax_reserve_one_unit"
+    },
+    {
+      "compilerCalls": 23,
+      "relaxationLatencyMs": 4.108458,
+      "scenarioId": "max_feasible_transfer"
+    },
+    {
+      "compilerCalls": 0,
+      "opportunityLatencyMs": 0.06525,
+      "scenarioId": "above_reserve"
+    },
+    {
+      "compilerCalls": 0,
+      "opportunityLatencyMs": 0.053958,
+      "scenarioId": "after_obligations"
+    },
+    {
+      "compilerCalls": 0,
+      "opportunityLatencyMs": 0.034042,
+      "scenarioId": "reserve_gap"
+    },
+    {
+      "compilerCalls": 0,
+      "opportunityLatencyMs": 0.040375,
+      "scenarioId": "obligation_shortfall"
+    },
+    {
+      "compilerCalls": 24,
+      "opportunityLatencyMs": 4.848375,
+      "scenarioId": "exact_max_opportunity"
+    }
+  ],
+  "comparisonLatencyMs": [
+    {
+      "baseline": 0.090459,
+      "goalPreservation": 0.400625,
+      "scenarioId": "unchanged_fx_transfer"
+    },
+    {
+      "baseline": 0.056,
+      "goalPreservation": 0.195667,
+      "scenarioId": "goal_preservation_transfer_outage"
+    },
+    {
+      "baseline": 0.052,
+      "goalPreservation": 0.189458,
+      "scenarioId": "beneficiary_blocked_before_fx"
+    },
+    {
+      "baseline": 0.051084,
+      "goalPreservation": 0.174,
+      "scenarioId": "destination_capability_lost"
+    },
+    {
+      "baseline": 0.031666,
+      "goalPreservation": 0.03625,
+      "scenarioId": "quote_expired_before_fx"
+    },
+    {
+      "baseline": 0.007583,
+      "goalPreservation": 0.056833,
+      "scenarioId": "fx_service_disappears"
+    },
+    {
+      "baseline": 0.007917,
+      "goalPreservation": 0.05575,
+      "scenarioId": "source_freezes"
+    },
+    {
+      "baseline": 0.028875,
+      "goalPreservation": 0.068084,
+      "scenarioId": "source_balance_drops"
+    },
+    {
+      "baseline": 0.057125,
+      "goalPreservation": 0.249417,
+      "scenarioId": "reserve_rule_becomes_binding"
+    },
+    {
+      "baseline": 0.054125,
+      "goalPreservation": 0.091708,
+      "scenarioId": "excluded_source_rule"
+    },
+    {
+      "baseline": 0.026125,
+      "goalPreservation": 0.055208,
+      "scenarioId": "alternate_source_replan"
+    }
+  ],
+  "latencySummaryMs": {
+    "compileLatencyMs": {
+      "average": 14.766466333333334,
+      "count": 36,
+      "max": 520.768625
+    },
+    "goalPreservationLatencyMs": {
+      "average": 0.256427,
+      "count": 4,
+      "max": 0.444667
+    },
+    "preflightLatencyMs": {
+      "average": 0.14484652631578948,
+      "count": 19,
+      "max": 0.252625
+    },
+    "relaxationLatencyMs": {
+      "average": 3.2870139999999997,
+      "count": 3,
+      "max": 4.977084
+    },
+    "revalidationLatencyMs": {
+      "average": 0.2941418,
+      "count": 10,
+      "max": 0.545417
+    }
+  }
+}
