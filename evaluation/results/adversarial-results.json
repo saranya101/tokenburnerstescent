@@ -1,0 +1,121 @@
+[
+  {
+    "actual": "INVALID_PLAN",
+    "expected": "INVALID_PLAN",
+    "passed": true,
+    "reason": "QUOTE_EXPIRED",
+    "scenarioId": "quote_expires_before_first"
+  },
+  {
+    "actual": "STATE_CHANGED",
+    "expected": "STATE_CHANGED",
+    "passed": true,
+    "reason": "FX_BINDING_UNPROVEN",
+    "scenarioId": "quote_economics_change"
+  },
+  {
+    "actual": "WOULD_BREAK_GOAL",
+    "expected": "WOULD_BREAK_GOAL",
+    "passed": true,
+    "reason": "REQUIRED_SERVICE_UNAVAILABLE",
+    "scenarioId": "transfer_rail_disappears"
+  },
+  {
+    "actual": "POLICY_BLOCKED",
+    "expected": "POLICY_BLOCKED",
+    "passed": true,
+    "reason": "SERVICE_UNAVAILABLE",
+    "scenarioId": "fx_service_disappears"
+  },
+  {
+    "actual": "WOULD_BREAK_GOAL",
+    "expected": "WOULD_BREAK_GOAL",
+    "passed": true,
+    "reason": "BENEFICIARY_BLOCKED",
+    "scenarioId": "beneficiary_becomes_blocked"
+  },
+  {
+    "actual": "POLICY_BLOCKED",
+    "expected": "POLICY_BLOCKED",
+    "passed": true,
+    "reason": "ACCOUNT_FROZEN",
+    "scenarioId": "source_account_freezes"
+  },
+  {
+    "actual": "INVALID_NEXT_STEP",
+    "expected": "INVALID_NEXT_STEP",
+    "passed": true,
+    "reason": "INSUFFICIENT_FUNDS",
+    "scenarioId": "source_balance_drops"
+  },
+  {
+    "actual": "WOULD_BREAK_GOAL",
+    "expected": "WOULD_BREAK_GOAL",
+    "passed": true,
+    "reason": "MIN_AVAILABLE_BALANCE_VIOLATED",
+    "scenarioId": "reserve_rule_becomes_binding"
+  },
+  {
+    "actual": "WOULD_BREAK_GOAL",
+    "expected": "WOULD_BREAK_GOAL",
+    "passed": true,
+    "reason": "INSUFFICIENT_FUNDS",
+    "scenarioId": "destination_loses_capability"
+  },
+  {
+    "actual": "INVALID_PROGRESS",
+    "expected": "INVALID_PROGRESS",
+    "passed": true,
+    "reason": "COMPLETED_STEPS_NOT_PREFIX",
+    "scenarioId": "execution_prefix_inconsistent"
+  },
+  {
+    "actual": "INVALID_PROGRESS",
+    "expected": "INVALID_PROGRESS",
+    "passed": true,
+    "reason": "PRIOR_RESULT_UNKNOWN",
+    "scenarioId": "prior_step_outcome_unknown"
+  },
+  {
+    "actual": "IDENTICAL",
+    "expected": "IDENTICAL",
+    "passed": true,
+    "reason": null,
+    "scenarioId": "duplicate_compile_calls"
+  },
+  {
+    "actual": "UNSAT",
+    "expected": "UNSAT",
+    "passed": true,
+    "reason": "INSUFFICIENT_FUNDS",
+    "scenarioId": "malformed_quote_rate"
+  },
+  {
+    "actual": "UNSAT",
+    "expected": "UNSAT",
+    "passed": true,
+    "reason": "INVALID_STATE_AMOUNT",
+    "scenarioId": "malformed_minor_unit"
+  },
+  {
+    "actual": "UNSAT",
+    "expected": "UNSAT",
+    "passed": true,
+    "reason": "INVALID_AMOUNT",
+    "scenarioId": "malformed_goal_minor_unit"
+  },
+  {
+    "actual": "UNSAT",
+    "expected": "UNSAT",
+    "passed": true,
+    "reason": "INSUFFICIENT_FUNDS",
+    "scenarioId": "unsupported_mixed_cost"
+  },
+  {
+    "actual": "READY",
+    "expected": "READY",
+    "passed": true,
+    "reason": null,
+    "scenarioId": "valid_partial_execution_prefix"
+  }
+]

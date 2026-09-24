@@ -1,6 +1,18 @@
 # Contract V1
 
-Contract V1 freezes the wire boundary: Developer B produces `GoalContractV1`, Developer A supplies `BankStateSnapshotV1`, Developer C returns `CompilerResultV1`, and Developer A captures `ApprovalV1` and `ExecutionResultV1`.
+Contract V1 freezes the wire boundary between language grounding and deterministic compilation.
+
+```text
+Person B: human language
+          -> IntentDraftV1
+          -> grounding / ambiguity resolution
+          -> GoalContractV1 with canonical IDs
+
+Person C: GoalContractV1 + BankStateSnapshotV1
+          -> CompilerResultV1
+```
+
+The compiler never resolves human references. Developer A supplies `BankStateSnapshotV1`, then captures `ApprovalV1` and `ExecutionResultV1` around the compiled plan.
 
 Canonical Zod schemas live in `packages/contracts/src`. Matching Pydantic models live in `services/compiler/app/models/contracts.py`. Both runtimes validate the same fixtures under `packages/contracts/fixtures`.
 
@@ -13,6 +25,12 @@ Canonical Zod schemas live in `packages/contracts/src`. Matching Pydantic models
 - enums use `UPPER_SNAKE_CASE`; boundary objects are strict.
 
 `IntentDraftV1` and `GoalContractV1` are operation-free. Only `FinancialPlanStepV1` may contain `TRANSFER`, `FX_CONVERT`, `MOVE_FUNDS`, `PAY_BILL`, `BUY_ASSET`, or `SELL_ASSET`.
+
+`IntentDraftV1` may contain human-facing fields such as `assetReference`, `recipientReference`, `accountReference`, and `billerReference`. `GoalContractV1` replaces them with `assetId`, `recipientId`, `accountId`, and `billerId`. `entityBindings` retain the original reference-to-ID decisions for audit and explanation.
+
+An `ACQUIRE_ASSET` goal accepts `budget`, `quantity`, or both, but never neither. Budget-only delegates feasible quantity calculation to the deterministic compiler. Quantity-only delegates funding calculation. When both are present, quantity is the target and budget is the hard spending maximum.
+
+An executable `FX_CONVERT` step binds `sourceAccountId`, `destinationAccountId`, `sourceMoney`, `targetCurrency`, and `quoteId`. The destination account is the exact account credited by deterministic simulation and authorized for execution; it cannot be inferred from the target currency at execution time.
 
 ## Persistence mapping
 

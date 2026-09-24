@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1", "id": "goal-balance-change", "userId": "user-1", "version": 1,
-  "goal": { "type": "MOVE_FUNDS", "amount": { "currency": "SGD", "minorUnits": "50000" }, "sourceAccountReference": "checking", "destinationAccountReference": "savings" },
+  "goal": { "type": "MOVE_FUNDS", "amount": { "currency": "SGD", "minorUnits": "50000" }, "sourceAccountId": "acc-checking", "destinationAccountId": "acc-savings" },
   "constraints": [], "preferences": [],
   "entityBindings": [
     { "schemaVersion": "1", "reference": "checking", "entityType": "ACCOUNT", "entityId": "acc-checking", "resolutionMethod": "EXACT", "confirmed": true },

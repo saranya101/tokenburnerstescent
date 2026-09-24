@@ -7,7 +7,7 @@ export type FinancialActionV1 = z.infer<typeof FinancialActionV1>;
 const StepBase = z.object({ id: Id, sequence: z.number().int().nonnegative(), dependsOn: z.array(Id), reversible: z.boolean() });
 export const FinancialPlanStepV1 = z.discriminatedUnion("action", [
   StepBase.extend({ action: z.literal("TRANSFER"), parameters: z.object({ sourceAccountId: Id, beneficiaryId: Id, amount: MoneyV1 }).strict() }).strict(),
-  StepBase.extend({ action: z.literal("FX_CONVERT"), parameters: z.object({ accountId: Id, fromAmount: MoneyV1, toCurrency: CurrencyCode, quoteId: Id }).strict() }).strict(),
+  StepBase.extend({ action: z.literal("FX_CONVERT"), parameters: z.object({ sourceAccountId: Id, destinationAccountId: Id, sourceMoney: MoneyV1, targetCurrency: CurrencyCode, quoteId: Id }).strict() }).strict(),
   StepBase.extend({ action: z.literal("MOVE_FUNDS"), parameters: z.object({ sourceAccountId: Id, destinationAccountId: Id, amount: MoneyV1 }).strict() }).strict(),
   StepBase.extend({ action: z.literal("PAY_BILL"), parameters: z.object({ sourceAccountId: Id, obligationId: Id, amount: MoneyV1 }).strict() }).strict(),
   StepBase.extend({ action: z.literal("BUY_ASSET"), parameters: z.object({ sourceAccountId: Id, assetId: Id, quantity: NonNegativeDecimalString, maximumSpend: MoneyV1 }).strict() }).strict(),
