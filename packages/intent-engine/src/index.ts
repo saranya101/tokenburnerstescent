@@ -11,6 +11,8 @@ export { EntityGroundingError } from "./grounding/errors.js";
 export { InMemoryEntityRepository } from "./grounding/repository.js";
 export { normalizeEntityReference } from "./grounding/normalizer.js";
 export type { SemanticEntityCandidate, SemanticEntityRetriever, SemanticEntityRetrievalInput } from "./retrieval/types.js";
+export type { AmbiguityAnalysisResult, AmbiguityReasonCode, ClarificationItem, ClarificationOption, IntentAmbiguityAnalysisInput, IntentAmbiguityDetector } from "./ambiguity/types.js";
+export { DeterministicIntentAmbiguityDetector } from "./ambiguity/detector.js";
 export interface FinancialAmbiguityV1 { field: string; reason: string; candidateEntityIds: readonly string[]; }
 export interface AmbiguityDetector { detectFinancialAmbiguity(draft: IntentDraftV1, entities: readonly EntityBinding[], state?: BankStateSnapshotV1): Promise<readonly FinancialAmbiguityV1[]>; }
 export interface CompilerExplainer { explainCompilerResult(result: CompilerResultV1): Promise<string>; }
