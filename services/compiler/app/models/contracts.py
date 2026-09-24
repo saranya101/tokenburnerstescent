@@ -389,9 +389,10 @@ class TransferParametersV1(ContractModel):
 
 
 class FxConvertParametersV1(ContractModel):
-    account_id: str
-    from_amount: MoneyV1
-    to_currency: str
+    source_account_id: str
+    destination_account_id: str
+    source_money: MoneyV1
+    target_currency: str
     quote_id: str
 
 

@@ -1,0 +1,63 @@
+{
+  "adversarial": {
+    "cases": 17,
+    "failed": [],
+    "passed": 17
+  },
+  "casesTotal": 78,
+  "comparisonCases": 11,
+  "correctOutcomeCount": 36,
+  "correctRouteCount": 16,
+  "determinism": {
+    "hashSeedMismatches": 0,
+    "mismatches": 0,
+    "repeats": 140
+  },
+  "expectedPolicyBlocked": 5,
+  "expectedSat": 16,
+  "expectedUnsat": 15,
+  "failedCases": [],
+  "failedComparisons": [],
+  "families": {
+    "adversarial": 17,
+    "basic": 5,
+    "constraints": 13,
+    "fx": 5,
+    "opportunity": 5,
+    "policy": 5,
+    "preflight": 3,
+    "preservation": 4,
+    "relaxation": 3,
+    "replanning": 3,
+    "revalidation": 7,
+    "search": 8
+  },
+  "incorrectAcceptCount": 0,
+  "incorrectRejectCount": 0,
+  "safety": {
+    "baselineConstraintViolationsAllowed": 0,
+    "baselineGoalViolations": 3,
+    "baselineLocallyValidStepsAllowed": 5,
+    "baselinePolicyViolationsAllowed": 0,
+    "baselineStrandedIntermediateSteps": 3,
+    "baselineSuccessfulFinalOutcomes": 1,
+    "baselineWholeGoalFailures": 10,
+    "parlanceBlockedHarmfulIntermediateSteps": 3,
+    "parlanceGoalViolations": 0,
+    "parlanceLocallyValidStepsAllowed": 1,
+    "parlanceSuccessfulFinalOutcomes": 2,
+    "parlanceSuccessfulSafeReplans": 1
+  },
+  "search": {
+    "averageCandidatesEvaluated": 143.83333333333334,
+    "averageSearchDepth": 0.5277777777777778,
+    "averageStatesExplored": 29.25,
+    "maxStatesExplored": 1000,
+    "prunedByConstraint": 7,
+    "prunedByPolicy": 4,
+    "prunedVisitedStates": 420,
+    "searchBoundFailures": 3,
+    "solverCalls": 0,
+    "validPlansFound": 168
+  }
+}

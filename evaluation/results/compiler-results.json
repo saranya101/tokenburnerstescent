@@ -1,0 +1,959 @@
+[
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "9ba56970fcc6955be666ad297bc2a9d95f22703cf6c8e5e56fc3894f64afbe0c",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "basic",
+    "id": "direct_transfer",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "b8f509b462d8b31fe13c3f1cdbd1b3a5eb593e60e75f675c5aaa4961c07bf3ac",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "FX_CONVERT",
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "basic",
+    "id": "fx_transfer",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "619aff60cd45576522265f51ec5be353948f6988af6059480cb3ab5a2387cd3a",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "MOVE_FUNDS",
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "basic",
+    "id": "move_transfer",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "664045e6be5b6b51c5418072c145514fcfc23dabce4b174ed7b2b0f863807228",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "MOVE_FUNDS",
+        "FX_CONVERT",
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "basic",
+    "id": "move_fx_transfer",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "adcca687eb4fb9f64d6e6d811e241fbe77d5aca857ee4d50f9b259960e41b610",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "MOVE_FUNDS"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "basic",
+    "id": "grounded_move",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "EXCLUDED_ACCOUNT_PREVENTS_ROUTE",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "constraints",
+    "id": "excluded_account",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "MIN_AVAILABLE_BALANCE_VIOLATED",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "constraints",
+    "id": "minimum_reserve",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "e8927130d913334f6dc4faf75e1a8c94fe56c19c14d572981059727066ffc5ff",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "constraints",
+    "id": "exact_reserve_boundary",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "MAX_TOTAL_COST_TOO_LOW",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "constraints",
+    "id": "max_cost_too_low",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "9f887cd871ab5bd92ba23e9481a699df34911570a30a2f1fea1518cd83eb968b",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "FX_CONVERT",
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "constraints",
+    "id": "exact_max_cost",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "4e22fa6ed685ea868ba99237c56813d948611fdee2067ff69afc6f56b4a5afe8",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "constraints",
+    "id": "simultaneous_constraints",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "NO_TRANSFER_ROUTE",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "constraints",
+    "id": "max_single_transaction_low",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "46be75679f529c4cafea677a8604346e9425c1e241a181a445a2691291b0dfc2",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "constraints",
+    "id": "max_single_transaction_exact",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "ACCOUNT_FROZEN",
+      "route": [],
+      "status": "POLICY_BLOCKED"
+    },
+    "expected": "POLICY_BLOCKED",
+    "family": "policy",
+    "id": "frozen_source",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "BENEFICIARY_BLOCKED",
+      "route": [],
+      "status": "POLICY_BLOCKED"
+    },
+    "expected": "POLICY_BLOCKED",
+    "family": "policy",
+    "id": "blocked_beneficiary",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "BENEFICIARY_UNVERIFIED",
+      "route": [],
+      "status": "POLICY_BLOCKED"
+    },
+    "expected": "POLICY_BLOCKED",
+    "family": "policy",
+    "id": "unverified_beneficiary",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "REQUIRED_SERVICE_UNAVAILABLE",
+      "route": [],
+      "status": "POLICY_BLOCKED"
+    },
+    "expected": "POLICY_BLOCKED",
+    "family": "policy",
+    "id": "transfer_unavailable",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "REQUIRED_SERVICE_UNAVAILABLE",
+      "route": [],
+      "status": "POLICY_BLOCKED"
+    },
+    "expected": "POLICY_BLOCKED",
+    "family": "policy",
+    "id": "fx_unavailable",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "b8f509b462d8b31fe13c3f1cdbd1b3a5eb593e60e75f675c5aaa4961c07bf3ac",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "FX_CONVERT",
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "fx",
+    "id": "valid_quote",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "QUOTE_EXPIRED",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "fx",
+    "id": "expired_quote",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "NO_FX_ROUTE",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "fx",
+    "id": "missing_quote",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "58294d28cbef869cfc5f9660996526eabc9670aab871cd3d994209bd958577fc",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "FX_CONVERT",
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "fx",
+    "id": "quote_rate_changed",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "NO_ELIGIBLE_DESTINATION_ACCOUNT",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "fx",
+    "id": "no_fx_destination",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "6454f3469b0e4421df29743eae9e8828ce9673645874d3124621a2b47a5e822e",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "FX_CONVERT",
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "search",
+    "id": "equivalent_routes",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "AMBIGUOUS_VALID_PLANS",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "search",
+    "id": "material_ambiguity",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "dfb36b9dbcd524cbd56911122b086ed2ee3146e6341216a3e652cfa7a538a382",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "search",
+    "id": "minimize_fx",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "39b85fb277c94f1af0c5538c5d493982d01dad0c8dbef7c45606c98415c08501",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "FX_CONVERT",
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "search",
+    "id": "minimize_cost",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "0894d80da591137517aa8ab9ddfcefb030acd1a6d21c4110aa3a6798f193971f",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "search",
+    "id": "prefer_account",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "MAX_STATES_EXPLORED",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "search",
+    "id": "loop_graph",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "SEARCH_DEPTH_EXHAUSTED",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "search",
+    "id": "depth_bound",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "MAX_STATES_EXPLORED",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "search",
+    "id": "state_bound",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "INSUFFICIENT_FUNDS",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "constraints",
+    "id": "insufficient_funds",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "MIN_AVAILABLE_BALANCE_VIOLATED",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "constraints",
+    "id": "fx_reserve_violation",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "EXCLUDED_ACCOUNT_PREVENTS_ROUTE",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "constraints",
+    "id": "fx_excluded",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "excludedAccountUnused": true,
+      "goalBindingCorrect": true,
+      "goalSatisfied": true,
+      "planHash": "e61dcde2ae1d4d3de39bb4aab96f62f7572a27f318fe2802c53907adc76b2d31",
+      "preflight": "READY",
+      "quoteBindingCorrect": true,
+      "reason": null,
+      "route": [
+        "FX_CONVERT",
+        "TRANSFER"
+      ],
+      "stateVersionCorrect": true,
+      "status": "SAT",
+      "targetCorrect": true
+    },
+    "expected": "SAT",
+    "family": "constraints",
+    "id": "fx_multiple_constraints",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "planHash": null,
+      "reason": "INSUFFICIENT_FUNDS",
+      "route": [],
+      "status": "UNSAT"
+    },
+    "expected": "UNSAT",
+    "family": "constraints",
+    "id": "mixed_cost_attribution",
+    "kind": "planning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "reason": null,
+      "status": "READY",
+      "stepsSimulated": 2
+    },
+    "expected": "READY",
+    "family": "preflight",
+    "id": "whole_plan_preflight",
+    "kind": "preflight",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "reason": "PLAN_HASH_MISMATCH",
+      "status": "INVALID_PLAN",
+      "stepsSimulated": 0
+    },
+    "expected": "INVALID_PLAN",
+    "family": "preflight",
+    "id": "tampered_plan_preflight",
+    "kind": "preflight",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "reason": "QUOTE_EXPIRED",
+      "status": "INVALID_PLAN",
+      "stepsSimulated": 0
+    },
+    "expected": "INVALID_PLAN",
+    "family": "preflight",
+    "id": "expired_quote_preflight",
+    "kind": "preflight",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "differenceCodes": [],
+      "reason": null,
+      "stateVersionChanged": true,
+      "status": "PLAN_STILL_VALID"
+    },
+    "expected": "PLAN_STILL_VALID",
+    "family": "revalidation",
+    "id": "irrelevant_version",
+    "kind": "revalidation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "differenceCodes": [],
+      "reason": "INSUFFICIENT_FUNDS",
+      "stateVersionChanged": true,
+      "status": "GOAL_NOW_UNSAT"
+    },
+    "expected": "GOAL_NOW_UNSAT",
+    "family": "revalidation",
+    "id": "balance_drop",
+    "kind": "revalidation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "differenceCodes": [
+        "SOURCE_ACCOUNT_CHANGED"
+      ],
+      "reason": "INSUFFICIENT_FUNDS",
+      "stateVersionChanged": true,
+      "status": "REPLAN_REQUIRED"
+    },
+    "expected": "REPLAN_REQUIRED",
+    "family": "revalidation",
+    "id": "alternate_balance",
+    "kind": "revalidation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "differenceCodes": [],
+      "reason": "QUOTE_EXPIRED",
+      "stateVersionChanged": true,
+      "status": "GOAL_NOW_UNSAT"
+    },
+    "expected": "GOAL_NOW_UNSAT",
+    "family": "revalidation",
+    "id": "quote_expiry",
+    "kind": "revalidation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "differenceCodes": [
+        "FX_QUOTE_CHANGED"
+      ],
+      "reason": "QUOTE_EXPIRED",
+      "stateVersionChanged": true,
+      "status": "REPLAN_REQUIRED"
+    },
+    "expected": "REPLAN_REQUIRED",
+    "family": "revalidation",
+    "id": "quote_replacement",
+    "kind": "revalidation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "differenceCodes": [],
+      "reason": "REQUIRED_SERVICE_UNAVAILABLE",
+      "stateVersionChanged": true,
+      "status": "POLICY_BLOCKED"
+    },
+    "expected": "POLICY_BLOCKED",
+    "family": "revalidation",
+    "id": "service_outage",
+    "kind": "revalidation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "differenceCodes": [],
+      "reason": "BENEFICIARY_BLOCKED",
+      "stateVersionChanged": true,
+      "status": "POLICY_BLOCKED"
+    },
+    "expected": "POLICY_BLOCKED",
+    "family": "revalidation",
+    "id": "beneficiary_blocked_later",
+    "kind": "revalidation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "compilerCalls": 1,
+      "reason": "REQUIRED_SERVICE_UNAVAILABLE",
+      "status": "WOULD_BREAK_GOAL"
+    },
+    "expected": "WOULD_BREAK_GOAL",
+    "family": "preservation",
+    "id": "goal_preservation_transfer_outage",
+    "kind": "preservation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "compilerCalls": 1,
+      "reason": null,
+      "status": "PRESERVED"
+    },
+    "expected": "PRESERVED",
+    "family": "preservation",
+    "id": "preserve_valid_fx",
+    "kind": "preservation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "compilerCalls": 1,
+      "reason": "BENEFICIARY_BLOCKED",
+      "status": "WOULD_BREAK_GOAL"
+    },
+    "expected": "WOULD_BREAK_GOAL",
+    "family": "preservation",
+    "id": "preserve_beneficiary_blocked",
+    "kind": "preservation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "compilerCalls": 1,
+      "reason": "INSUFFICIENT_FUNDS",
+      "status": "WOULD_BREAK_GOAL"
+    },
+    "expected": "WOULD_BREAK_GOAL",
+    "family": "preservation",
+    "id": "preserve_destination_lost",
+    "kind": "preservation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "reason": "INSUFFICIENT_FUNDS",
+      "route": [
+        "TRANSFER"
+      ],
+      "status": "REPLANNED",
+      "targetPreserved": true
+    },
+    "expected": "REPLANNED",
+    "family": "replanning",
+    "id": "replan_alternate_source",
+    "kind": "replanning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "reason": "QUOTE_EXPIRED",
+      "route": [
+        "FX_CONVERT",
+        "TRANSFER"
+      ],
+      "status": "REPLANNED",
+      "targetPreserved": true
+    },
+    "expected": "REPLANNED",
+    "family": "replanning",
+    "id": "replan_new_quote",
+    "kind": "replanning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "reason": "INSUFFICIENT_FUNDS",
+      "route": [],
+      "status": "GOAL_UNSAT",
+      "targetPreserved": true
+    },
+    "expected": "GOAL_UNSAT",
+    "family": "replanning",
+    "id": "replan_no_alternative",
+    "kind": "replanning",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "exactBoundary": true,
+      "facts": [
+        {
+          "type": "MAX_TOTAL_COST",
+          "value": "666766"
+        }
+      ],
+      "status": "RELAXATION_FOUND"
+    },
+    "expected": "RELAXATION_FOUND",
+    "family": "relaxation",
+    "id": "relax_cost_one_unit",
+    "kind": "relaxation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "exactBoundary": true,
+      "facts": [
+        {
+          "type": "MIN_AVAILABLE_BALANCE",
+          "value": "300000"
+        }
+      ],
+      "status": "RELAXATION_FOUND"
+    },
+    "expected": "RELAXATION_FOUND",
+    "family": "relaxation",
+    "id": "relax_reserve_one_unit",
+    "kind": "relaxation",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "amount": "165000",
+      "exactBoundary": true,
+      "status": "FEASIBLE"
+    },
+    "expected": "FEASIBLE",
+    "family": "relaxation",
+    "id": "max_feasible_transfer",
+    "kind": "maximum",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "amount": "320000",
+      "feasibilityProven": false,
+      "stateVersionCorrect": true,
+      "status": "FACT"
+    },
+    "expected": "FACT",
+    "family": "opportunity",
+    "id": "above_reserve",
+    "kind": "opportunity",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "amount": "165000",
+      "feasibilityProven": false,
+      "stateVersionCorrect": true,
+      "status": "FACT"
+    },
+    "expected": "FACT",
+    "family": "opportunity",
+    "id": "after_obligations",
+    "kind": "opportunity",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "amount": "60000",
+      "feasibilityProven": false,
+      "stateVersionCorrect": true,
+      "status": "RESERVE_SHORTFALL"
+    },
+    "expected": "RESERVE_SHORTFALL",
+    "family": "opportunity",
+    "id": "reserve_gap",
+    "kind": "opportunity",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "amount": "100000",
+      "feasibilityProven": false,
+      "stateVersionCorrect": true,
+      "status": "PARTIALLY_COVERED"
+    },
+    "expected": "PARTIALLY_COVERED",
+    "family": "opportunity",
+    "id": "obligation_shortfall",
+    "kind": "opportunity",
+    "passed": true
+  },
+  {
+    "evidence": {
+      "amount": "165000",
+      "exactBoundary": true,
+      "feasibilityProven": true,
+      "stateVersionCorrect": true,
+      "status": "FEASIBLE"
+    },
+    "expected": "FEASIBLE",
+    "family": "opportunity",
+    "id": "exact_max_opportunity",
+    "kind": "opportunity",
+    "passed": true
+  }
+]

@@ -74,3 +74,26 @@ def test_acquire_asset_valid_variants(model: type, payload: dict[str, object]) -
 def test_acquire_asset_rejects_missing_budget_and_quantity(model: type, id_field: str) -> None:
     with pytest.raises(ValueError, match="requires budget, quantity, or both"):
         model.model_validate({"type": "ACQUIRE_ASSET", id_field: "asset-aapl"})
+
+
+def test_fx_step_requires_bound_destination() -> None:
+    from app.models.contracts import FxConvertPlanStepV1
+
+    step = {
+        "id": "step-fx",
+        "sequence": 0,
+        "action": "FX_CONVERT",
+        "dependsOn": [],
+        "reversible": False,
+        "parameters": {
+            "sourceAccountId": "acc-sgd",
+            "destinationAccountId": "acc-usd",
+            "sourceMoney": {"currency": "SGD", "minorUnits": "100"},
+            "targetCurrency": "USD",
+            "quoteId": "quote-sgd-usd-1",
+        },
+    }
+    assert FxConvertPlanStepV1.model_validate(step).parameters.destination_account_id == "acc-usd"
+    del step["parameters"]["destinationAccountId"]
+    with pytest.raises(ValueError):
+        FxConvertPlanStepV1.model_validate(step)

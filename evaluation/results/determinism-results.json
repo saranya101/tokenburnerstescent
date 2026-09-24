@@ -1,0 +1,37 @@
+[
+  {
+    "mismatches": 0,
+    "repeats": 20,
+    "scenarioId": "direct_transfer"
+  },
+  {
+    "mismatches": 0,
+    "repeats": 20,
+    "scenarioId": "fx_transfer"
+  },
+  {
+    "mismatches": 0,
+    "repeats": 20,
+    "scenarioId": "move_transfer"
+  },
+  {
+    "mismatches": 0,
+    "repeats": 20,
+    "scenarioId": "move_fx_transfer"
+  },
+  {
+    "mismatches": 0,
+    "repeats": 20,
+    "scenarioId": "max_cost_too_low"
+  },
+  {
+    "mismatches": 0,
+    "repeats": 20,
+    "scenarioId": "expired_quote"
+  },
+  {
+    "mismatches": 0,
+    "repeats": 20,
+    "scenarioId": "material_ambiguity"
+  }
+]
