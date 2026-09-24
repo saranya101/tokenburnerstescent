@@ -3,8 +3,13 @@ export type { IntentInterpreter, IntentModelClient, IntentModelInput, InterpretU
 export { IntentInterpreterError } from "./interpreter/errors.js";
 export { ModelBackedIntentInterpreter } from "./interpreter/interpreter.js";
 export { INTENT_PROMPT_VERSION } from "./prompts/intent-v1.js";
+export { createTokenHubIntentInterpreter, TokenHubIntentModelClient, TokenHubProviderError, loadTokenHubConfig, TokenHubConfigurationError } from "./providers/tokenhub/index.js";
+export type { TokenHubConfig } from "./providers/tokenhub/index.js";
+export type { EntityGrounder, EntityGroundingInput, EntityGroundingResult, EntityRepository, GroundableEntityType, GroundingCandidate, GroundingEntity, GroundingResolutionMethod } from "./grounding/types.js";
+export { DeterministicEntityGrounder } from "./grounding/grounder.js";
+export { InMemoryEntityRepository } from "./grounding/repository.js";
+export { normalizeEntityReference } from "./grounding/normalizer.js";
 export interface FinancialAmbiguityV1 { field: string; reason: string; candidateEntityIds: readonly string[]; }
-export interface EntityGrounder { groundEntities(draft: IntentDraftV1, candidates: readonly EntityBinding[]): Promise<readonly EntityBinding[]>; }
 export interface AmbiguityDetector { detectFinancialAmbiguity(draft: IntentDraftV1, entities: readonly EntityBinding[], state?: BankStateSnapshotV1): Promise<readonly FinancialAmbiguityV1[]>; }
 export interface CompilerExplainer { explainCompilerResult(result: CompilerResultV1): Promise<string>; }
 export { MockIntentInterpreter, MockIntentModelClient } from "./interpreter/mock.js";
