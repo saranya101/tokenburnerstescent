@@ -1,0 +1,255 @@
+[
+  {
+    "baseline": {
+      "constraint_violations_allowed": 0,
+      "final_goal_succeeded": true,
+      "locally_valid_steps_allowed": 2,
+      "policy_violations_allowed": 0,
+      "stopped_reason": null,
+      "stranded_intermediate_steps": 0,
+      "whole_goal_failure": false
+    },
+    "parlance": {
+      "constraintViolationsAllowed": 0,
+      "firstStepClassification": "PRESERVED",
+      "harmfulIntermediateStepsBlocked": 0,
+      "locallyValidStepsAllowed": 1,
+      "policyViolationsAllowed": 0,
+      "replanStatus": null,
+      "successfulFinalOutcome": true,
+      "wholePlanPreflight": "READY"
+    },
+    "passed": true,
+    "scenarioId": "unchanged_fx_transfer"
+  },
+  {
+    "baseline": {
+      "constraint_violations_allowed": 0,
+      "final_goal_succeeded": false,
+      "locally_valid_steps_allowed": 1,
+      "policy_violations_allowed": 0,
+      "stopped_reason": "SERVICE_UNAVAILABLE",
+      "stranded_intermediate_steps": 1,
+      "whole_goal_failure": true
+    },
+    "parlance": {
+      "constraintViolationsAllowed": 0,
+      "firstStepClassification": "WOULD_BREAK_GOAL",
+      "harmfulIntermediateStepsBlocked": 1,
+      "locallyValidStepsAllowed": 0,
+      "policyViolationsAllowed": 0,
+      "replanStatus": null,
+      "successfulFinalOutcome": false,
+      "wholePlanPreflight": "POLICY_BLOCKED"
+    },
+    "passed": true,
+    "scenarioId": "goal_preservation_transfer_outage"
+  },
+  {
+    "baseline": {
+      "constraint_violations_allowed": 0,
+      "final_goal_succeeded": false,
+      "locally_valid_steps_allowed": 1,
+      "policy_violations_allowed": 0,
+      "stopped_reason": "BENEFICIARY_BLOCKED",
+      "stranded_intermediate_steps": 1,
+      "whole_goal_failure": true
+    },
+    "parlance": {
+      "constraintViolationsAllowed": 0,
+      "firstStepClassification": "WOULD_BREAK_GOAL",
+      "harmfulIntermediateStepsBlocked": 1,
+      "locallyValidStepsAllowed": 0,
+      "policyViolationsAllowed": 0,
+      "replanStatus": null,
+      "successfulFinalOutcome": false,
+      "wholePlanPreflight": "POLICY_BLOCKED"
+    },
+    "passed": true,
+    "scenarioId": "beneficiary_blocked_before_fx"
+  },
+  {
+    "baseline": {
+      "constraint_violations_allowed": 0,
+      "final_goal_succeeded": false,
+      "locally_valid_steps_allowed": 1,
+      "policy_violations_allowed": 0,
+      "stopped_reason": "ACCOUNT_CAPABILITY_MISSING",
+      "stranded_intermediate_steps": 1,
+      "whole_goal_failure": true
+    },
+    "parlance": {
+      "constraintViolationsAllowed": 0,
+      "firstStepClassification": "WOULD_BREAK_GOAL",
+      "harmfulIntermediateStepsBlocked": 1,
+      "locallyValidStepsAllowed": 0,
+      "policyViolationsAllowed": 0,
+      "replanStatus": null,
+      "successfulFinalOutcome": false,
+      "wholePlanPreflight": "POLICY_BLOCKED"
+    },
+    "passed": true,
+    "scenarioId": "destination_capability_lost"
+  },
+  {
+    "baseline": {
+      "constraint_violations_allowed": 0,
+      "final_goal_succeeded": false,
+      "locally_valid_steps_allowed": 0,
+      "policy_violations_allowed": 0,
+      "stopped_reason": "QUOTE_EXPIRED",
+      "stranded_intermediate_steps": 0,
+      "whole_goal_failure": true
+    },
+    "parlance": {
+      "constraintViolationsAllowed": 0,
+      "firstStepClassification": "STALE_PLAN",
+      "harmfulIntermediateStepsBlocked": 0,
+      "locallyValidStepsAllowed": 0,
+      "policyViolationsAllowed": 0,
+      "replanStatus": null,
+      "successfulFinalOutcome": false,
+      "wholePlanPreflight": "INVALID_PLAN"
+    },
+    "passed": true,
+    "scenarioId": "quote_expired_before_fx"
+  },
+  {
+    "baseline": {
+      "constraint_violations_allowed": 0,
+      "final_goal_succeeded": false,
+      "locally_valid_steps_allowed": 0,
+      "policy_violations_allowed": 0,
+      "stopped_reason": "SERVICE_UNAVAILABLE",
+      "stranded_intermediate_steps": 0,
+      "whole_goal_failure": true
+    },
+    "parlance": {
+      "constraintViolationsAllowed": 0,
+      "firstStepClassification": "POLICY_BLOCKED",
+      "harmfulIntermediateStepsBlocked": 0,
+      "locallyValidStepsAllowed": 0,
+      "policyViolationsAllowed": 0,
+      "replanStatus": null,
+      "successfulFinalOutcome": false,
+      "wholePlanPreflight": "POLICY_BLOCKED"
+    },
+    "passed": true,
+    "scenarioId": "fx_service_disappears"
+  },
+  {
+    "baseline": {
+      "constraint_violations_allowed": 0,
+      "final_goal_succeeded": false,
+      "locally_valid_steps_allowed": 0,
+      "policy_violations_allowed": 0,
+      "stopped_reason": "ACCOUNT_FROZEN",
+      "stranded_intermediate_steps": 0,
+      "whole_goal_failure": true
+    },
+    "parlance": {
+      "constraintViolationsAllowed": 0,
+      "firstStepClassification": "POLICY_BLOCKED",
+      "harmfulIntermediateStepsBlocked": 0,
+      "locallyValidStepsAllowed": 0,
+      "policyViolationsAllowed": 0,
+      "replanStatus": null,
+      "successfulFinalOutcome": false,
+      "wholePlanPreflight": "POLICY_BLOCKED"
+    },
+    "passed": true,
+    "scenarioId": "source_freezes"
+  },
+  {
+    "baseline": {
+      "constraint_violations_allowed": 0,
+      "final_goal_succeeded": false,
+      "locally_valid_steps_allowed": 0,
+      "policy_violations_allowed": 0,
+      "stopped_reason": "INSUFFICIENT_FUNDS",
+      "stranded_intermediate_steps": 0,
+      "whole_goal_failure": true
+    },
+    "parlance": {
+      "constraintViolationsAllowed": 0,
+      "firstStepClassification": "INVALID_NEXT_STEP",
+      "harmfulIntermediateStepsBlocked": 0,
+      "locallyValidStepsAllowed": 0,
+      "policyViolationsAllowed": 0,
+      "replanStatus": null,
+      "successfulFinalOutcome": false,
+      "wholePlanPreflight": "INVALID_PLAN"
+    },
+    "passed": true,
+    "scenarioId": "source_balance_drops"
+  },
+  {
+    "baseline": {
+      "constraint_violations_allowed": 0,
+      "final_goal_succeeded": false,
+      "locally_valid_steps_allowed": 0,
+      "policy_violations_allowed": 0,
+      "stopped_reason": "MIN_AVAILABLE_BALANCE_VIOLATED",
+      "stranded_intermediate_steps": 0,
+      "whole_goal_failure": true
+    },
+    "parlance": {
+      "constraintViolationsAllowed": 0,
+      "firstStepClassification": "WOULD_BREAK_GOAL",
+      "harmfulIntermediateStepsBlocked": 0,
+      "locallyValidStepsAllowed": 0,
+      "policyViolationsAllowed": 0,
+      "replanStatus": null,
+      "successfulFinalOutcome": false,
+      "wholePlanPreflight": "GOAL_NO_LONGER_SATISFIABLE"
+    },
+    "passed": true,
+    "scenarioId": "reserve_rule_becomes_binding"
+  },
+  {
+    "baseline": {
+      "constraint_violations_allowed": 0,
+      "final_goal_succeeded": false,
+      "locally_valid_steps_allowed": 0,
+      "policy_violations_allowed": 0,
+      "stopped_reason": "EXCLUDED_ACCOUNT_USED",
+      "stranded_intermediate_steps": 0,
+      "whole_goal_failure": true
+    },
+    "parlance": {
+      "constraintViolationsAllowed": 0,
+      "firstStepClassification": "WOULD_BREAK_GOAL",
+      "harmfulIntermediateStepsBlocked": 0,
+      "locallyValidStepsAllowed": 0,
+      "policyViolationsAllowed": 0,
+      "replanStatus": null,
+      "successfulFinalOutcome": false,
+      "wholePlanPreflight": "GOAL_NO_LONGER_SATISFIABLE"
+    },
+    "passed": true,
+    "scenarioId": "excluded_source_rule"
+  },
+  {
+    "baseline": {
+      "constraint_violations_allowed": 0,
+      "final_goal_succeeded": false,
+      "locally_valid_steps_allowed": 0,
+      "policy_violations_allowed": 0,
+      "stopped_reason": "INSUFFICIENT_FUNDS",
+      "stranded_intermediate_steps": 0,
+      "whole_goal_failure": true
+    },
+    "parlance": {
+      "constraintViolationsAllowed": 0,
+      "firstStepClassification": "INVALID_NEXT_STEP",
+      "harmfulIntermediateStepsBlocked": 0,
+      "locallyValidStepsAllowed": 0,
+      "policyViolationsAllowed": 0,
+      "replanStatus": "REPLANNED",
+      "successfulFinalOutcome": true,
+      "wholePlanPreflight": "INVALID_PLAN"
+    },
+    "passed": true,
+    "scenarioId": "alternate_source_replan"
+  }
+]

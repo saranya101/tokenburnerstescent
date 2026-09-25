@@ -1,0 +1,26 @@
+[
+  {
+    "hashSeeds": [
+      1,
+      777
+    ],
+    "mismatch": false,
+    "variant": "fx"
+  },
+  {
+    "hashSeeds": [
+      1,
+      777
+    ],
+    "mismatch": false,
+    "variant": "fx_equivalent"
+  },
+  {
+    "hashSeeds": [
+      1,
+      777
+    ],
+    "mismatch": false,
+    "variant": "move_transfer"
+  }
+]
