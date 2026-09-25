@@ -1,8 +1,28 @@
 import { Prisma, type PrismaClient } from "@parlance/db";
 import { ApprovalV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1, type CompilerResultV1 } from "@parlance/contracts";
 import type { ParlanceRepository, StoredApproval, StoredExecution, StoredGoal, StoredPlan } from "../orchestration/ports.js";
+import type { ApprovalPayload, NewWebAuthnChallenge, NewWebAuthnCredential, StoredWebAuthnChallenge, StoredWebAuthnCredential, WebAuthnRepository } from "../webauthn/types.js";
 
 const json = (value: unknown): Prisma.InputJsonValue => value as Prisma.InputJsonValue;
+const bytes = (value: Uint8Array): Uint8Array<ArrayBuffer> => new Uint8Array(value);
+
+function transports(value: Prisma.JsonValue | null): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+type CredentialRow = Prisma.WebAuthnCredentialGetPayload<Record<string, never>>;
+function mapWebAuthnCredential(row: CredentialRow): StoredWebAuthnCredential {
+  return { ...row, signCount: Number(row.signCount), publicKey: bytes(row.publicKey), userHandle: bytes(row.userHandle), transports: transports(row.transports) };
+}
+
+type ChallengeRow = Prisma.WebAuthnChallengeGetPayload<Record<string, never>>;
+function mapWebAuthnChallenge(row: ChallengeRow): StoredWebAuthnChallenge {
+  return {
+    ...row,
+    userHandle: row.userHandle ? bytes(row.userHandle) : null,
+    approvalPayload: row.approvalPayload as ApprovalPayload | null,
+  };
+}
 
 type GoalRow = Prisma.GoalContractGetPayload<{ include: { constraints: true; entityBindings: true } }>;
 function mapGoal(row: GoalRow): StoredGoal {
@@ -48,7 +68,7 @@ const event = (eventType: string, aggregateType: string, aggregateId: string, tr
   outbox: { topic: eventType, aggregateId, traceId, payload: json(payload) },
 });
 
-export class PrismaParlanceRepository implements ParlanceRepository {
+export class PrismaParlanceRepository implements ParlanceRepository, WebAuthnRepository {
   constructor(private readonly db: PrismaClient, private readonly options: { afterExecutionUpdate?: () => void } = {}) {}
 
   async getConfirmedGoal(contractId: string): Promise<StoredGoal | null> {
@@ -114,4 +134,70 @@ export class PrismaParlanceRepository implements ParlanceRepository {
   async listRecoverableExecutions(): Promise<StoredExecution[]> { const rows = await this.db.executionRun.findMany({ where: { status: { in: ["AUTHORIZED", "EXECUTING", "PAUSED", "REAPPROVAL_REQUIRED"] } }, orderBy: { updatedAt: "asc" }, include: { steps: { include: { planStep: true } } } }); return rows.map(mapExecution); }
   async listAudit(): Promise<unknown[]> { return this.db.auditEvent.findMany({ orderBy: { occurredAt: "desc" }, take: 100 }); }
   async isReady(): Promise<boolean> { try { await this.db.$queryRaw`SELECT 1`; return true; } catch { return false; } }
+
+  async webAuthnUserExists(userId: string): Promise<boolean> {
+    return (await this.db.user.count({ where: { id: userId } })) === 1;
+  }
+  async createWebAuthnChallenge(input: NewWebAuthnChallenge): Promise<StoredWebAuthnChallenge> {
+    const row = await this.db.webAuthnChallenge.create({ data: {
+      id: input.id, userId: input.userId, purpose: input.purpose, challenge: input.challenge,
+      ...(input.userHandle ? { userHandle: bytes(input.userHandle) } : {}), expectedRpId: input.expectedRpId,
+      expectedOrigin: input.expectedOrigin, ...(input.financialPlanId ? { financialPlanId: input.financialPlanId } : {}),
+      ...(input.approvalPayload ? { approvalPayload: json(input.approvalPayload) } : {}),
+      ...(input.approvalPayloadHash ? { approvalPayloadHash: input.approvalPayloadHash } : {}), expiresAt: input.expiresAt,
+    } });
+    return mapWebAuthnChallenge(row);
+  }
+  async getWebAuthnChallenge(id: string): Promise<StoredWebAuthnChallenge | null> {
+    const row = await this.db.webAuthnChallenge.findUnique({ where: { id } });
+    return row ? mapWebAuthnChallenge(row) : null;
+  }
+  async expireWebAuthnChallenge(id: string, now: Date): Promise<boolean> {
+    const result = await this.db.webAuthnChallenge.updateMany({ where: { id, status: "ISSUED", expiresAt: { lte: now } }, data: { status: "EXPIRED" } });
+    return result.count === 1;
+  }
+  async revokeWebAuthnChallenge(id: string, now: Date): Promise<boolean> {
+    const result = await this.db.webAuthnChallenge.updateMany({ where: { id, status: "ISSUED" }, data: { status: "REVOKED", revokedAt: now } });
+    return result.count === 1;
+  }
+  async consumeRegistrationChallenge(input: { challengeId: string; userId: string; now: Date; credential: NewWebAuthnCredential }): Promise<boolean> {
+    try {
+      return await this.db.$transaction(async (tx) => {
+        const claimed = await tx.webAuthnChallenge.updateMany({ where: {
+          id: input.challengeId, userId: input.userId, purpose: "REGISTRATION", status: "ISSUED",
+          revokedAt: null, expiresAt: { gt: input.now },
+        }, data: { status: "CONSUMED", consumedAt: input.now } });
+        if (claimed.count !== 1) return false;
+        await tx.webAuthnCredential.create({ data: {
+          id: input.credential.id, userId: input.credential.userId, credentialId: input.credential.credentialId,
+          publicKey: bytes(input.credential.publicKey), userHandle: bytes(input.credential.userHandle),
+          signCount: BigInt(input.credential.signCount), transports: json(input.credential.transports),
+          deviceType: input.credential.deviceType, backedUp: input.credential.backedUp,
+        } });
+        return true;
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") throw new Error("WEBAUTHN_CREDENTIAL_ALREADY_REGISTERED");
+      throw error;
+    }
+  }
+  async saveWebAuthnCredential(input: NewWebAuthnCredential): Promise<StoredWebAuthnCredential> {
+    const row = await this.db.webAuthnCredential.create({ data: {
+      id: input.id, userId: input.userId, credentialId: input.credentialId, publicKey: bytes(input.publicKey),
+      userHandle: bytes(input.userHandle), signCount: BigInt(input.signCount), transports: json(input.transports),
+      deviceType: input.deviceType, backedUp: input.backedUp,
+    } });
+    return mapWebAuthnCredential(row);
+  }
+  async getWebAuthnCredential(credentialId: string): Promise<StoredWebAuthnCredential | null> {
+    const row = await this.db.webAuthnCredential.findUnique({ where: { credentialId } });
+    return row ? mapWebAuthnCredential(row) : null;
+  }
+  async listActiveWebAuthnCredentials(userId: string): Promise<StoredWebAuthnCredential[]> {
+    return (await this.db.webAuthnCredential.findMany({ where: { userId, revokedAt: null }, orderBy: { createdAt: "asc" } })).map(mapWebAuthnCredential);
+  }
+  async revokeWebAuthnCredential(credentialId: string, userId: string, now: Date): Promise<boolean> {
+    const result = await this.db.webAuthnCredential.updateMany({ where: { credentialId, userId, revokedAt: null }, data: { revokedAt: now } });
+    return result.count === 1;
+  }
 }

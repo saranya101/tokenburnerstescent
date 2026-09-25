@@ -69,6 +69,12 @@ The restart test disconnects its first Prisma client, creates a new client/repos
 
 Outbox delivery uses expiring database leases (`claimedAt` plus `claimToken`). Only the current token can publish or release a row, and an expired `PROCESSING` lease can be reclaimed. Reconciliation classifies persisted steps only from bank-verifiable evidence; it does not retry financial writes.
 
+## Demo passkey enrollment (Phase 1)
+
+WebAuthn registration scaffolding is deliberately disabled by default because this prototype does not yet have a trusted banking session bootstrap. For local hackathon enrollment only, configure `PARLANCE_WEBAUTHN_RP_ID=localhost`, `PARLANCE_WEBAUTHN_ORIGIN=http://localhost:3000`, set `PARLANCE_DEMO_USER_ID` to an existing seeded user, and explicitly enable `PARLANCE_DEMO_WEBAUTHN_ENROLLMENT=true`. The registration endpoints never accept a caller-selected user ID. Do not use `127.0.0.1` interchangeably with `localhost`; WebAuthn origin and RP ID checks are exact.
+
+Phase 1 persists credentials and one-time registration/approval challenges. It does not create an `ApprovalV1`, execute a plan, or enforce passkey evidence at the Execution Gateway; those remain Phase 2 work.
+
 ## Current scope
 
 Persistent orchestration, restart reconstruction, leased outbox processing, an idempotent mock bank, and reconciliation classification are present. Cryptographic authorization, real bank integrations, automatic recovery decisions, outbox transport, robust replanning, and production policy remain intentionally mocked or deferred.

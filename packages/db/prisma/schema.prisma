@@ -74,25 +74,81 @@ enum ApprovalMethod {
   EXTERNAL_SIGNATURE
 }
 
+enum WebAuthnChallengePurpose {
+  REGISTRATION
+  APPROVAL
+}
+
+enum WebAuthnChallengeStatus {
+  ISSUED
+  CONSUMED
+  REVOKED
+  EXPIRED
+}
+
 model User {
-  id                 String              @id @default(cuid())
-  externalRef        String?             @unique
-  accounts           Account[]
-  beneficiaries      Beneficiary[]
-  holdings           Holding[]
-  entityAliases      EntityAlias[]
-  hardRules          UserHardRule[]
-  conversations      Conversation[]
-  intentDrafts       IntentDraftRecord[]
-  goalContracts      GoalContract[]
-  bankStateSnapshots BankStateSnapshot[]
-  approvals          Approval[]
-  executionRuns      ExecutionRun[]
-  opportunities      Opportunity[]
-  bankServiceState   BankServiceState?
-  fxQuotes           FxQuote[]
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  id                  String               @id @default(cuid())
+  externalRef         String?              @unique
+  accounts            Account[]
+  beneficiaries       Beneficiary[]
+  holdings            Holding[]
+  entityAliases       EntityAlias[]
+  hardRules           UserHardRule[]
+  conversations       Conversation[]
+  intentDrafts        IntentDraftRecord[]
+  goalContracts       GoalContract[]
+  bankStateSnapshots  BankStateSnapshot[]
+  approvals           Approval[]
+  executionRuns       ExecutionRun[]
+  opportunities       Opportunity[]
+  bankServiceState    BankServiceState?
+  fxQuotes            FxQuote[]
+  webAuthnCredentials WebAuthnCredential[]
+  webAuthnChallenges  WebAuthnChallenge[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+}
+
+model WebAuthnCredential {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id])
+  credentialId String    @unique
+  publicKey    Bytes
+  userHandle   Bytes
+  signCount    BigInt
+  transports   Json?
+  deviceType   String
+  backedUp     Boolean
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+  revokedAt    DateTime?
+
+  @@index([userId, revokedAt])
+}
+
+model WebAuthnChallenge {
+  id                  String                   @id @default(cuid())
+  userId              String
+  user                User                     @relation(fields: [userId], references: [id])
+  purpose             WebAuthnChallengePurpose
+  challenge           String                   @unique
+  userHandle          Bytes?
+  expectedRpId        String
+  expectedOrigin      String
+  status              WebAuthnChallengeStatus  @default(ISSUED)
+  financialPlanId     String?
+  financialPlan       FinancialPlan?           @relation(fields: [financialPlanId], references: [id])
+  approvalPayload     Json?
+  approvalPayloadHash String?
+  expiresAt           DateTime
+  consumedAt          DateTime?
+  revokedAt           DateTime?
+  createdAt           DateTime                 @default(now())
+
+  @@index([userId, purpose, status])
+  @@index([status, expiresAt])
+  @@index([financialPlanId])
 }
 
 model Account {
@@ -305,6 +361,7 @@ model FinancialPlan {
   steps                   FinancialPlanStep[]
   approvals               Approval[]
   executionRuns           ExecutionRun[]
+  webAuthnChallenges      WebAuthnChallenge[]
   createdAt               DateTime            @default(now())
   updatedAt               DateTime            @updatedAt
 
