@@ -30,7 +30,10 @@ export function verifyExecutionAuthorization(input: ExecutionAuthorization): voi
 }
 
 export function bankOperation(userId: string, step: FinancialPlanStepV1): BankOperation {
-  if (step.action === "FX_CONVERT") return { path: "fx", payload: { userId, ...step.parameters } };
+  if (step.action === "FX_CONVERT") return { path: "fx", payload: {
+    userId, accountId: step.parameters.sourceAccountId, fromAmount: step.parameters.sourceMoney,
+    toCurrency: step.parameters.targetCurrency, quoteId: step.parameters.quoteId,
+  } };
   if (step.action === "TRANSFER" || step.action === "MOVE_FUNDS") return { path: "transfer", payload: { userId, ...step.parameters } };
   if (step.action === "PAY_BILL") return { path: "payment", payload: { userId, ...step.parameters } };
   if (step.action === "BUY_ASSET") return { path: "buy", payload: { userId, ...step.parameters } };

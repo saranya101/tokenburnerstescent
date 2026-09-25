@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { BankStateSnapshotV1, FinancialPlanStepV1, FinancialPlanV1, GoalContractV1 } from "@parlance/contracts";
 import { describe, expect, it } from "vitest";
 import { materiallyEquivalentRoute, simulateFinancialStep, stepPreservesConstraints, terminalStepSatisfiesGoal } from "./goal-preservation.js";
+import { bankOperation } from "./gateway.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(join(process.cwd(), "../../packages/contracts/fixtures/01-ntu-transfer", name), "utf8"));
 
@@ -18,10 +19,19 @@ describe("goal-preservation primitives", () => {
     expect(result.snapshot.accounts.find((account) => account.id === "acc-usd")?.availableMinorUnits).toBe("500000");
   });
 
+  it("credits only the explicitly approved FX destination account", () => {
+    const base = BankStateSnapshotV1.parse(fixture("bank-state.json"));
+    const snapshot = BankStateSnapshotV1.parse({ ...base, accounts: [...base.accounts, { id: "acc-usd-approved", type: "WALLET", currency: "USD", ledgerMinorUnits: "0", availableMinorUnits: "0", status: "ACTIVE", capabilities: ["RECEIVE_TRANSFER"] }] });
+    const step = FinancialPlanStepV1.parse({ id: "fx-explicit-destination", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd-approved", sourceMoney: { currency: "SGD", minorUnits: "100" }, targetCurrency: "USD", quoteId: "quote-sgd-usd-1" } });
+    const result = simulateFinancialStep(snapshot, step); expect(result.outcome).toBe("SAFE_TO_EXECUTE"); if (result.outcome !== "SAFE_TO_EXECUTE") throw new Error("Expected safe simulation");
+    expect(result.snapshot.accounts.find((account) => account.id === "acc-usd")?.availableMinorUnits).toBe("0");
+    expect(result.snapshot.accounts.find((account) => account.id === "acc-usd-approved")?.availableMinorUnits).toBe("75");
+  });
+
   it("preserves route order and compares every executable action parameter", () => {
     const steps = FinancialPlanV1.parse(fixture("financial-plan.json")).steps; const first = steps[0]!;
     if (first.action !== "FX_CONVERT") throw new Error("Expected FX");
-    const changed = [{ ...first, parameters: { ...first.parameters, fromAmount: { currency: "SGD" as const, minorUnits: "666668" } } }, ...steps.slice(1)];
+    const changed = [{ ...first, parameters: { ...first.parameters, sourceMoney: { currency: "SGD" as const, minorUnits: "666668" } } }, ...steps.slice(1)];
     expect(materiallyEquivalentRoute(steps, [...steps])).toBe(true);
     expect(materiallyEquivalentRoute(steps, [...steps].reverse())).toBe(false);
     expect(materiallyEquivalentRoute(steps, changed)).toBe(false);
@@ -63,9 +73,9 @@ describe("goal-preservation primitives", () => {
   it("matches the mock bank FX balance transition", async () => {
     const modulePath = join(process.cwd(), "../../services/mock-bank/src/app.ts"); const { buildApp } = await import(modulePath) as { buildApp(): FastifyInstance }; const app = buildApp();
     const before = BankStateSnapshotV1.parse((await app.inject({ method: "GET", url: "/v1/state/parity-user" })).json()); const quote = before.fxQuotes[0]!;
-    const step = FinancialPlanStepV1.parse({ id: "fx-parity", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { accountId: "acc-sgd", fromAmount: { currency: "SGD", minorUnits: "100001" }, toCurrency: "USD", quoteId: quote.id } });
+    const step = FinancialPlanStepV1.parse({ id: "fx-parity", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", sourceMoney: { currency: "SGD", minorUnits: "100001" }, targetCurrency: "USD", quoteId: quote.id } });
     const simulated = simulateFinancialStep(before, step); expect(simulated.outcome).toBe("SAFE_TO_EXECUTE"); if (simulated.outcome !== "SAFE_TO_EXECUTE") throw new Error("Expected safe simulation");
-    const response = await app.inject({ method: "POST", url: "/v1/execute/fx", headers: { "idempotency-key": "fx-parity" }, payload: { userId: "parity-user", ...step.parameters } }); expect(response.statusCode).toBe(200);
+    const operation = bankOperation("parity-user", step); const response = await app.inject({ method: "POST", url: `/v1/execute/${operation.path}`, headers: { "idempotency-key": "fx-parity", "content-type": "application/json" }, body: JSON.stringify(operation.payload) }); expect(response.statusCode).toBe(200);
     const actual = BankStateSnapshotV1.parse((await app.inject({ method: "GET", url: "/v1/state/parity-user" })).json());
     const balances = (state: BankStateSnapshotV1) => state.accounts.map(({ id, ledgerMinorUnits, availableMinorUnits }) => ({ id, ledgerMinorUnits, availableMinorUnits }));
     expect(balances(simulated.snapshot)).toEqual(balances(actual)); await app.close();

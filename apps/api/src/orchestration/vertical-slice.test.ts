@@ -65,7 +65,7 @@ const applePlan = (stateVersion = 7): FinancialPlanV1 => {
   const raw = FinancialPlanV1.parse({ schemaVersion: "1", id: "plan-apple-preserved", goalContractId: "goal-apple-preserved", goalContractVersion: 1, bankStateVersion: stateVersion,
     compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test",
     steps: [
-      { id: "fx-for-aapl", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { accountId: "acc-sgd", fromAmount: { currency: "SGD", minorUnits: "200000" }, toCurrency: "USD", quoteId: "quote-sgd-usd-1" } },
+      { id: "fx-for-aapl", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", sourceMoney: { currency: "SGD", minorUnits: "200000" }, targetCurrency: "USD", quoteId: "quote-sgd-usd-1" } },
       { id: "buy-aapl", sequence: 1, action: "BUY_ASSET", dependsOn: ["fx-for-aapl"], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "150000" } } },
     ], validity: { requiredQuoteIds: ["quote-sgd-usd-1"] }, projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [{ accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "800000" } }], warnings: [] }, planHash: "0".repeat(64) });
   return { ...raw, planHash: hashFinancialPlan(raw) };
@@ -111,7 +111,7 @@ describe("NTU transfer vertical slice", () => {
 
   it("requires reapproval without mutation when recompilation changes the financial route", async () => {
     const goal = appleGoal(); const plan = applePlan(); const repository = new MemoryRepository(goal); const bank = new ControlledBank(appleState(true, 8)); const approved = await authorize(repository, plan);
-    const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { const changed = applePlan(state.stateVersion); const first = changed.steps[0]!; if (first.action !== "FX_CONVERT") throw new Error("Expected FX"); return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: { ...changed, steps: [{ ...first, parameters: { ...first.parameters, fromAmount: { currency: "SGD", minorUnits: "210000" } } }, ...changed.steps.slice(1)] } }); } };
+    const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { const changed = applePlan(state.stateVersion); const first = changed.steps[0]!; if (first.action !== "FX_CONVERT") throw new Error("Expected FX"); return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: { ...changed, steps: [{ ...first, parameters: { ...first.parameters, sourceMoney: { currency: "SGD", minorUnits: "210000" } } }, ...changed.steps.slice(1)] } }); } };
     const result = await new ExecutionService(repository, bank, compiler).run(approved.execution.executionId, "trace-reapproval");
     expect(result.status).toBe("UNKNOWN"); expect(bank.writes).toBe(0); expect(repository.execution?.executionState).toBe("REAPPROVAL_REQUIRED"); expect(result.goalOutcome.summary).toMatch(/approval again/i);
   });
@@ -131,14 +131,14 @@ describe("NTU transfer vertical slice", () => {
     const goal = appleGoal(); const plan = applePlan(); const repository = new MemoryRepository(goal); const bank = new ControlledBank(appleState(true)); const approved = await authorize(repository, plan); const step = plan.steps[0]!;
     if (step.action !== "FX_CONVERT") throw new Error("Expected FX");
     const gateway = new ExecutionGateway(bank);
-    await expect(gateway.execute({ goal, plan, approval: approved.approval, executionState: "EXECUTING", expectedStateVersion: 7, currentStateVersion: 7, revalidationSucceeded: false, idempotencyKey: "mutated-action", proposedStep: { ...step, parameters: { ...step.parameters, fromAmount: { currency: "SGD", minorUnits: "210000" } } } }, "trace-injection")).rejects.toThrow("UNAPPROVED_EXECUTABLE_ACTION");
+    await expect(gateway.execute({ goal, plan, approval: approved.approval, executionState: "EXECUTING", expectedStateVersion: 7, currentStateVersion: 7, revalidationSucceeded: false, idempotencyKey: "mutated-action", proposedStep: { ...step, parameters: { ...step.parameters, sourceMoney: { currency: "SGD", minorUnits: "210000" } } } }, "trace-injection")).rejects.toThrow("UNAPPROVED_EXECUTABLE_ACTION");
     expect(bank.writes).toBe(0);
   });
 
   it("derives the bank path and payload from the exact approved proposed step", async () => {
     const goal = appleGoal(); const plan = applePlan(); const repository = new MemoryRepository(goal); const bank = new ControlledBank(appleState(true)); const approved = await authorize(repository, plan); const step = plan.steps[0]!;
     await new ExecutionGateway(bank).execute({ goal, plan, approval: approved.approval, executionState: "EXECUTING", expectedStateVersion: 7, currentStateVersion: 7, revalidationSucceeded: false, idempotencyKey: "bound-operation", proposedStep: step }, "trace-bound-operation");
-    expect(bank.lastOperation).toEqual({ path: "fx", payload: { userId: goal.userId, ...step.parameters }, idempotencyKey: "bound-operation", traceId: "trace-bound-operation" });
+    expect(bank.lastOperation).toEqual({ path: "fx", payload: { userId: goal.userId, accountId: "acc-sgd", fromAmount: { currency: "SGD", minorUnits: "200000" }, toCurrency: "USD", quoteId: "quote-sgd-usd-1" }, idempotencyKey: "bound-operation", traceId: "trace-bound-operation" });
   });
 
   it("fails closed with zero writes for a hard constraint the runtime cannot prove", async () => {

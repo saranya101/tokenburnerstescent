@@ -39,7 +39,9 @@ function addDecimals(left: string, right: string): string {
 }
 
 function multiplyMinorUnits(amount: string, rate: string): bigint {
-  const parsed = decimalParts(rate); return BigInt(amount) * parsed.numerator / 10n ** BigInt(parsed.scale);
+  const parsed = decimalParts(rate); const denominator = 10n ** BigInt(parsed.scale); const product = BigInt(amount) * parsed.numerator;
+  const quotient = product / denominator; const remainder = product % denominator; const doubled = remainder * 2n;
+  return doubled > denominator || (doubled === denominator && quotient % 2n !== 0n) ? quotient + 1n : quotient;
 }
 
 function decimalEqual(left: string, right: string): boolean {
@@ -48,7 +50,7 @@ function decimalEqual(left: string, right: string): boolean {
 }
 
 function sourceAccountId(step: FinancialPlanStepV1): string | undefined {
-  if (step.action === "FX_CONVERT") return step.parameters.accountId;
+  if (step.action === "FX_CONVERT") return step.parameters.sourceAccountId;
   if (step.action === "TRANSFER" || step.action === "MOVE_FUNDS" || step.action === "PAY_BILL" || step.action === "BUY_ASSET") return step.parameters.sourceAccountId;
   return undefined;
 }
@@ -78,19 +80,18 @@ export function terminalStepSatisfiesGoal(goal: GoalContractV1, step: FinancialP
 export function simulateFinancialStep(snapshot: BankStateSnapshotV1, step: FinancialPlanStepV1): SimulationResult {
   if (step.action === "FX_CONVERT") {
     if (!snapshot.serviceAvailability.fx) return blocked("FX_UNAVAILABLE", "Foreign-exchange service is currently unavailable.");
-    const account = snapshot.accounts.find((item) => item.id === step.parameters.accountId);
+    const source = snapshot.accounts.find((item) => item.id === step.parameters.sourceAccountId);
+    const destination = snapshot.accounts.find((item) => item.id === step.parameters.destinationAccountId);
     const quote = snapshot.fxQuotes.find((item) => item.id === step.parameters.quoteId);
-    if (!account || account.currency !== step.parameters.fromAmount.currency || !account.capabilities.includes("CONVERT_FX")) return blocked("FX_ACCOUNT_INELIGIBLE", "The approved source account can no longer perform this conversion.");
-    if (!quote || quote.fromCurrency !== account.currency || quote.toCurrency !== step.parameters.toCurrency || Date.parse(quote.expiresAt) <= Date.parse(snapshot.capturedAt)) return blocked("FX_QUOTE_INVALID", "The approved foreign-exchange quote is no longer valid.");
-    if (quote.fee && quote.fee.currency !== account.currency) return blocked("FX_FEE_CURRENCY_UNSUPPORTED", "The quote fee cannot be applied safely to the approved source account.");
-    const debitMinorUnits = BigInt(step.parameters.fromAmount.minorUnits) + BigInt(quote.fee?.minorUnits ?? "0");
-    const debited = updateBalance(snapshot, account.id, -debitMinorUnits);
+    if (!source || source.status !== "ACTIVE" || source.currency !== step.parameters.sourceMoney.currency || !source.capabilities.includes("CONVERT_FX")) return blocked("FX_ACCOUNT_INELIGIBLE", "The approved source account can no longer perform this conversion.");
+    if (!destination || destination.status !== "ACTIVE" || destination.id === source.id || destination.currency !== step.parameters.targetCurrency || !destination.capabilities.includes("RECEIVE_TRANSFER")) return blocked("FX_DESTINATION_ACCOUNT_NOT_FOUND", "The approved destination account can no longer receive this conversion.");
+    if (!quote || quote.fromCurrency !== step.parameters.sourceMoney.currency || quote.toCurrency !== step.parameters.targetCurrency || Date.parse(quote.expiresAt) <= Date.parse(snapshot.capturedAt)) return blocked("FX_QUOTE_INVALID", "The approved foreign-exchange quote is no longer valid.");
+    if (quote.fee && quote.fee.currency !== source.currency) return blocked("FX_FEE_CURRENCY_UNSUPPORTED", "The quote fee cannot be applied safely to the approved source account.");
+    const debitMinorUnits = BigInt(step.parameters.sourceMoney.minorUnits) + BigInt(quote.fee?.minorUnits ?? "0");
+    const debited = updateBalance(snapshot, source.id, -debitMinorUnits);
     if (!debited) return blocked("INSUFFICIENT_AVAILABLE_BALANCE", "The approved source account no longer has enough available funds.");
-    // The mock bank uses the first active account in snapshot order for the target currency.
-    const destination = debited.accounts.find((item) => item.currency === step.parameters.toCurrency && item.status === "ACTIVE");
-    if (!destination) return blocked("FX_DESTINATION_ACCOUNT_NOT_FOUND", "No active destination account can receive the converted funds.");
-    const received = multiplyMinorUnits(step.parameters.fromAmount.minorUnits, quote.rate);
-    const credited = updateBalance(debited, destination.id, received);
+    const received = multiplyMinorUnits(step.parameters.sourceMoney.minorUnits, quote.rate);
+    const credited = updateBalance(debited, step.parameters.destinationAccountId, received);
     return credited ? { outcome: "SAFE_TO_EXECUTE", snapshot: credited } : blocked("FX_SIMULATION_FAILED", "The conversion could not be simulated safely.");
   }
 

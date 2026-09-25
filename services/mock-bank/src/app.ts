@@ -31,6 +31,10 @@ const addDecimalStrings = (left: string, right: string): string => {
   const digits = sum.toString().padStart(scale + 1, "0"); const integer = digits.slice(0, -scale); const fraction = digits.slice(-scale).replace(/0+$/, "");
   return fraction ? `${integer}.${fraction}` : integer;
 };
+const multiplyRateHalfEven = (minorUnits: string, numerator: bigint, denominator: bigint): bigint => {
+  const product = BigInt(minorUnits) * numerator; const quotient = product / denominator; const remainder = product % denominator; const doubled = remainder * 2n;
+  return doubled > denominator || (doubled === denominator && quotient % 2n !== 0n) ? quotient + 1n : quotient;
+};
 
 export function buildApp() {
   const states = new Map<string, State>(); const idempotency = new Map<string, StoredResponse>();
@@ -53,7 +57,7 @@ export function buildApp() {
     try { mutate(state, body); } catch (error) { return reply.code(409).send({ code: error instanceof Error ? error.message : "WRITE_REJECTED" }); }
     state.stateVersion += 1; const response = { accepted: true as const, bankReference: `mock-${key}`, stateVersion: state.stateVersion }; idempotency.set(key, { requestHash: hash, response }); return response;
   });
-  execute("fx", FxBody, "FX_UNAVAILABLE", (state, body) => { debit(state, body.accountId, body.fromAmount); const target = fxDestinationAccountId(body.toCurrency); if (!target) throw new Error("FX_DESTINATION_ACCOUNT_NOT_FOUND"); state.balances[target] = (state.balances[target] ?? 0n) + BigInt(body.fromAmount.minorUnits) * 75n / 100n; });
+  execute("fx", FxBody, "FX_UNAVAILABLE", (state, body) => { debit(state, body.accountId, body.fromAmount); const target = fxDestinationAccountId(body.toCurrency); if (!target) throw new Error("FX_DESTINATION_ACCOUNT_NOT_FOUND"); state.balances[target] = (state.balances[target] ?? 0n) + multiplyRateHalfEven(body.fromAmount.minorUnits, 75n, 100n); });
   execute("transfer", TransferBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => { debit(state, body.sourceAccountId, body.amount); if ("destinationAccountId" in body) state.balances[body.destinationAccountId] = (state.balances[body.destinationAccountId] ?? 0n) + BigInt(body.amount.minorUnits); });
   execute("payment", PaymentBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => debit(state, body.sourceAccountId, body.amount)); execute("buy", BuyBody, "ASSET_UNAVAILABLE", (state, body) => { debit(state, body.sourceAccountId, body.maximumSpend); state.holdings[body.assetId] = addDecimalStrings(state.holdings[body.assetId] ?? "0", body.quantity); });
   app.get("/v1/admin/scenarios/:userId", async (request) => { const { userId } = z.object({ userId: Id }).parse(request.params); return { scenarios: [...getState(userId).scenarios] }; });
