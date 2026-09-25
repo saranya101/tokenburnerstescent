@@ -1,2 +1,3 @@
-import { AmbiguityPrompt, ChatInput, IntentPreview } from "../../components/placeholders";
-export default function ChatPage() { return <div className="grid gap-4"><ChatInput /><IntentPreview /><AmbiguityPrompt /></div>; }
+import { BankingShell } from "../../components/banking/banking-shell";
+import { ChatExperience } from "../../components/chat/chat-experience";
+export default function ChatPage() { return <BankingShell active="parlance"><ChatExperience /></BankingShell>; }
