@@ -1,5 +1,22 @@
 {
-  "name": "@parlance/intent-engine", "version": "0.0.0", "type": "module", "exports": "./src/index.ts",
-  "scripts": { "build": "tsc -p tsconfig.json", "lint": "eslint src", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "vitest run src" },
-  "dependencies": { "@parlance/contracts": "workspace:*", "zod": "^4.1.0" }, "devDependencies": { "@types/node": "^24.0.0" }
+  "name": "@parlance/intent-engine",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint src",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run src",
+    "smoke:tokenhub": "tsx src/providers/tokenhub/smoke.ts"
+  },
+  "dependencies": {
+    "@parlance/contracts": "workspace:*",
+    "openai": "^7.19.0",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.13"
+  }
 }
