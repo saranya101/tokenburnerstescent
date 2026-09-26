@@ -105,24 +105,26 @@ model User {
   fxQuotes            FxQuote[]
   webAuthnCredentials WebAuthnCredential[]
   webAuthnChallenges  WebAuthnChallenge[]
+  approvalEvidences   ApprovalEvidence[]
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
 }
 
 model WebAuthnCredential {
-  id           String    @id @default(cuid())
-  userId       String
-  user         User      @relation(fields: [userId], references: [id])
-  credentialId String    @unique
-  publicKey    Bytes
-  userHandle   Bytes
-  signCount    BigInt
-  transports   Json?
-  deviceType   String
-  backedUp     Boolean
-  createdAt    DateTime  @default(now())
-  lastUsedAt   DateTime?
-  revokedAt    DateTime?
+  id                String             @id @default(cuid())
+  userId            String
+  user              User               @relation(fields: [userId], references: [id])
+  credentialId      String             @unique
+  publicKey         Bytes
+  userHandle        Bytes
+  signCount         BigInt
+  transports        Json?
+  deviceType        String
+  backedUp          Boolean
+  createdAt         DateTime           @default(now())
+  lastUsedAt        DateTime?
+  revokedAt         DateTime?
+  approvalEvidences ApprovalEvidence[]
 
   @@index([userId, revokedAt])
 }
@@ -145,6 +147,7 @@ model WebAuthnChallenge {
   consumedAt          DateTime?
   revokedAt           DateTime?
   createdAt           DateTime                 @default(now())
+  approvalEvidence    ApprovalEvidence?
 
   @@index([userId, purpose, status])
   @@index([status, expiresAt])
@@ -362,6 +365,7 @@ model FinancialPlan {
   approvals               Approval[]
   executionRuns           ExecutionRun[]
   webAuthnChallenges      WebAuthnChallenge[]
+  approvalEvidences       ApprovalEvidence[]
   createdAt               DateTime            @default(now())
   updatedAt               DateTime            @updatedAt
 
@@ -387,16 +391,16 @@ model FinancialPlanStep {
 }
 
 model Approval {
-  id                  String         @id @default(cuid())
+  id                  String            @id @default(cuid())
   userId              String
-  user                User           @relation(fields: [userId], references: [id])
+  user                User              @relation(fields: [userId], references: [id])
   goalContractRowId   String
-  goalContract        GoalContract   @relation(fields: [goalContractRowId], references: [id])
+  goalContract        GoalContract      @relation(fields: [goalContractRowId], references: [id])
   goalContractKey     String
   goalContractVersion Int
   goalContractHash    String
   financialPlanId     String
-  financialPlan       FinancialPlan  @relation(fields: [financialPlanId], references: [id])
+  financialPlan       FinancialPlan     @relation(fields: [financialPlanId], references: [id])
   financialPlanHash   String
   bankStateVersion    Int
   method              ApprovalMethod
@@ -406,9 +410,41 @@ model Approval {
   revokedAt           DateTime?
   traceId             String?
   executionRuns       ExecutionRun[]
-  createdAt           DateTime       @default(now())
+  evidence            ApprovalEvidence?
+  createdAt           DateTime          @default(now())
 
   @@index([userId, expiresAt])
+}
+
+model ApprovalEvidence {
+  id                         String             @id
+  approvalId                 String             @unique
+  approval                   Approval           @relation(fields: [approvalId], references: [id])
+  userId                     String
+  user                       User               @relation(fields: [userId], references: [id])
+  financialPlanId            String
+  financialPlan              FinancialPlan      @relation(fields: [financialPlanId], references: [id])
+  goalContractKey            String
+  goalContractVersion        Int
+  goalContractHash           String
+  financialPlanHash          String
+  bankStateVersion           Int
+  webAuthnCredentialId       String
+  webAuthnCredential         WebAuthnCredential @relation(fields: [webAuthnCredentialId], references: [id])
+  challengeId                String             @unique
+  challenge                  WebAuthnChallenge  @relation(fields: [challengeId], references: [id])
+  approvalPayloadHash        String
+  authenticatorCounterBefore BigInt
+  authenticatorCounterAfter  BigInt
+  userVerified               Boolean
+  rpId                       String
+  origin                     String
+  verifiedAt                 DateTime
+  createdAt                  DateTime           @default(now())
+
+  @@index([userId, createdAt])
+  @@index([financialPlanId])
+  @@index([webAuthnCredentialId])
 }
 
 model ExecutionRun {

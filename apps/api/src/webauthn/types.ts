@@ -1,4 +1,5 @@
-import type { RegistrationResponseJSON, VerifiedRegistrationResponse } from "@simplewebauthn/server";
+import type { ApprovalV1, ExecutionResultV1 } from "@parlance/contracts";
+import type { AuthenticationResponseJSON, RegistrationResponseJSON, VerifiedAuthenticationResponse, VerifiedRegistrationResponse, WebAuthnCredential } from "@simplewebauthn/server";
 
 export type WebAuthnChallengePurpose = "REGISTRATION" | "APPROVAL";
 export type WebAuthnChallengeStatus = "ISSUED" | "CONSUMED" | "REVOKED" | "EXPIRED";
@@ -76,6 +77,40 @@ export interface NewWebAuthnChallenge {
   expiresAt: Date;
 }
 
+export interface StoredApprovalEvidence {
+  id: string;
+  approvalId: string;
+  userId: string;
+  financialPlanId: string;
+  goalContractKey: string;
+  goalContractVersion: number;
+  goalContractHash: string;
+  financialPlanHash: string;
+  bankStateVersion: number;
+  webAuthnCredentialId: string;
+  challengeId: string;
+  approvalPayloadHash: string;
+  authenticatorCounterBefore: number;
+  authenticatorCounterAfter: number;
+  userVerified: boolean;
+  rpId: string;
+  origin: string;
+  verifiedAt: string;
+}
+
+export interface VerifiedPasskeyAuthorizationInput {
+  goalRowId: string;
+  approval: ApprovalV1;
+  executionId: string;
+  evidence: StoredApprovalEvidence;
+  challengeId: string;
+  credentialId: string;
+  expectedCounter: number;
+  newCounter: number;
+  now: Date;
+  traceId: string;
+}
+
 export interface WebAuthnRepository {
   webAuthnUserExists(userId: string): Promise<boolean>;
   createWebAuthnChallenge(challenge: NewWebAuthnChallenge): Promise<StoredWebAuthnChallenge>;
@@ -87,8 +122,19 @@ export interface WebAuthnRepository {
   getWebAuthnCredential(credentialId: string): Promise<StoredWebAuthnCredential | null>;
   listActiveWebAuthnCredentials(userId: string): Promise<StoredWebAuthnCredential[]>;
   revokeWebAuthnCredential(credentialId: string, userId: string, now: Date): Promise<boolean>;
+  authorizeVerifiedPasskey(input: VerifiedPasskeyAuthorizationInput): Promise<{ evidence: StoredApprovalEvidence; execution: ExecutionResultV1 }>;
 }
 
 export interface RegistrationVerifier {
   verify(input: { response: RegistrationResponseJSON; expectedChallenge: string; expectedOrigin: string; expectedRpId: string }): Promise<VerifiedRegistrationResponse>;
+}
+
+export interface AuthenticationVerifier {
+  verify(input: {
+    response: AuthenticationResponseJSON;
+    expectedChallenge: string;
+    expectedOrigin: string;
+    expectedRpId: string;
+    credential: WebAuthnCredential;
+  }): Promise<VerifiedAuthenticationResponse>;
 }

@@ -1,9 +1,10 @@
 import type { ApprovalV1, BankStateSnapshotV1, CompilerResultV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1, IntentDraftV1 } from "@parlance/contracts";
 import type { GoalContractCandidate } from "@parlance/intent-engine";
+import type { StoredApprovalEvidence } from "../webauthn/types.js";
 
 export interface StoredGoal { rowId: string; contract: GoalContractV1 }
 export interface StoredPlan { goalRowId: string; plan: FinancialPlanV1 }
-export interface StoredApproval { approval: ApprovalV1; revokedAt?: string }
+export interface StoredApproval { approval: ApprovalV1; evidence?: StoredApprovalEvidence; revokedAt?: string }
 export type RecoverableExecutionState = "AUTHORIZED" | "EXECUTING" | "PAUSED" | "REAPPROVAL_REQUIRED";
 export interface StoredExecution { result: ExecutionResultV1; approvalId: string; traceId: string; executionState: RecoverableExecutionState | "COMPLETED" | "FAILED" }
 export type IdempotencyClaim = { status: "CLAIMED" } | { status: "REPLAY"; response?: unknown } | { status: "CONFLICT" };
@@ -36,7 +37,6 @@ export interface ParlanceRepository {
   savePlan(goalRowId: string, plan: FinancialPlanV1, traceId: string): Promise<void>;
   saveCompilationFailure(goalRowId: string, result: Exclude<CompilerResultV1, { status: "SAT" }>, traceId: string): Promise<void>;
   getPlan(planId: string): Promise<StoredPlan | null>;
-  approvePlan(input: { goalRowId: string; approval: ApprovalV1; executionId: string; traceId: string }): Promise<StoredExecution>;
   getApproval(approvalId: string): Promise<StoredApproval | null>;
   getExecution(executionId: string): Promise<StoredExecution | null>;
   getLatestSettledStateVersion(executionId: string): Promise<number | null>;

@@ -6,20 +6,20 @@ import { registerRoutes } from "./routes/index.js";
 import { CompilerClient } from "./clients/compiler.js";
 import { MockBankClient } from "./clients/mock-bank.js";
 import { createTokenHubIntentInterpreter, MockIntentInterpreter } from "@parlance/intent-engine";
-import { ApprovalService, CompilationService, ExecutionService, MessageOrchestrationService } from "./orchestration/services.js";
+import { CompilationService, ExecutionService, MessageOrchestrationService } from "./orchestration/services.js";
 import type { GoalConfirmationRepository, ParlanceRepository } from "./orchestration/ports.js";
 import { PrismaParlanceRepository } from "./repositories/prisma.js";
 import { PrismaEntityGrounder } from "./repositories/prisma-grounder.js";
 import { WebAuthnService } from "./webauthn/service.js";
 import type { WebAuthnRepository } from "./webauthn/types.js";
 
-export interface ApiServices { repository: ParlanceRepository & GoalConfirmationRepository & WebAuthnRepository; messages: MessageOrchestrationService; compilation: CompilationService; approval: ApprovalService; execution: ExecutionService; webauthn: WebAuthnService; dependencies: { compiler: CompilerClient; bank: MockBankClient } }
+export interface ApiServices { repository: ParlanceRepository & GoalConfirmationRepository & WebAuthnRepository; messages: MessageOrchestrationService; compilation: CompilationService; execution: ExecutionService; webauthn: WebAuthnService; dependencies: { compiler: CompilerClient; bank: MockBankClient } }
 export function productionServices(): ApiServices {
   const db = getPrismaClient(); const repository = new PrismaParlanceRepository(db); const bank = new MockBankClient(); const compiler = new CompilerClient();
   const intentMode = process.env.INTENT_INTERPRETER_MODE ?? "TOKENHUB";
   if (intentMode !== "TOKENHUB" && intentMode !== "MOCK") throw new Error("INTENT_INTERPRETER_MODE_INVALID");
   const interpreter = intentMode === "MOCK" ? new MockIntentInterpreter() : createTokenHubIntentInterpreter();
-  return { repository, messages: new MessageOrchestrationService(repository, interpreter, (userId) => new PrismaEntityGrounder(db, userId)), compilation: new CompilationService(repository, bank, compiler), approval: new ApprovalService(repository), execution: new ExecutionService(repository, bank, compiler), webauthn: new WebAuthnService(repository, bank), dependencies: { compiler, bank } };
+  return { repository, messages: new MessageOrchestrationService(repository, interpreter, (userId) => new PrismaEntityGrounder(db, userId)), compilation: new CompilationService(repository, bank, compiler), execution: new ExecutionService(repository, bank, compiler), webauthn: new WebAuthnService(repository, bank), dependencies: { compiler, bank } };
 }
 export function buildApp(services = productionServices()) {
   const app = Fastify({ loggerInstance: logger });

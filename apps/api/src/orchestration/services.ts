@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { ApprovalV1, CompilerResultV1, ExecutionResultV1, GoalContractV1, type FinancialPlanV1 } from "@parlance/contracts";
+import { CompilerResultV1, ExecutionResultV1, GoalContractV1, type FinancialPlanV1 } from "@parlance/contracts";
 import {
   DeterministicGoalContractBuilder, DeterministicIntentAmbiguityDetector, GoalContractCandidateV1, intentReferenceOccurrences,
   type EntityGrounder, type GoalContractBuilder, type IntentAmbiguityDetector, type IntentInterpreter,
@@ -86,22 +86,6 @@ export class CompilationService {
   }
 }
 
-export class ApprovalService {
-  constructor(private readonly repository: ParlanceRepository) {}
-  async approve(planId: string, input: { userId: string; method: "BIOMETRIC" | "PASSKEY" | "PIN" | "EXTERNAL_SIGNATURE"; signatureReference: string; expiresAt?: string }, traceId: string) {
-    const storedPlan = await this.repository.getPlan(planId); if (!storedPlan) throw new Error("PLAN_NOT_FOUND");
-    const storedGoal = await this.repository.getConfirmedGoal(storedPlan.plan.goalContractId); if (!storedGoal) throw new Error("CONFIRMED_GOAL_NOT_FOUND");
-    if (input.userId !== storedGoal.contract.userId) throw new Error("USER_MISMATCH");
-    if (hashGoalContract(storedGoal.contract) !== storedGoal.contract.contractHash || hashFinancialPlan(storedPlan.plan) !== storedPlan.plan.planHash) throw new Error("APPROVAL_HASH_MISMATCH");
-    const now = new Date(); const expiresAt = input.expiresAt ?? new Date(now.getTime() + 10 * 60_000).toISOString(); if (Date.parse(expiresAt) <= now.getTime()) throw new Error("APPROVAL_EXPIRY_INVALID"); const approval = ApprovalV1.parse({ schemaVersion: "1", id: randomUUID(), userId: input.userId,
-      goalContractId: storedGoal.contract.id, goalContractVersion: storedGoal.contract.version, goalContractHash: storedGoal.contract.contractHash,
-      financialPlanId: storedPlan.plan.id, financialPlanHash: storedPlan.plan.planHash, bankStateVersion: storedPlan.plan.bankStateVersion,
-      method: input.method, approvedAt: now.toISOString(), expiresAt, signatureReference: input.signatureReference });
-    const execution = await this.repository.approvePlan({ goalRowId: storedGoal.rowId, approval, executionId: randomUUID(), traceId });
-    return { approval, execution: execution.result };
-  }
-}
-
 function bankWriteResult(value: unknown): BankWriteResult {
   if (typeof value !== "object" || value === null) throw new Error("IDEMPOTENCY_RESPONSE_INVALID");
   const item = value as Record<string, unknown>;
@@ -120,7 +104,7 @@ export class ExecutionService {
     if (hashGoalContract(storedGoal.contract) !== storedGoal.contract.contractHash) throw new Error("GOAL_HASH_MISMATCH");
     if (hashFinancialPlan(storedPlan.plan) !== storedPlan.plan.planHash) throw new Error("PLAN_HASH_MISMATCH");
     const executionState = execution.executionState === "EXECUTING" ? "EXECUTING" : "AUTHORIZED";
-    const approvalVerification = { goal: storedGoal.contract, plan: storedPlan.plan, approval: approval.approval, ...(approval.revokedAt ? { approvalRevokedAt: approval.revokedAt } : {}), executionState } as const;
+    const approvalVerification = { goal: storedGoal.contract, plan: storedPlan.plan, approval: approval.approval, ...(approval.evidence ? { approvalEvidence: approval.evidence } : {}), ...(approval.revokedAt ? { approvalRevokedAt: approval.revokedAt } : {}), executionState } as const;
     verifyExecutionApproval(approvalVerification);
     const audit = (eventType: string, payload: Record<string, unknown>) => this.repository.recordExecutionAudit({ executionId, eventType, traceId, payload: { timestamp: new Date().toISOString(), traceId, executionId, ...payload } });
     await audit("EXECUTION_GOAL_HASH_VERIFIED", { category: "AUTHORIZATION", outcome: "VERIFIED", goalHashVerified: true });

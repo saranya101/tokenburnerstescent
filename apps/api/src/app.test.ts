@@ -5,7 +5,7 @@ function services(input: { databaseReady?: boolean; compilerReady?: boolean; moc
   const compile = input.compileError ? async () => { throw new Error(input.compileError); } : async () => ({ status: "UNSAT" });
   return {
     repository: { isReady: async () => input.databaseReady ?? true },
-    messages: { receive: async () => ({}), confirm: async () => ({}) }, compilation: { compile }, approval: {}, execution: {},
+    messages: { receive: async () => ({}), confirm: async () => ({}) }, compilation: { compile }, execution: {}, webauthn: {},
     dependencies: { compiler: { isReady: async () => input.compilerReady ?? true }, bank: { isReady: async () => input.mockBankReady ?? true } },
   } as unknown as ApiServices;
 }

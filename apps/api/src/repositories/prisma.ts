@@ -3,7 +3,7 @@ import { Prisma, type PrismaClient } from "@parlance/db";
 import { ApprovalV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1, IntentDraftV1, type CompilerResultV1 } from "@parlance/contracts";
 import { GoalContractCandidateV1 } from "@parlance/intent-engine";
 import type { GoalConfirmationRepository, ParlanceRepository, StoredApproval, StoredExecution, StoredGoal, StoredGoalCandidate, StoredPlan } from "../orchestration/ports.js";
-import type { ApprovalPayload, NewWebAuthnChallenge, NewWebAuthnCredential, StoredWebAuthnChallenge, StoredWebAuthnCredential, WebAuthnRepository } from "../webauthn/types.js";
+import type { ApprovalPayload, NewWebAuthnChallenge, NewWebAuthnCredential, StoredApprovalEvidence, StoredWebAuthnChallenge, StoredWebAuthnCredential, VerifiedPasskeyAuthorizationInput, WebAuthnRepository } from "../webauthn/types.js";
 
 const json = (value: unknown): Prisma.InputJsonValue => value as Prisma.InputJsonValue;
 const bytes = (value: Uint8Array): Uint8Array<ArrayBuffer> => new Uint8Array(value);
@@ -67,12 +67,25 @@ function mapPlan(row: PlanRow): FinancialPlanV1 {
     validity: row.validity, projectedOutcome: row.projectedOutcome, planHash: row.planHash });
 }
 
-type ApprovalRow = Prisma.ApprovalGetPayload<Record<string, never>>;
+type EvidenceRow = Prisma.ApprovalEvidenceGetPayload<Record<string, never>>;
+function mapApprovalEvidence(row: EvidenceRow): StoredApprovalEvidence {
+  return {
+    id: row.id, approvalId: row.approvalId, userId: row.userId, financialPlanId: row.financialPlanId,
+    goalContractKey: row.goalContractKey, goalContractVersion: row.goalContractVersion, goalContractHash: row.goalContractHash,
+    financialPlanHash: row.financialPlanHash, bankStateVersion: row.bankStateVersion, webAuthnCredentialId: row.webAuthnCredentialId,
+    challengeId: row.challengeId, approvalPayloadHash: row.approvalPayloadHash,
+    authenticatorCounterBefore: Number(row.authenticatorCounterBefore), authenticatorCounterAfter: Number(row.authenticatorCounterAfter),
+    userVerified: row.userVerified, rpId: row.rpId, origin: row.origin, verifiedAt: row.verifiedAt.toISOString(),
+  };
+}
+
+type ApprovalRow = Prisma.ApprovalGetPayload<{ include: { evidence: true } }>;
 function mapApproval(row: ApprovalRow): StoredApproval {
   return { approval: ApprovalV1.parse({ schemaVersion: "1", id: row.id, userId: row.userId, goalContractId: row.goalContractKey,
     goalContractVersion: row.goalContractVersion, goalContractHash: row.goalContractHash, financialPlanId: row.financialPlanId,
     financialPlanHash: row.financialPlanHash, bankStateVersion: row.bankStateVersion, method: row.method,
     approvedAt: row.approvedAt.toISOString(), expiresAt: row.expiresAt.toISOString(), signatureReference: row.signatureReference }),
+    ...(row.evidence ? { evidence: mapApprovalEvidence(row.evidence) } : {}),
     ...(row.revokedAt ? { revokedAt: row.revokedAt.toISOString() } : {}) };
 }
 
@@ -163,16 +176,52 @@ export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirm
     const row = await this.db.financialPlan.findUnique({ where: { id: planId }, include: { steps: true } });
     return row ? { goalRowId: row.goalContractRowId, plan: mapPlan(row) } : null;
   }
-  async approvePlan(input: { goalRowId: string; approval: ApprovalV1; executionId: string; traceId: string }): Promise<StoredExecution> {
-    const { approval, executionId, traceId } = input; const e = event("PLAN_APPROVED", "Approval", approval.id, traceId, { approvalId: approval.id, executionId });
-    await this.db.$transaction(async (tx) => { await tx.approval.create({ data: { id: approval.id, userId: approval.userId, goalContractRowId: input.goalRowId, goalContractKey: approval.goalContractId,
-      goalContractVersion: approval.goalContractVersion, goalContractHash: approval.goalContractHash, financialPlanId: approval.financialPlanId, financialPlanHash: approval.financialPlanHash,
-      bankStateVersion: approval.bankStateVersion, method: approval.method, signatureReference: approval.signatureReference, approvedAt: new Date(approval.approvedAt), expiresAt: new Date(approval.expiresAt), traceId } });
-      await tx.executionRun.create({ data: { id: executionId, userId: approval.userId, planId: approval.financialPlanId, approvalId: approval.id, status: "AUTHORIZED", startedStateVersion: approval.bankStateVersion, traceId } });
-      await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox }); });
-    const stored = await this.getExecution(executionId); if (!stored) throw new Error("Execution was not persisted"); return stored;
+  async authorizeVerifiedPasskey(input: VerifiedPasskeyAuthorizationInput): Promise<{ evidence: StoredApprovalEvidence; execution: ExecutionResultV1 }> {
+    const { approval, evidence } = input;
+    if (approval.method !== "PASSKEY" || approval.signatureReference !== evidence.id || evidence.approvalId !== approval.id || !evidence.userVerified
+      || evidence.userId !== approval.userId || evidence.financialPlanId !== approval.financialPlanId || evidence.goalContractKey !== approval.goalContractId
+      || evidence.goalContractVersion !== approval.goalContractVersion || evidence.goalContractHash !== approval.goalContractHash
+      || evidence.financialPlanHash !== approval.financialPlanHash || evidence.bankStateVersion !== approval.bankStateVersion
+      || evidence.challengeId !== input.challengeId || evidence.webAuthnCredentialId !== input.credentialId
+      || evidence.authenticatorCounterBefore !== input.expectedCounter || evidence.authenticatorCounterAfter !== input.newCounter
+      || approval.approvedAt !== input.now.toISOString() || evidence.verifiedAt !== input.now.toISOString()
+      || Date.parse(approval.expiresAt) <= input.now.getTime()) throw new Error("WEBAUTHN_APPROVAL_EVIDENCE_INVALID");
+    await this.db.$transaction(async (tx) => {
+      const claimed = await tx.webAuthnChallenge.updateMany({ where: {
+        id: input.challengeId, userId: approval.userId, purpose: "APPROVAL", status: "ISSUED", revokedAt: null,
+        expiresAt: { gt: input.now }, financialPlanId: approval.financialPlanId, approvalPayloadHash: evidence.approvalPayloadHash,
+        expectedRpId: evidence.rpId, expectedOrigin: evidence.origin,
+      }, data: { status: "CONSUMED", consumedAt: input.now } });
+      if (claimed.count !== 1) throw new Error("WEBAUTHN_APPROVAL_CHALLENGE_ALREADY_USED");
+      const counterUpdated = await tx.webAuthnCredential.updateMany({ where: {
+        id: input.credentialId, userId: approval.userId, revokedAt: null, signCount: BigInt(input.expectedCounter),
+      }, data: { signCount: BigInt(input.newCounter), lastUsedAt: input.now } });
+      if (counterUpdated.count !== 1) throw new Error("WEBAUTHN_CREDENTIAL_STATE_CHANGED");
+      await tx.approval.create({ data: {
+        id: approval.id, userId: approval.userId, goalContractRowId: input.goalRowId, goalContractKey: approval.goalContractId,
+        goalContractVersion: approval.goalContractVersion, goalContractHash: approval.goalContractHash, financialPlanId: approval.financialPlanId,
+        financialPlanHash: approval.financialPlanHash, bankStateVersion: approval.bankStateVersion, method: "PASSKEY",
+        signatureReference: evidence.id, approvedAt: new Date(approval.approvedAt), expiresAt: new Date(approval.expiresAt), traceId: input.traceId,
+      } });
+      await tx.approvalEvidence.create({ data: {
+        id: evidence.id, approvalId: approval.id, userId: evidence.userId, financialPlanId: evidence.financialPlanId,
+        goalContractKey: evidence.goalContractKey, goalContractVersion: evidence.goalContractVersion, goalContractHash: evidence.goalContractHash,
+        financialPlanHash: evidence.financialPlanHash, bankStateVersion: evidence.bankStateVersion, webAuthnCredentialId: evidence.webAuthnCredentialId,
+        challengeId: evidence.challengeId, approvalPayloadHash: evidence.approvalPayloadHash,
+        authenticatorCounterBefore: BigInt(evidence.authenticatorCounterBefore), authenticatorCounterAfter: BigInt(evidence.authenticatorCounterAfter),
+        userVerified: true, rpId: evidence.rpId, origin: evidence.origin, verifiedAt: new Date(evidence.verifiedAt),
+      } });
+      await tx.executionRun.create({ data: { id: input.executionId, userId: approval.userId, planId: approval.financialPlanId, approvalId: approval.id, status: "AUTHORIZED", startedStateVersion: approval.bankStateVersion, traceId: input.traceId } });
+      const auditPayload = { approvalId: approval.id, evidenceId: evidence.id, planId: approval.financialPlanId, goalContractId: approval.goalContractId, credentialRecordId: evidence.webAuthnCredentialId, payloadHash: evidence.approvalPayloadHash, bankStateVersion: approval.bankStateVersion };
+      const verified = event("WEBAUTHN_APPROVAL_VERIFIED", "Approval", approval.id, input.traceId, auditPayload);
+      const authorized = event("PLAN_AUTHORIZED", "ExecutionRun", input.executionId, input.traceId, { ...auditPayload, executionId: input.executionId });
+      await tx.auditEvent.createMany({ data: [verified.audit, authorized.audit] });
+      await tx.outboxEvent.createMany({ data: [verified.outbox, authorized.outbox] });
+    });
+    const stored = await this.getExecution(input.executionId); if (!stored) throw new Error("EXECUTION_NOT_FOUND");
+    return { evidence, execution: stored.result };
   }
-  async getApproval(id: string): Promise<StoredApproval | null> { const row = await this.db.approval.findUnique({ where: { id } }); return row ? mapApproval(row) : null; }
+  async getApproval(id: string): Promise<StoredApproval | null> { const row = await this.db.approval.findUnique({ where: { id }, include: { evidence: true } }); return row ? mapApproval(row) : null; }
   async getExecution(id: string): Promise<StoredExecution | null> { const row = await this.db.executionRun.findUnique({ where: { id }, include: { steps: { include: { planStep: true } } } }); return row ? mapExecution(row) : null; }
   async getLatestSettledStateVersion(executionId: string): Promise<number | null> { const step = await this.db.executionStep.findFirst({ where: { executionRunId: executionId, status: "SETTLED", resultingStateVersion: { not: null } }, orderBy: { planStep: { sequence: "desc" } }, select: { resultingStateVersion: true } }); return step?.resultingStateVersion ?? null; }
   async claimIdempotency(input: { key: string; scope: string; requestHash: string }): ReturnType<ParlanceRepository["claimIdempotency"]> { const prior = await this.db.idempotencyRecord.findUnique({ where: { key: input.key } }); if (prior) return prior.scope === input.scope && prior.requestHash === input.requestHash ? { status: "REPLAY", ...(prior.response === null ? {} : { response: prior.response }) } : { status: "CONFLICT" }; try { await this.db.idempotencyRecord.create({ data: input }); return { status: "CLAIMED" }; } catch (error) { if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error; const raced = await this.db.idempotencyRecord.findUniqueOrThrow({ where: { key: input.key } }); return raced.scope === input.scope && raced.requestHash === input.requestHash ? { status: "REPLAY", ...(raced.response === null ? {} : { response: raced.response }) } : { status: "CONFLICT" }; } }

@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { BankPort, ParlanceRepository, StoredApproval, StoredExecution, StoredGoal, StoredPlan } from "./ports.js";
-import { ApprovalService, CompilationService, ExecutionService } from "./services.js";
+import { CompilationService, ExecutionService } from "./services.js";
+import type { StoredApprovalEvidence } from "../webauthn/types.js";
 import { hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
 import { ExecutionGateway } from "../execution/gateway.js";
 
@@ -19,7 +20,6 @@ class MemoryRepository implements ParlanceRepository {
   async savePlan(goalRowId: string, plan: FinancialPlanV1) { this.plan = { goalRowId, plan }; this.audit.push("PLAN_COMPILED"); }
   async saveCompilationFailure(_row: string, result: Exclude<CompilerResult, { status: "SAT" }>) { this.audit.push(result.status); }
   async getPlan(id: string) { return this.plan?.plan.id === id ? this.plan : null; }
-  async approvePlan(input: { goalRowId: string; approval: ApprovalV1; executionId: string; traceId: string }) { this.approval = { approval: input.approval }; this.execution = { approvalId: input.approval.id, traceId: input.traceId, executionState: "AUTHORIZED", result: ExecutionResultV1.parse({ schemaVersion: "1", executionId: input.executionId, planId: input.approval.financialPlanId, status: "PENDING", startedStateVersion: input.approval.bankStateVersion, steps: [], goalOutcome: { achieved: false, summary: "Execution has not completed." } }) }; this.audit.push("PLAN_APPROVED"); return this.execution; }
   async getApproval(id: string) { return this.approval?.approval.id === id ? this.approval : null; }
   async getExecution(id: string) { return this.execution?.result.executionId === id ? this.execution : null; }
   async getLatestSettledStateVersion(executionId: string) { return this.settledStateVersions.get(executionId) ?? null; }
@@ -77,7 +77,10 @@ const appleState = (investments: boolean, stateVersion = 7): BankStateSnapshotV1
 
 async function authorize(repository: MemoryRepository, plan: FinancialPlanV1) {
   repository.plan = { goalRowId: repository.goal.rowId, plan };
-  return new ApprovalService(repository).approve(plan.id, { userId: repository.goal.contract.userId, method: "PASSKEY", signatureReference: "test-signature", expiresAt: new Date(Date.now() + 60_000).toISOString() }, "trace-preservation");
+  const approval = ApprovalV1.parse({ schemaVersion: "1", id: "verified-approval", userId: repository.goal.contract.userId, goalContractId: repository.goal.contract.id, goalContractVersion: repository.goal.contract.version, goalContractHash: repository.goal.contract.contractHash, financialPlanId: plan.id, financialPlanHash: plan.planHash, bankStateVersion: plan.bankStateVersion, method: "PASSKEY", approvedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(), signatureReference: "verified-evidence" });
+  const evidence: StoredApprovalEvidence = { id: "verified-evidence", approvalId: approval.id, userId: approval.userId, financialPlanId: plan.id, goalContractKey: repository.goal.contract.id, goalContractVersion: repository.goal.contract.version, goalContractHash: repository.goal.contract.contractHash, financialPlanHash: plan.planHash, bankStateVersion: plan.bankStateVersion, webAuthnCredentialId: "credential-row", challengeId: "challenge-row", approvalPayloadHash: "payload-hash", authenticatorCounterBefore: 0, authenticatorCounterAfter: 1, userVerified: true, rpId: "localhost", origin: "http://localhost:3000", verifiedAt: new Date().toISOString() };
+  repository.approval = { approval, evidence }; repository.execution = { approvalId: approval.id, traceId: "trace-preservation", executionState: "AUTHORIZED", result: ExecutionResultV1.parse({ schemaVersion: "1", executionId: "verified-execution", planId: plan.id, status: "PENDING", startedStateVersion: plan.bankStateVersion, steps: [], goalOutcome: { achieved: false, summary: "Execution has not completed." } }) }; repository.audit.push("PLAN_AUTHORIZED");
+  return { approval, evidence, execution: repository.execution.result };
 }
 
 describe("NTU transfer vertical slice", () => {
@@ -85,10 +88,10 @@ describe("NTU transfer vertical slice", () => {
     const rawGoal = GoalContractV1.parse({ ...(fixture("goal-contract.json") as object), constraints: [], contractHash: "0".repeat(64) }); const goal = { ...rawGoal, contractHash: hashGoalContract(rawGoal) }; const repository = new MemoryRepository(goal); const bank = await bankAdapter();
     const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: { ...(fixture("financial-plan.json") as object), bankStateVersion: state.stateVersion } }); } };
     const compiled = await new CompilationService(repository, bank, compiler).compile(goal.id, "trace-ntu"); expect(compiled.status).toBe("SAT"); if (compiled.status !== "SAT") throw new Error("Expected SAT");
-    const authorized = await new ApprovalService(repository).approve(compiled.plan.id, { userId: goal.userId, method: "PASSKEY", signatureReference: "sig-ntu" }, "trace-ntu");
+    const authorized = await authorize(repository, compiled.plan);
     const executionService = new ExecutionService(repository, bank, compiler); const completed = await executionService.run(authorized.execution.executionId, "trace-ntu"); expect(completed.status).toBe("COMPLETED"); expect(completed.finalStateVersion).toBe(9); expect(completed.steps).toHaveLength(2);
     const repeated = await executionService.run(authorized.execution.executionId, "trace-ntu"); expect(repeated).toEqual(completed); expect(repository.audit.filter((item) => item === "EXECUTION_COMPLETED")).toHaveLength(1);
-    expect(repository.snapshot?.stateVersion).toBe(9); expect(repository.audit).toContain("PLAN_APPROVED");
+    expect(repository.snapshot?.stateVersion).toBe(9); expect(repository.audit).toContain("PLAN_AUTHORIZED");
   });
   it("allows only one local claim for concurrent identical execution attempts", async () => { const raw = GoalContractV1.parse(fixture("goal-contract.json")); const repository = new MemoryRepository({ ...raw, contractHash: hashGoalContract(raw) }); const claims = await Promise.all([repository.claimIdempotency({ key: "same-step", scope: "BANK_EXECUTION_STEP", requestHash: "same-request" }), repository.claimIdempotency({ key: "same-step", scope: "BANK_EXECUTION_STEP", requestHash: "same-request" })]); expect(claims.filter((claim) => claim.status === "CLAIMED")).toHaveLength(1); expect(claims.filter((claim) => claim.status === "REPLAY")).toHaveLength(1); });
 
@@ -131,13 +134,13 @@ describe("NTU transfer vertical slice", () => {
     const goal = appleGoal(); const plan = applePlan(); const repository = new MemoryRepository(goal); const bank = new ControlledBank(appleState(true)); const approved = await authorize(repository, plan); const step = plan.steps[0]!;
     if (step.action !== "FX_CONVERT") throw new Error("Expected FX");
     const gateway = new ExecutionGateway(bank);
-    await expect(gateway.execute({ goal, plan, approval: approved.approval, executionState: "EXECUTING", expectedStateVersion: 7, currentStateVersion: 7, revalidationSucceeded: false, idempotencyKey: "mutated-action", proposedStep: { ...step, parameters: { ...step.parameters, sourceMoney: { currency: "SGD", minorUnits: "210000" } } } }, "trace-injection")).rejects.toThrow("UNAPPROVED_EXECUTABLE_ACTION");
+    await expect(gateway.execute({ goal, plan, approval: approved.approval, approvalEvidence: approved.evidence, executionState: "EXECUTING", expectedStateVersion: 7, currentStateVersion: 7, revalidationSucceeded: false, idempotencyKey: "mutated-action", proposedStep: { ...step, parameters: { ...step.parameters, sourceMoney: { currency: "SGD", minorUnits: "210000" } } } }, "trace-injection")).rejects.toThrow("UNAPPROVED_EXECUTABLE_ACTION");
     expect(bank.writes).toBe(0);
   });
 
   it("derives the bank path and payload from the exact approved proposed step", async () => {
     const goal = appleGoal(); const plan = applePlan(); const repository = new MemoryRepository(goal); const bank = new ControlledBank(appleState(true)); const approved = await authorize(repository, plan); const step = plan.steps[0]!;
-    await new ExecutionGateway(bank).execute({ goal, plan, approval: approved.approval, executionState: "EXECUTING", expectedStateVersion: 7, currentStateVersion: 7, revalidationSucceeded: false, idempotencyKey: "bound-operation", proposedStep: step }, "trace-bound-operation");
+    await new ExecutionGateway(bank).execute({ goal, plan, approval: approved.approval, approvalEvidence: approved.evidence, executionState: "EXECUTING", expectedStateVersion: 7, currentStateVersion: 7, revalidationSucceeded: false, idempotencyKey: "bound-operation", proposedStep: step }, "trace-bound-operation");
     expect(bank.lastOperation).toEqual({ path: "fx", payload: { userId: goal.userId, accountId: "acc-sgd", fromAmount: { currency: "SGD", minorUnits: "200000" }, toCurrency: "USD", quoteId: "quote-sgd-usd-1" }, idempotencyKey: "bound-operation", traceId: "trace-bound-operation" });
   });
 
