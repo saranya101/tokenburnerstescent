@@ -18,14 +18,29 @@ function canonicalDecimal(value: string): string {
   return trimmedFraction ? `${integer}.${trimmedFraction}` : integer === "-0" ? "0" : integer;
 }
 
+export type GoalContractSemanticPayload = Pick<GoalContractV1,
+  "schemaVersion" | "id" | "version" | "userId" | "goal" | "constraints" | "preferences" | "entityBindings"
+>;
+
+/** Immutable, confirmed meaning covered by the one canonical GoalContract hash. */
+export function goalContractSemanticPayload(goal: GoalContractV1): GoalContractSemanticPayload {
+  return {
+    schemaVersion: goal.schemaVersion,
+    id: goal.id,
+    version: goal.version,
+    userId: goal.userId,
+    goal: goal.goal,
+    constraints: goal.constraints,
+    preferences: goal.preferences,
+    entityBindings: goal.entityBindings.map((binding) => ({
+      ...binding,
+      ...(binding.confidence === undefined ? {} : { confidence: canonicalDecimal(binding.confidence) }),
+    })),
+  };
+}
+
 export function canonicalGoalContractJson(goal: GoalContractV1): string {
-  const withoutHash = Object.fromEntries(Object.entries(goal).filter(([key]) => key !== "contractHash"));
-  return canonicalJson({
-    ...withoutHash,
-    createdAt: new Date(goal.createdAt).toISOString(),
-    ...(goal.confirmedAt === undefined ? {} : { confirmedAt: new Date(goal.confirmedAt).toISOString() }),
-    entityBindings: goal.entityBindings.map((binding) => ({ ...binding, ...(binding.confidence === undefined ? {} : { confidence: canonicalDecimal(binding.confidence) }) })),
-  });
+  return canonicalJson(goalContractSemanticPayload(goal));
 }
 
 export function hashGoalContract(goal: GoalContractV1): string {

@@ -1,4 +1,5 @@
-import type { ApprovalV1, BankStateSnapshotV1, CompilerResultV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1 } from "@parlance/contracts";
+import type { ApprovalV1, BankStateSnapshotV1, CompilerResultV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1, IntentDraftV1 } from "@parlance/contracts";
+import type { GoalContractCandidate } from "@parlance/intent-engine";
 
 export interface StoredGoal { rowId: string; contract: GoalContractV1 }
 export interface StoredPlan { goalRowId: string; plan: FinancialPlanV1 }
@@ -6,6 +7,28 @@ export interface StoredApproval { approval: ApprovalV1; revokedAt?: string }
 export type RecoverableExecutionState = "AUTHORIZED" | "EXECUTING" | "PAUSED" | "REAPPROVAL_REQUIRED";
 export interface StoredExecution { result: ExecutionResultV1; approvalId: string; traceId: string; executionState: RecoverableExecutionState | "COMPLETED" | "FAILED" }
 export type IdempotencyClaim = { status: "CLAIMED" } | { status: "REPLAY"; response?: unknown } | { status: "CONFLICT" };
+export interface StoredGoalCandidate {
+  candidateId: string;
+  goalContractId: string;
+  userId: string;
+  version: number;
+  createdAt: string;
+  candidate: GoalContractCandidate;
+}
+export interface GoalConfirmationMetadata {
+  schemaVersion: "1";
+  goalContractId: string;
+  goalContractVersion: number;
+  contractHash: string;
+  confirmedAt: string;
+  confirmationType: "EXPLICIT_USER_CONFIRMATION";
+}
+
+export interface GoalConfirmationRepository {
+  saveGoalCandidate(input: StoredGoalCandidate & { originalText: string; intentDraft: IntentDraftV1; traceId: string }): Promise<StoredGoalCandidate>;
+  getGoalCandidate(candidateId: string): Promise<StoredGoalCandidate | null>;
+  confirmGoal(input: { candidateId: string; contract: GoalContractV1; confirmation: GoalConfirmationMetadata; traceId: string }): Promise<StoredGoal>;
+}
 
 export interface ParlanceRepository {
   getConfirmedGoal(contractId: string): Promise<StoredGoal | null>;

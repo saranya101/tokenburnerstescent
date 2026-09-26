@@ -1,19 +1,86 @@
 import { randomUUID } from "node:crypto";
-import { ApprovalV1, CompilerResultV1, ExecutionResultV1, type FinancialPlanV1, type GoalContractV1 } from "@parlance/contracts";
+import { ApprovalV1, CompilerResultV1, ExecutionResultV1, GoalContractV1, type FinancialPlanV1 } from "@parlance/contracts";
+import {
+  DeterministicGoalContractBuilder, DeterministicIntentAmbiguityDetector, GoalContractCandidateV1, intentReferenceOccurrences,
+  type EntityGrounder, type GoalContractBuilder, type IntentAmbiguityDetector, type IntentInterpreter,
+} from "@parlance/intent-engine";
+import { z } from "zod";
 import { canonicalHash, hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
 import { bankOperation, ExecutionGateway, verifyExecutionApproval, verifyExecutionAuthorization } from "../execution/gateway.js";
 import { assertCompilerBinding, materiallyEquivalentRoute, simulateFinancialStep, stepPreservesConstraints, terminalStepSatisfiesGoal, type RevalidationOutcome } from "../execution/goal-preservation.js";
-import type { BankPort, BankWriteResult, CompilerPort, ParlanceRepository } from "./ports.js";
+import type { BankPort, BankWriteResult, CompilerPort, GoalConfirmationMetadata, GoalConfirmationRepository, ParlanceRepository } from "./ports.js";
+
+const MessageInput = z.object({ userId: z.string().min(1), text: z.string().min(1) }).strict();
+export type EntityGrounderFactory = (userId: string) => EntityGrounder;
+
+export class MessageOrchestrationService {
+  constructor(
+    private readonly repository: GoalConfirmationRepository,
+    private readonly interpreter: IntentInterpreter,
+    private readonly grounderForUser: EntityGrounderFactory,
+    private readonly ambiguityDetector: IntentAmbiguityDetector = new DeterministicIntentAmbiguityDetector(),
+    private readonly goalBuilder: GoalContractBuilder = new DeterministicGoalContractBuilder(),
+    private readonly now: () => Date = () => new Date(),
+    private readonly newId: () => string = randomUUID,
+  ) {}
+
+  async receive(value: unknown, traceId: string) {
+    const input = MessageInput.parse(value);
+    const intentDraft = await this.interpreter.interpretUserRequest(input);
+    const grounder = this.grounderForUser(input.userId);
+    const occurrences = [...new Map(intentReferenceOccurrences(intentDraft).map((item) => [`${item.reference}\u0000${item.expectedEntityType ?? ""}`, item])).values()];
+    const groundingResults = await Promise.all(occurrences.map((item) => grounder.ground(item.expectedEntityType === undefined
+      ? { reference: item.reference }
+      : { reference: item.reference, expectedEntityType: item.expectedEntityType })));
+    const ambiguity = this.ambiguityDetector.analyze({ draft: intentDraft, groundingResults });
+    if (ambiguity.status === "NEEDS_CLARIFICATION") {
+      return { status: "NEEDS_CLARIFICATION" as const, intentDraft, clarifications: ambiguity.clarifications };
+    }
+    const candidate = GoalContractCandidateV1.parse(this.goalBuilder.build({ draft: intentDraft, groundingResults }));
+    const stored = await this.repository.saveGoalCandidate({
+      candidateId: this.newId(), goalContractId: this.newId(), userId: input.userId, version: 1,
+      createdAt: this.now().toISOString(), candidate, originalText: input.text, intentDraft, traceId,
+    });
+    return { status: "AWAITING_GOAL_CONFIRMATION" as const, candidateId: stored.candidateId, goalCandidate: stored.candidate };
+  }
+
+  async confirm(candidateId: string, traceId: string) {
+    const stored = await this.repository.getGoalCandidate(candidateId);
+    if (!stored) throw new Error("GOAL_CANDIDATE_NOT_FOUND");
+    const candidate = GoalContractCandidateV1.parse(stored.candidate);
+    const confirmedAt = this.now().toISOString();
+    const unhashed = GoalContractV1.parse({
+      ...candidate, id: stored.goalContractId, userId: stored.userId, version: stored.version,
+      sourceIntentDraftId: stored.candidateId, status: "CONFIRMED", contractHash: "0".repeat(64),
+      createdAt: stored.createdAt, confirmedAt,
+      entityBindings: candidate.entityBindings.map((binding) => ({ ...binding, confirmed: true })),
+    });
+    const contract = GoalContractV1.parse({ ...unhashed, contractHash: hashGoalContract(unhashed) });
+    const confirmation: GoalConfirmationMetadata = {
+      schemaVersion: "1", goalContractId: contract.id, goalContractVersion: contract.version,
+      contractHash: contract.contractHash, confirmedAt: contract.confirmedAt!, confirmationType: "EXPLICIT_USER_CONFIRMATION",
+    };
+    const confirmed = await this.repository.confirmGoal({ candidateId, contract, confirmation, traceId });
+    const authoritativeConfirmation: GoalConfirmationMetadata = {
+      schemaVersion: "1", goalContractId: confirmed.contract.id, goalContractVersion: confirmed.contract.version,
+      contractHash: confirmed.contract.contractHash, confirmedAt: confirmed.contract.confirmedAt!, confirmationType: "EXPLICIT_USER_CONFIRMATION",
+    };
+    return { status: "CONFIRMED" as const, goalContract: confirmed.contract, confirmation: authoritativeConfirmation };
+  }
+}
 
 export class CompilationService {
   constructor(private readonly repository: ParlanceRepository, private readonly bank: BankPort, private readonly compiler: CompilerPort) {}
   async compile(goalId: string, traceId: string): Promise<CompilerResultV1> {
     const stored = await this.repository.getConfirmedGoal(goalId); if (!stored) throw new Error("CONFIRMED_GOAL_NOT_FOUND");
-    if (hashGoalContract(stored.contract) !== stored.contract.contractHash) throw new Error("GOAL_HASH_MISMATCH");
-    const snapshot = await this.bank.getState(stored.contract.userId, traceId); await this.repository.saveSnapshot(snapshot, traceId);
-    const result = CompilerResultV1.parse(await this.compiler.compile(stored.contract, snapshot, traceId));
+    const contract = GoalContractV1.parse(stored.contract);
+    if (contract.status !== "CONFIRMED" || contract.confirmedAt === undefined) throw new Error("GOAL_NOT_CONFIRMED");
+    if (contract.entityBindings.some((binding) => !binding.confirmed)) throw new Error("GOAL_BINDING_NOT_CONFIRMED");
+    if (hashGoalContract(contract) !== contract.contractHash) throw new Error("GOAL_HASH_MISMATCH");
+    const snapshot = await this.bank.getState(contract.userId, traceId); await this.repository.saveSnapshot(snapshot, traceId);
+    const result = CompilerResultV1.parse(await this.compiler.compile(contract, snapshot, traceId));
     if (result.status !== "SAT") { await this.repository.saveCompilationFailure(stored.rowId, result, traceId); return result; }
-    if (result.plan.goalContractId !== stored.contract.id || result.plan.goalContractVersion !== stored.contract.version || result.plan.bankStateVersion !== snapshot.stateVersion) throw new Error("COMPILER_RESULT_BINDING_MISMATCH");
+    if (result.plan.goalContractId !== contract.id || result.plan.goalContractVersion !== contract.version || result.plan.bankStateVersion !== snapshot.stateVersion) throw new Error("COMPILER_RESULT_BINDING_MISMATCH");
     const plan: FinancialPlanV1 = { ...result.plan, planHash: hashFinancialPlan(result.plan) };
     await this.repository.savePlan(stored.rowId, plan, traceId); return { ...result, plan };
   }

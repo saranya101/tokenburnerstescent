@@ -1,27 +1,18 @@
-import type { GoalContractV1, GoalStatusV1, IntentDraftV1 } from "@parlance/contracts";
+import { GoalContractV1, type IntentDraftV1 } from "@parlance/contracts";
 import type { EntityGroundingResult } from "../grounding/types.js";
 
-export interface GoalContractMetadata {
-  id: string;
-  userId: string;
-  version: number;
-  sourceIntentDraftId?: string;
-  status: GoalStatusV1;
-  contractHash: string;
-  createdAt: string;
-  confirmedAt?: string;
-  /** Explicit audit value; successful grounding alone never implies user confirmation. */
-  bindingConfirmed: boolean;
-}
+export const GoalContractCandidateV1 = GoalContractV1.pick({
+  schemaVersion: true, goal: true, constraints: true, preferences: true, entityBindings: true,
+});
+export type GoalContractCandidate = ReturnType<typeof GoalContractCandidateV1.parse>;
 
 export interface GoalContractBuildInput {
   draft: IntentDraftV1;
   groundingResults: readonly EntityGroundingResult[];
-  metadata: GoalContractMetadata;
 }
 
 export interface GoalContractBuilder {
-  build(input: GoalContractBuildInput): GoalContractV1;
+  build(input: GoalContractBuildInput): GoalContractCandidate;
 }
 
 export type GoalContractValidationIssue = {

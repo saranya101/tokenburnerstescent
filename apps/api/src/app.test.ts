@@ -5,7 +5,7 @@ function services(input: { databaseReady?: boolean; compilerReady?: boolean; moc
   const compile = input.compileError ? async () => { throw new Error(input.compileError); } : async () => ({ status: "UNSAT" });
   return {
     repository: { isReady: async () => input.databaseReady ?? true },
-    compilation: { compile }, approval: {}, execution: {},
+    messages: { receive: async () => ({}), confirm: async () => ({}) }, compilation: { compile }, approval: {}, execution: {},
     dependencies: { compiler: { isReady: async () => input.compilerReady ?? true }, bank: { isReady: async () => input.mockBankReady ?? true } },
   } as unknown as ApiServices;
 }
@@ -33,5 +33,11 @@ describe("API status handling", () => {
     vi.stubEnv("DATABASE_URL", "configured"); vi.stubEnv("DIRECT_URL", "configured"); vi.stubEnv("COMPILER_URL", "configured"); vi.stubEnv("MOCK_BANK_URL", "configured");
     const app = buildApp(services()); const response = await app.inject({ method: "GET", url: "/ready" });
     expect(response.statusCode).toBe(200); expect(response.json()).toEqual({ status: "ready", database: "ready", dependencies: { compiler: "ready", mockBank: "ready" } }); await app.close();
+  });
+
+  it("rejects caller-supplied confirmation authority fields before invoking confirmation", async () => {
+    const confirm = vi.fn(); const injected = services(); injected.messages = { receive: async () => ({}), confirm } as unknown as ApiServices["messages"];
+    const app = buildApp(injected); const response = await app.inject({ method: "POST", url: "/v1/goal-candidates/candidate-1/confirm", payload: { contractHash: "caller", status: "CONFIRMED", confirmedAt: "2026-09-25T00:00:00Z", recipientId: "ben-other" } });
+    expect(response.statusCode).toBe(400); expect(confirm).not.toHaveBeenCalled(); await app.close();
   });
 });

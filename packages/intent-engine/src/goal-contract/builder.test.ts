@@ -1,15 +1,11 @@
-import { GoalContractV1, type IntentDraftV1 } from "@parlance/contracts";
+import type { IntentDraftV1 } from "@parlance/contracts";
 import { expect, it } from "vitest";
 import { DeterministicGoalContractBuilder } from "./builder.js";
 import { GoalContractBuilderError } from "./errors.js";
-import type { GoalContractBuildInput } from "./types.js";
+import { GoalContractCandidateV1 } from "./types.js";
 import type { EntityGroundingResult } from "../grounding/types.js";
 
 const builder = new DeterministicGoalContractBuilder();
-const metadata = {
-  id: "goal-1", userId: "user-1", version: 1, status: "AWAITING_GOAL_CONFIRMATION" as const,
-  contractHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", createdAt: "2026-09-20T00:00:00Z", bindingConfirmed: false,
-};
 
 function intent(goal: unknown, constraints: unknown[] = [], preferences: unknown[] = [], references: unknown[] = []): IntentDraftV1 {
   return {
@@ -21,14 +17,14 @@ function resolved(reference: string, entityType: "ACCOUNT" | "BENEFICIARY" | "AS
   return { status: "RESOLVED", reference, entityType, entityId, resolutionMethod };
 }
 
-function build(draft: IntentDraftV1, groundingResults: readonly EntityGroundingResult[], overrides: Partial<GoalContractBuildInput["metadata"]> = {}) {
-  return builder.build({ draft, groundingResults, metadata: { ...metadata, ...overrides } });
+function build(draft: IntentDraftV1, groundingResults: readonly EntityGroundingResult[]) {
+  return builder.build({ draft, groundingResults });
 }
 
 it("maps DELIVER_MONEY to a canonical recipient ID and validates the final contract", () => {
   const contract = build(intent({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "500000" }, recipientReference: "NTU" }), [resolved("NTU", "BENEFICIARY", "ben_ntu")]);
   expect(contract.goal).toEqual({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "500000" }, recipientId: "ben_ntu" });
-  expect(GoalContractV1.safeParse(contract).success).toBe(true);
+  expect(GoalContractCandidateV1.safeParse(contract).success).toBe(true);
 });
 
 it("maps ACQUIRE_ASSET references while preserving budget-only and quantity forms", () => {
@@ -91,14 +87,11 @@ it("fails deterministically for missing, wrong-type, and inconsistent groundings
   expect(() => build(value, [resolved("NTU", "BENEFICIARY", "ben_one"), resolved("NTU", "BENEFICIARY", "ben_two")])).toThrow(expect.objectContaining({ code: "INCONSISTENT_BINDING" }));
 });
 
-it("uses explicit status and confirmation metadata without inferring either", () => {
-  const contract = build(intent({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "100" }, recipientReference: "NTU" }), [resolved("NTU", "BENEFICIARY", "ben_ntu")], { status: "CONFIRMED", confirmedAt: "2026-09-20T00:01:00Z", bindingConfirmed: true });
-  expect(contract.status).toBe("CONFIRMED");
-  expect(contract.confirmedAt).toBe("2026-09-20T00:01:00Z");
-  expect(contract.entityBindings[0]?.confirmed).toBe(true);
-});
-
-it("rejects metadata that prevents final GoalContractV1 validation", () => {
-  const value = intent({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "100" }, recipientReference: "NTU" });
-  expect(() => build(value, [resolved("NTU", "BENEFICIARY", "ben_ntu")], { id: "" })).toThrow(expect.objectContaining({ code: "INVALID_GOAL_CONTRACT" }));
+it("returns semantic candidate data only and never authors lifecycle or hash fields", () => {
+  const candidate = build(intent({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "100" }, recipientReference: "NTU" }), [resolved("NTU", "BENEFICIARY", "ben_ntu")]);
+  expect(candidate).not.toHaveProperty("contractHash");
+  expect(candidate).not.toHaveProperty("status");
+  expect(candidate).not.toHaveProperty("createdAt");
+  expect(candidate).not.toHaveProperty("confirmedAt");
+  expect(candidate.entityBindings[0]?.confirmed).toBe(false);
 });

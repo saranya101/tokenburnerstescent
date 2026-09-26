@@ -1,9 +1,9 @@
-import { GoalContractV1, type EntityBinding, type GoalContractV1 as GoalContract, type IntentDraftV1 } from "@parlance/contracts";
+import { type EntityBinding, type IntentDraftV1 } from "@parlance/contracts";
 import { GoalContractBuilderError } from "./errors.js";
-import type { GoalContractBuildInput, GoalContractBuilder, GoalContractValidationIssue } from "./types.js";
+import { GoalContractCandidateV1, type GoalContractBuildInput, type GoalContractBuilder, type GoalContractCandidate, type GoalContractValidationIssue } from "./types.js";
 import type { EntityGroundingResult, GroundableEntityType } from "../grounding/types.js";
+import { intentReferenceOccurrences, type IntentReferenceOccurrence } from "../references.js";
 
-type ReferenceOccurrence = { field: string; reference: string; expectedEntityType?: GroundableEntityType };
 type ResolvedGrounding = Extract<EntityGroundingResult, { status: "RESOLVED" }>;
 
 /**
@@ -11,25 +11,17 @@ type ResolvedGrounding = Extract<EntityGroundingResult, { status: "RESOLVED" }>;
  * grounding result, candidate, or human reference reaches downstream planning through this builder.
  */
 export class DeterministicGoalContractBuilder implements GoalContractBuilder {
-  build(input: GoalContractBuildInput): GoalContract {
+  build(input: GoalContractBuildInput): GoalContractCandidate {
     assertConsistentBindings(input.groundingResults);
     const resolver = new ReferenceResolver(input.groundingResults);
     const candidate = {
       schemaVersion: "1",
-      id: input.metadata.id,
-      userId: input.metadata.userId,
-      version: input.metadata.version,
-      ...(input.metadata.sourceIntentDraftId === undefined ? {} : { sourceIntentDraftId: input.metadata.sourceIntentDraftId }),
       goal: groundedGoal(input.draft, resolver),
       constraints: groundedConstraints(input.draft, resolver),
       preferences: groundedPreferences(input.draft, resolver),
-      entityBindings: entityBindings(referenceOccurrences(input.draft), resolver, input.metadata.bindingConfirmed),
-      status: input.metadata.status,
-      contractHash: input.metadata.contractHash,
-      createdAt: input.metadata.createdAt,
-      ...(input.metadata.confirmedAt === undefined ? {} : { confirmedAt: input.metadata.confirmedAt }),
+      entityBindings: entityBindings(intentReferenceOccurrences(input.draft), resolver),
     };
-    const parsed = GoalContractV1.safeParse(candidate);
+    const parsed = GoalContractCandidateV1.safeParse(candidate);
     if (!parsed.success) {
       throw new GoalContractBuilderError("INVALID_GOAL_CONTRACT", "The canonical goal contract is invalid.", undefined, validationIssues(parsed.error));
     }
@@ -77,40 +69,14 @@ function groundedPreferences(draft: IntentDraftV1, resolver: ReferenceResolver):
     : preference);
 }
 
-function referenceOccurrences(draft: IntentDraftV1): readonly ReferenceOccurrence[] {
-  const occurrences: ReferenceOccurrence[] = [];
-  switch (draft.goal.type) {
-    case "DELIVER_MONEY": occurrences.push({ field: "goal.recipientReference", reference: draft.goal.recipientReference, expectedEntityType: "BENEFICIARY" }); break;
-    case "ACQUIRE_ASSET": occurrences.push({ field: "goal.assetReference", reference: draft.goal.assetReference, expectedEntityType: "ASSET" }); break;
-    case "PAY_BILL": occurrences.push({ field: "goal.billerReference", reference: draft.goal.billerReference, expectedEntityType: "BILLER" }); break;
-    case "MOVE_FUNDS":
-      if (draft.goal.sourceAccountReference !== undefined) occurrences.push({ field: "goal.sourceAccountReference", reference: draft.goal.sourceAccountReference, expectedEntityType: "ACCOUNT" });
-      occurrences.push({ field: "goal.destinationAccountReference", reference: draft.goal.destinationAccountReference, expectedEntityType: "ACCOUNT" });
-      break;
-  }
-  draft.constraints.forEach((constraint, index) => {
-    if (constraint.type === "EXCLUDED_ACCOUNT") occurrences.push({ field: `constraints[${index}].accountReference`, reference: constraint.accountReference, expectedEntityType: "ACCOUNT" });
-    if (constraint.type === "MIN_AVAILABLE_BALANCE" && constraint.accountReference !== undefined) occurrences.push({ field: `constraints[${index}].accountReference`, reference: constraint.accountReference, expectedEntityType: "ACCOUNT" });
-  });
-  draft.preferences.forEach((preference, index) => {
-    if (preference.type === "PREFER_ACCOUNT") occurrences.push({ field: `preferences[${index}].accountReference`, reference: preference.accountReference, expectedEntityType: "ACCOUNT" });
-  });
-  draft.references.forEach((reference, index) => {
-    const field = `references[${index}].reference`;
-    if (reference.expectedEntityType === undefined) occurrences.push({ field, reference: reference.reference });
-    else occurrences.push({ field, reference: reference.reference, expectedEntityType: reference.expectedEntityType });
-  });
-  return occurrences;
-}
-
-function entityBindings(occurrences: readonly ReferenceOccurrence[], resolver: ReferenceResolver, confirmed: boolean): readonly EntityBinding[] {
+function entityBindings(occurrences: readonly IntentReferenceOccurrence[], resolver: ReferenceResolver): readonly EntityBinding[] {
   const bindings = new Map<string, EntityBinding>();
   for (const occurrence of occurrences) {
     const grounding = resolver.resolve(occurrence.field, occurrence.reference, occurrence.expectedEntityType);
     const key = `${grounding.reference}\u0000${grounding.entityType}\u0000${grounding.entityId}`;
     const existing = bindings.get(key);
     if (existing === undefined || resolutionRank(grounding.resolutionMethod) < resolutionRank(existing.resolutionMethod)) {
-      bindings.set(key, { schemaVersion: "1", reference: grounding.reference, entityType: grounding.entityType, entityId: grounding.entityId, resolutionMethod: grounding.resolutionMethod, confirmed });
+      bindings.set(key, { schemaVersion: "1", reference: grounding.reference, entityType: grounding.entityType, entityId: grounding.entityId, resolutionMethod: grounding.resolutionMethod, confirmed: false });
     }
   }
   return [...bindings.values()].sort((left, right) => left.reference.localeCompare(right.reference) || left.entityType.localeCompare(right.entityType) || left.entityId.localeCompare(right.entityId));

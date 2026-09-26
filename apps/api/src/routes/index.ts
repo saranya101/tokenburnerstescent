@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { receiveMessage } from "../orchestration/handlers.js";
 import type { ApiServices } from "../app.js";
 import type { RegistrationResponseJSON } from "@simplewebauthn/server";
 const RouteId = z.object({ id: z.string().min(1) });
@@ -17,7 +16,8 @@ const RegistrationVerificationInput = z.object({
 }).strict();
 const trace = (headers: Record<string, unknown>): string => String(headers["x-trace-id"]);
 export async function registerRoutes(app: FastifyInstance, services: ApiServices) {
-  app.post("/v1/messages", async (request) => receiveMessage(request.body));
+  app.post("/v1/messages", async (request) => services.messages.receive(request.body, trace(request.headers)));
+  app.post("/v1/goal-candidates/:id/confirm", async (request) => { EmptyInput.parse(request.body ?? {}); return services.messages.confirm(RouteId.parse(request.params).id, trace(request.headers)); });
   app.post("/v1/goals/:id/compile", async (request) => services.compilation.compile(RouteId.parse(request.params).id, trace(request.headers)));
   app.post("/v1/plans/:id/approve", async (request) => { const body = ApprovalInput.parse(request.body); return services.approval.approve(RouteId.parse(request.params).id, { userId: body.userId, method: body.method, signatureReference: body.signatureReference, ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}) }, trace(request.headers)); });
   app.post("/v1/webauthn/registration/options", async (request) => { EmptyInput.parse(request.body ?? {}); return services.webauthn.registrationOptions(); });

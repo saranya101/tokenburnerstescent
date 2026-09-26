@@ -2,9 +2,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { PrismaClient } from "@parlance/db";
-import { BankStateSnapshotV1, CompilerResultV1, FinancialPlanV1, GoalContractV1 } from "@parlance/contracts";
+import { BankStateSnapshotV1, CompilerResultV1, FinancialPlanV1, GoalContractV1, type IntentDraftV1 } from "@parlance/contracts";
+import type { EntityGroundingInput } from "@parlance/intent-engine";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ApprovalService, CompilationService, ExecutionService } from "../orchestration/services.js";
+import { ApprovalService, CompilationService, ExecutionService, MessageOrchestrationService } from "../orchestration/services.js";
 import type { BankPort } from "../orchestration/ports.js";
 import { canonicalGoalContractJson, hashGoalContract } from "../security/canonical-hash.js";
 import { PrismaParlanceRepository } from "./prisma.js";
@@ -23,7 +24,8 @@ async function cleanup(db: PrismaClient): Promise<void> {
   const runs = await db.executionRun.findMany({ where: { userId: ids.user }, select: { id: true } }); const runIds = runs.map((row) => row.id); const stepKeys = (await db.executionStep.findMany({ where: { executionRunId: { in: runIds } }, select: { idempotencyKey: true } })).map((row) => row.idempotencyKey);
   await db.executionStep.deleteMany({ where: { executionRunId: { in: runIds } } }); await db.executionRun.deleteMany({ where: { userId: ids.user } }); await db.approval.deleteMany({ where: { userId: ids.user } });
   await db.financialPlanStep.deleteMany({ where: { plan: { goalContractKey: ids.goal } } }); await db.financialPlan.deleteMany({ where: { goalContractKey: ids.goal } }); await db.bankStateSnapshot.deleteMany({ where: { userId: ids.user } });
-  await db.goalEntityBinding.deleteMany({ where: { goalContractId: ids.goalRow } }); await db.goalConstraint.deleteMany({ where: { goalContractId: ids.goalRow } }); await db.goalContract.deleteMany({ where: { id: ids.goalRow } });
+  const goalRows = (await db.goalContract.findMany({ where: { userId: ids.user }, select: { id: true } })).map((row) => row.id); await db.goalEntityBinding.deleteMany({ where: { goalContractId: { in: goalRows } } }); await db.goalConstraint.deleteMany({ where: { goalContractId: { in: goalRows } } }); await db.goalContract.deleteMany({ where: { id: { in: goalRows } } });
+  const conversations = (await db.conversation.findMany({ where: { userId: ids.user }, select: { id: true } })).map((row) => row.id); await db.intentDraftRecord.deleteMany({ where: { userId: ids.user } }); await db.message.deleteMany({ where: { conversationId: { in: conversations } } }); await db.conversation.deleteMany({ where: { id: { in: conversations } } });
   await db.account.deleteMany({ where: { userId: ids.user } }); await db.beneficiary.deleteMany({ where: { userId: ids.user } }); await db.idempotencyRecord.deleteMany({ where: { OR: [{ scope: { startsWith: "IT_" } }, { key: { in: stepKeys } }] } });
   await db.auditEvent.deleteMany({ where: { traceId: ids.trace } }); await db.outboxEvent.deleteMany({ where: { traceId: ids.trace } }); await db.user.deleteMany({ where: { id: ids.user } });
 }
@@ -34,6 +36,18 @@ describe.skipIf(!testDatabaseUrl)("Prisma PostgreSQL restart safety", () => {
     const fixtureGoal = GoalContractV1.parse(fixture("goal-contract.json")); const unhashed = GoalContractV1.parse({ ...fixtureGoal, id: ids.goal, userId: ids.user, sourceIntentDraftId: undefined, constraints: [], contractHash: "0".repeat(64) }); originalGoal = GoalContractV1.parse({ ...unhashed, contractHash: hashGoalContract(unhashed) });
     await db.goalContract.create({ data: { id: ids.goalRow, contractKey: originalGoal.id, version: originalGoal.version, userId: originalGoal.userId, status: "CONFIRMED", schemaVersion: originalGoal.schemaVersion, goalPayload: originalGoal.goal, preferences: originalGoal.preferences, contractHash: originalGoal.contractHash, createdAt: new Date(originalGoal.createdAt), confirmedAt: new Date(originalGoal.confirmedAt!), constraints: { create: originalGoal.constraints.map(({ type, ...payload }) => ({ type, payload })) }, entityBindings: { create: originalGoal.entityBindings.map((binding) => ({ reference: binding.reference, entityType: binding.entityType, entityId: binding.entityId, resolutionMethod: binding.resolutionMethod, ...(binding.confidence === undefined ? {} : { confidence: binding.confidence }), confirmed: binding.confirmed })) } } }); });
   afterAll(async () => { if (db) { await cleanup(db); await db.$disconnect(); } });
+
+  it("atomically confirms one candidate transition and reloads the same semantic hash", async () => {
+    const draft: IntentDraftV1 = { schemaVersion: "1", originalText: "send $500 to NTU", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "NTU" }, constraints: [], preferences: [], references: [] };
+    const generated = ["it-candidate-ntu", "it-confirmed-goal"];
+    const repository = new PrismaParlanceRepository(db);
+    const messages = new MessageOrchestrationService(repository, { interpretUserRequest: async () => draft }, () => ({ ground: async (input: EntityGroundingInput) => ({ status: "RESOLVED", reference: input.reference, entityType: "BENEFICIARY", entityId: "it-db-ben-ntu", resolutionMethod: "EXACT" }) }), undefined, undefined, () => new Date("2026-09-25T10:00:00Z"), () => generated.shift()!);
+    const awaiting = await messages.receive({ userId: ids.user, text: draft.originalText }, ids.trace); expect(awaiting.status).toBe("AWAITING_GOAL_CONFIRMATION");
+    const [first, second] = await Promise.all([messages.confirm("it-candidate-ntu", ids.trace), messages.confirm("it-candidate-ntu", ids.trace)]);
+    expect(first.goalContract).toEqual(second.goalContract); expect(await db.goalContract.count({ where: { sourceIntentDraftId: "it-candidate-ntu" } })).toBe(1);
+    expect(await db.auditEvent.count({ where: { eventType: "GOAL_CONFIRMED", aggregateId: "it-confirmed-goal" } })).toBe(1); expect(await db.outboxEvent.count({ where: { topic: "GOAL_CONFIRMED", aggregateId: "it-confirmed-goal" } })).toBe(1);
+    const reloaded = await repository.getConfirmedGoal("it-confirmed-goal"); expect(reloaded).not.toBeNull(); expect(hashGoalContract(reloaded!.contract)).toBe(first.goalContract.contractHash);
+  });
 
   it("persists the NTU pipeline, rolls transactions back, enforces idempotency, and reconstructs after reconnect", async () => {
     const repository = new PrismaParlanceRepository(db); const reloadedGoal = await repository.getConfirmedGoal(ids.goal); expect(reloadedGoal).not.toBeNull(); expect(canonicalGoalContractJson(reloadedGoal!.contract)).toBe(canonicalGoalContractJson(originalGoal)); expect(hashGoalContract(reloadedGoal!.contract)).toBe(hashGoalContract(originalGoal)); expect(hashGoalContract(reloadedGoal!.contract)).toBe(originalGoal.contractHash);

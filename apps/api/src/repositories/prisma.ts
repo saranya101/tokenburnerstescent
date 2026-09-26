@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@parlance/db";
-import { ApprovalV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1, type CompilerResultV1 } from "@parlance/contracts";
-import type { ParlanceRepository, StoredApproval, StoredExecution, StoredGoal, StoredPlan } from "../orchestration/ports.js";
+import { ApprovalV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1, IntentDraftV1, type CompilerResultV1 } from "@parlance/contracts";
+import { GoalContractCandidateV1 } from "@parlance/intent-engine";
+import type { GoalConfirmationRepository, ParlanceRepository, StoredApproval, StoredExecution, StoredGoal, StoredGoalCandidate, StoredPlan } from "../orchestration/ports.js";
 import type { ApprovalPayload, NewWebAuthnChallenge, NewWebAuthnCredential, StoredWebAuthnChallenge, StoredWebAuthnCredential, WebAuthnRepository } from "../webauthn/types.js";
 
 const json = (value: unknown): Prisma.InputJsonValue => value as Prisma.InputJsonValue;
@@ -26,13 +28,34 @@ function mapWebAuthnChallenge(row: ChallengeRow): StoredWebAuthnChallenge {
 
 type GoalRow = Prisma.GoalContractGetPayload<{ include: { constraints: true; entityBindings: true } }>;
 function mapGoal(row: GoalRow): StoredGoal {
+  const constraints = row.constraints.slice().sort((left, right) => constraintSequence(left.payload) - constraintSequence(right.payload) || left.id.localeCompare(right.id)).map((item) => {
+    const payload = item.payload as Record<string, unknown>;
+    const semanticPayload = { ...payload };
+    delete semanticPayload.__sequence;
+    return { type: item.type, ...semanticPayload };
+  });
   return { rowId: row.id, contract: GoalContractV1.parse({
     schemaVersion: row.schemaVersion, id: row.contractKey, userId: row.userId, version: row.version,
     ...(row.sourceIntentDraftId ? { sourceIntentDraftId: row.sourceIntentDraftId } : {}), goal: row.goalPayload,
-    constraints: row.constraints.map((item) => ({ type: item.type, ...(item.payload as Record<string, unknown>) })), preferences: row.preferences,
-    entityBindings: row.entityBindings.map((item) => ({ schemaVersion: "1", reference: item.reference, entityType: item.entityType, entityId: item.entityId, resolutionMethod: item.resolutionMethod, ...(item.confidence ? { confidence: item.confidence.toString() } : {}), confirmed: item.confirmed })),
+    constraints, preferences: row.preferences,
+    entityBindings: row.entityBindings.slice().sort((left, right) => left.reference.localeCompare(right.reference) || left.entityType.localeCompare(right.entityType) || left.entityId.localeCompare(right.entityId)).map((item) => ({ schemaVersion: "1", reference: item.reference, entityType: item.entityType, entityId: item.entityId, resolutionMethod: item.resolutionMethod, ...(item.confidence ? { confidence: item.confidence.toString() } : {}), confirmed: item.confirmed })),
     status: row.status, contractHash: row.contractHash, createdAt: row.createdAt.toISOString(), ...(row.confirmedAt ? { confirmedAt: row.confirmedAt.toISOString() } : {}),
   }) };
+}
+
+function constraintSequence(value: Prisma.JsonValue): number {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && typeof value.__sequence === "number" ? value.__sequence : Number.MAX_SAFE_INTEGER;
+}
+
+type IntentDraftRow = Prisma.IntentDraftRecordGetPayload<Record<string, never>>;
+function mapGoalCandidate(row: IntentDraftRow): StoredGoalCandidate {
+  if (typeof row.payload !== "object" || row.payload === null || Array.isArray(row.payload)) throw new Error("GOAL_CANDIDATE_INVALID");
+  const payload = row.payload as Record<string, unknown>;
+  if (payload.kind !== "GOAL_CANDIDATE_V1" || typeof payload.goalContractId !== "string" || typeof payload.version !== "number") throw new Error("GOAL_CANDIDATE_INVALID");
+  return {
+    candidateId: row.id, goalContractId: payload.goalContractId, userId: row.userId, version: payload.version,
+    createdAt: row.createdAt.toISOString(), candidate: GoalContractCandidateV1.parse(payload.candidate),
+  };
 }
 
 type PlanRow = Prisma.FinancialPlanGetPayload<{ include: { steps: true } }>;
@@ -68,12 +91,55 @@ const event = (eventType: string, aggregateType: string, aggregateId: string, tr
   outbox: { topic: eventType, aggregateId, traceId, payload: json(payload) },
 });
 
-export class PrismaParlanceRepository implements ParlanceRepository, WebAuthnRepository {
+export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirmationRepository, WebAuthnRepository {
   constructor(private readonly db: PrismaClient, private readonly options: { afterExecutionUpdate?: () => void } = {}) {}
 
   async getConfirmedGoal(contractId: string): Promise<StoredGoal | null> {
     const row = await this.db.goalContract.findFirst({ where: { contractKey: contractId, status: "CONFIRMED" }, orderBy: { version: "desc" }, include: { constraints: true, entityBindings: true } });
     return row ? mapGoal(row) : null;
+  }
+  async saveGoalCandidate(input: Parameters<GoalConfirmationRepository["saveGoalCandidate"]>[0]): Promise<StoredGoalCandidate> {
+    const intentDraft = IntentDraftV1.parse(input.intentDraft);
+    const candidate = GoalContractCandidateV1.parse(input.candidate);
+    const createdAt = new Date(input.createdAt);
+    const row = await this.db.$transaction(async (tx) => {
+      const conversation = await tx.conversation.create({ data: { userId: input.userId, createdAt, messages: { create: { role: "USER", content: input.originalText, traceId: input.traceId, createdAt } } } });
+      return tx.intentDraftRecord.create({ data: {
+        id: input.candidateId, userId: input.userId, conversationId: conversation.id, schemaVersion: intentDraft.schemaVersion,
+        payload: json({ kind: "GOAL_CANDIDATE_V1", goalContractId: input.goalContractId, version: input.version, intentDraft, candidate }),
+        status: "AWAITING_GOAL_CONFIRMATION", createdAt,
+      } });
+    });
+    return mapGoalCandidate(row);
+  }
+  async getGoalCandidate(candidateId: string): Promise<StoredGoalCandidate | null> {
+    const row = await this.db.intentDraftRecord.findUnique({ where: { id: candidateId } });
+    return row ? mapGoalCandidate(row) : null;
+  }
+  async confirmGoal(input: Parameters<GoalConfirmationRepository["confirmGoal"]>[0]): Promise<StoredGoal> {
+    const contract = GoalContractV1.parse(input.contract);
+    if (contract.status !== "CONFIRMED" || contract.confirmedAt === undefined || contract.sourceIntentDraftId !== input.candidateId) throw new Error("GOAL_CONFIRMATION_INVALID");
+    const confirmedAt = contract.confirmedAt;
+    const row = await this.db.$transaction(async (tx) => {
+      const claimed = await tx.intentDraftRecord.updateMany({ where: { id: input.candidateId, userId: contract.userId, status: "AWAITING_GOAL_CONFIRMATION" }, data: { status: "CONFIRMED" } });
+      if (claimed.count === 0) {
+        const existing = await tx.goalContract.findFirst({ where: { sourceIntentDraftId: input.candidateId, contractKey: contract.id, version: contract.version, status: "CONFIRMED" }, include: { constraints: true, entityBindings: true } });
+        if (existing) return existing;
+        throw new Error("GOAL_CANDIDATE_NOT_CONFIRMABLE");
+      }
+      const goalRowId = randomUUID();
+      const created = await tx.goalContract.create({ data: {
+        id: goalRowId, contractKey: contract.id, version: contract.version, userId: contract.userId, sourceIntentDraftId: input.candidateId,
+        status: "CONFIRMED", schemaVersion: contract.schemaVersion, goalPayload: json(contract.goal), preferences: json(contract.preferences),
+        contractHash: contract.contractHash, createdAt: new Date(contract.createdAt), confirmedAt: new Date(confirmedAt),
+        constraints: { create: contract.constraints.map(({ type, ...payload }, index) => ({ type, payload: json({ ...payload, __sequence: index }) })) },
+        entityBindings: { create: contract.entityBindings.map((binding) => ({ reference: binding.reference, entityType: binding.entityType, entityId: binding.entityId, resolutionMethod: binding.resolutionMethod, ...(binding.confidence === undefined ? {} : { confidence: binding.confidence }), confirmed: binding.confirmed })) },
+      }, include: { constraints: true, entityBindings: true } });
+      const e = event("GOAL_CONFIRMED", "GoalContract", contract.id, input.traceId, input.confirmation);
+      await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox });
+      return created;
+    });
+    return mapGoal(row);
   }
   async saveSnapshot(snapshot: Parameters<ParlanceRepository["saveSnapshot"]>[0], traceId: string): Promise<void> {
     await this.db.bankStateSnapshot.upsert({ where: { userId_stateVersion: { userId: snapshot.userId, stateVersion: snapshot.stateVersion } },
