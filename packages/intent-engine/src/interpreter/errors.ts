@@ -1,4 +1,4 @@
-import type { IntentValidationIssue } from "./types.js";
+import type { IntentValidationIssue, ModelClientDiagnostic } from "./types.js";
 
 export type IntentInterpreterErrorCode = "EMPTY_INPUT" | "MODEL_ERROR" | "INVALID_MODEL_OUTPUT";
 
@@ -9,6 +9,7 @@ export class IntentInterpreterError extends Error {
     readonly code: IntentInterpreterErrorCode,
     message: string,
     readonly validationIssues?: readonly IntentValidationIssue[],
+    readonly modelDiagnostic?: ModelClientDiagnostic,
   ) {
     super(message);
   }

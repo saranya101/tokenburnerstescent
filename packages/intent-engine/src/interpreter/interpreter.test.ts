@@ -63,6 +63,18 @@ it("sanitizes model-client failures into MODEL_ERROR", async () => {
   await expectError(new ModelBackedIntentInterpreter(modelClient).interpretUserRequest({ text: "send money", userId: "u1" }), "MODEL_ERROR");
 });
 
+it("keeps only an explicitly sanitized provider diagnostic on MODEL_ERROR", async () => {
+  const providerError = Object.assign(new Error("internal provider details"), {
+    diagnostic: { status: 400, code: "invalid_json_schema", message: "safe diagnostic" },
+  });
+  const modelClient: IntentModelClient = { generateIntent: vi.fn().mockRejectedValue(providerError) };
+  try {
+    await new ModelBackedIntentInterpreter(modelClient).interpretUserRequest({ text: "send money", userId: "u1" });
+  } catch (error) {
+    expect(error).toMatchObject({ code: "MODEL_ERROR", message: "The intent model could not generate an interpretation.", modelDiagnostic: { status: 400, code: "invalid_json_schema" } });
+  }
+});
+
 it("keeps structured validation issues on invalid model output", async () => {
   expect.assertions(2);
   try {
@@ -70,5 +82,18 @@ it("keeps structured validation issues on invalid model output", async () => {
   } catch (error) {
     expect(error).toBeInstanceOf(IntentInterpreterError);
     expect((error as IntentInterpreterError).validationIssues?.[0]?.keys).toContain("steps");
+  }
+});
+
+it("keeps production INVALID_MODEL_OUTPUT sanitized while retaining safe issue details", async () => {
+  const candidate = { ...deliveryCandidate, goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: 42 }, recipientReference: "NTU" } };
+  const modelClient: IntentModelClient = { generateIntent: vi.fn().mockResolvedValue(candidate) };
+  try {
+    await new ModelBackedIntentInterpreter(modelClient).interpretUserRequest({ text: "send money", userId: "u1" });
+  } catch (error) {
+    expect(error).toMatchObject({ code: "INVALID_MODEL_OUTPUT", message: "The intent model returned an invalid intent draft." });
+    const issues = (error as IntentInterpreterError).validationIssues;
+    expect(JSON.stringify(issues)).not.toContain("42");
+    expect(issues?.some((issue) => issue.path.join(".") === "goal.amount.minorUnits" && issue.expected === "string")).toBe(true);
   }
 });
