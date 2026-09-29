@@ -29,22 +29,22 @@ const goal = () => strict(["selectedGoalType", "goalSlots"], {
   selectedGoalType: {
     type: "string",
     enum: ["DELIVER_MONEY", "ACQUIRE_ASSET", "PAY_BILL", "MOVE_FUNDS"],
-    description: "Select by the requested action and role of the reference, not the first verb alone. ACQUIRE_ASSET means obtaining a named asset for a budget and/or quantity; DELIVER_MONEY means sending money to a recipient. PAY_BILL uses billerReference and optional amount; MOVE_FUNDS uses amount and destinationAccountReference, with optional sourceAccountReference.",
+    description: "Select by the requested financial action and role of the reference, not the first verb or a company-name heuristic alone. ACQUIRE_ASSET means obtaining a named asset for a budget and/or quantity. PAY_BILL means settling a bill, invoice, utility charge, merchant bill, or biller obligation, including language framed as pay <biller/company/service> <amount>; a reference identified as BILLER and being paid normally selects PAY_BILL. DELIVER_MONEY means sending money to a recipient: use it for sending or transferring money to a person, recipient, or beneficiary rather than settling a bill. MOVE_FUNDS uses amount and destinationAccountReference, with optional sourceAccountReference.",
   },
   goalSlots: strict(goalSlotNames, {
     deliverMoney: nullableStrict(["amount", "recipientReference"], {
       amount: money(false, "Money to deliver to the recipient."),
-      recipientReference: { ...id(), description: "Exact human phrase identifying the recipient. Do not invent an ID." },
-    }, "Populate only for DELIVER_MONEY; otherwise null."),
+      recipientReference: { ...id(), description: "Exact human phrase identifying the recipient: the person or beneficiary receiving money. Do not use this field for a biller being paid and do not invent an ID." },
+    }, "Populate only for DELIVER_MONEY when sending or transferring money to a person, recipient, or beneficiary rather than settling a bill; otherwise null."),
     acquireAsset: nullableStrict(["assetReference", "budget", "quantity"], {
       assetReference: { ...id(), description: "Exact human phrase naming the asset being acquired. Do not replace it with money or an ID." },
       budget: money(true, "Money available to acquire the asset; null when the user specifies quantity only."),
       quantity: { type: ["string", "null"], pattern: "^(0|[1-9]\\d*)(\\.\\d+)?$", description: "Non-negative asset quantity; null when the user specifies budget only." },
     }, "Populate only for ACQUIRE_ASSET; otherwise null. This slot never contains amount."),
     payBill: nullableStrict(["billerReference", "amount"], {
-      billerReference: { ...id(), description: "Exact human phrase identifying the biller. Do not invent an ID." },
+      billerReference: { ...id(), description: "Exact human phrase identifying the biller, company, merchant, or service whose bill, invoice, charge, or obligation is being paid. A BILLER reference being paid normally belongs here. Do not invent an ID." },
       amount: money(true, "Money to pay when explicitly stated; otherwise null."),
-    }, "Populate only for PAY_BILL; otherwise null."),
+    }, "Populate only for PAY_BILL when settling a bill, invoice, utility charge, merchant bill, or biller obligation, including pay <biller/company/service> <amount>; otherwise null. Classify from the role and requested financial action, not a company name alone."),
     moveFunds: nullableStrict(["amount", "destinationAccountReference", "sourceAccountReference"], {
       amount: money(false, "Money to move between accounts."),
       destinationAccountReference: { ...id(), description: "Exact human phrase identifying the destination account. Do not invent an ID." },
@@ -68,7 +68,10 @@ const constraintSlots = () => strict(constraintSlotNames, {
     description: "Every item must be an explicitly prohibited account, such as an account the user said not to use or touch. Use an empty array when none was explicitly prohibited. Never invent an account or use an empty string or another sentinel for absence.",
     items: id(),
   },
-  maxLockInDays: { type: ["integer", "null"], minimum: 0, description: "Populate only when the user explicitly states a maximum lock-in duration or explicitly requires zero lock-in. Null means no lock-in restriction was stated. Zero means the user explicitly requires zero lock-in days or no lock-in whatsoever; numeric zero is a real constraint and must never be used as a default or substitute for absence." },
+  maxLockInDays: nullableStrict(["days", "evidence"], {
+    days: { type: "integer", minimum: 0, description: "Maximum lock-in days explicitly stated by the user. Zero is a real zero-lock-in constraint, never an absence sentinel." },
+    evidence: { type: "string", minLength: 1, description: "Non-empty exact phrase copied verbatim from the user's input that explicitly states lock-in or locked-duration semantics." },
+  }, "Non-null only when the user explicitly states a lock-in restriction. Null means no lock-in restriction was stated. Zero days is valid only with verbatim evidence explicitly requiring zero lock-in or no lock-in; never use zero as a default or substitute for absence."),
 });
 
 const preferenceSlots = () => strict(preferenceSlotNames, {
@@ -109,6 +112,16 @@ export interface TokenHubTransport {
   createCompletion(request: TokenHubCompletionRequest): Promise<{ content: string | null | undefined }>;
 }
 
+export interface TokenHubConstraintProjectionDiagnostic {
+  readonly rawMaxLockInDays: unknown;
+  readonly projectedConstraints: unknown;
+}
+
+/** Opt-in development diagnostics. Never receives headers, credentials, user text, or the full candidate. */
+export interface TokenHubDevelopmentDiagnostics {
+  readonly onConstraintProjection?: (diagnostic: TokenHubConstraintProjectionDiagnostic) => void;
+}
+
 class OpenAITokenHubTransport implements TokenHubTransport {
   private readonly client: OpenAI;
   constructor(config: TokenHubConfig) {
@@ -129,7 +142,11 @@ export class TokenHubProviderError extends Error {
 /** OpenAI-compatible TokenHub adapter. Its parsed output remains untrusted. */
 export class TokenHubIntentModelClient implements IntentModelClient {
   private readonly transport: TokenHubTransport;
-  constructor(private readonly config: TokenHubConfig, transport?: TokenHubTransport) {
+  constructor(
+    private readonly config: TokenHubConfig,
+    transport?: TokenHubTransport,
+    private readonly developmentDiagnostics?: TokenHubDevelopmentDiagnostics,
+  ) {
     this.transport = transport ?? new OpenAITokenHubTransport(config);
   }
   async generateIntent(input: IntentModelInput): Promise<unknown> {
@@ -146,7 +163,14 @@ export class TokenHubIntentModelClient implements IntentModelClient {
       }
       try {
         const transportCandidate: unknown = JSON.parse(response.content);
-        return projectTokenHubTransportCandidate(transportCandidate);
+        const projected = projectTokenHubTransportCandidate(transportCandidate, input.text);
+        this.developmentDiagnostics?.onConstraintProjection?.({
+          rawMaxLockInDays: isRecord(transportCandidate) && isRecord(transportCandidate.constraints)
+            ? transportCandidate.constraints.maxLockInDays
+            : undefined,
+          projectedConstraints: isRecord(projected) ? projected.constraints : undefined,
+        });
+        return projected;
       } catch {
         throw new TokenHubProviderError("TokenHub returned invalid JSON.");
       }
@@ -159,11 +183,11 @@ export class TokenHubIntentModelClient implements IntentModelClient {
 }
 
 /** Projects explicit provider slots and otherwise removes only null-valued object fields. */
-export function projectTokenHubTransportCandidate(value: unknown): unknown {
+export function projectTokenHubTransportCandidate(value: unknown, originalText?: string): unknown {
   if (!isRecord(value)) return stripNullFields(value);
   const projected = stripNullFields(value) as Record<string, unknown>;
   if (Object.hasOwn(value, "goal")) projected.goal = projectGoalSlots(value.goal);
-  if (Object.hasOwn(value, "constraints")) projected.constraints = projectConstraintSlots(value.constraints);
+  if (Object.hasOwn(value, "constraints")) projected.constraints = projectConstraintSlots(value.constraints, originalText);
   if (Object.hasOwn(value, "preferences")) projected.preferences = projectPreferenceSlots(value.preferences);
   return projected;
 }
@@ -182,7 +206,7 @@ function projectGoalSlots(value: unknown): unknown {
   return { type: value.selectedGoalType, ...(stripNullFields(selected) as Record<string, unknown>) };
 }
 
-function projectConstraintSlots(value: unknown): unknown {
+function projectConstraintSlots(value: unknown, originalText: string | undefined): unknown {
   if (!isCompleteSlotObject(value, constraintSlotNames)) return stripNullFields(value);
   if (!Array.isArray(value.minimumAvailableBalances) || !Array.isArray(value.excludedAccounts)) return stripNullFields(value);
   if (!value.minimumAvailableBalances.every((entry) => isCompleteSlotObject(entry, ["money", "accountReference"]))) return stripNullFields(value);
@@ -200,8 +224,23 @@ function projectConstraintSlots(value: unknown): unknown {
   for (const accountReference of value.excludedAccounts) {
     constraints.push({ type: "EXCLUDED_ACCOUNT", accountReference: stripNullFields(accountReference) });
   }
-  if (value.maxLockInDays !== null) constraints.push({ type: "MAX_LOCK_IN_DAYS", days: stripNullFields(value.maxLockInDays) });
+  if (value.maxLockInDays !== null) {
+    if (!isCompleteSlotObject(value.maxLockInDays, ["days", "evidence"])) return stripNullFields(value);
+    const evidence = value.maxLockInDays.evidence;
+    if (
+      typeof evidence !== "string"
+      || evidence.trim().length === 0
+      || originalText === undefined
+      || !originalText.includes(evidence)
+      || !explicitlyConcernsLockIn(evidence)
+    ) return stripNullFields(value);
+    constraints.push({ type: "MAX_LOCK_IN_DAYS", days: stripNullFields(value.maxLockInDays.days) });
+  }
   return constraints;
+}
+
+function explicitlyConcernsLockIn(evidence: string): boolean {
+  return /\b(?:lock[ -]?in|locked)\b/i.test(evidence);
 }
 
 function projectPreferenceSlots(value: unknown): unknown {

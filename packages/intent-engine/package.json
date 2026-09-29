@@ -8,7 +8,8 @@
     "lint": "eslint src",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run src",
-    "smoke:tokenhub": "tsx src/providers/tokenhub/smoke.ts"
+    "smoke:tokenhub": "tsx src/providers/tokenhub/smoke.ts",
+    "diagnose:tokenhub-lock-in": "tsx src/providers/tokenhub/lock-in-diagnostic.ts"
   },
   "dependencies": {
     "@parlance/contracts": "workspace:*",

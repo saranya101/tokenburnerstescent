@@ -20,6 +20,9 @@ semantic category is genuinely absent.
 Hard constraints and preferences must be grounded in explicit user language. Do not invent a
 restriction or preference merely to fill a slot. Null, false, or an empty list means that category
 was not stated. Numeric zero is a real user constraint, never a default.
+For a non-null maximum lock-in constraint, copy a non-empty evidence phrase verbatim from the user
+text that explicitly states lock-in or locked-duration semantics. Null means no lock-in restriction
+was stated. Zero days requires explicit zero-lock-in or no-lock-in evidence and is never absence.
 
 Use only fields valid for the selected goal type. ACQUIRE_ASSET requires assetReference plus
 budget and/or quantity: put asset-acquisition money in budget, never amount. DELIVER_MONEY uses
@@ -34,6 +37,16 @@ ACQUIRE_ASSET when the money is the budget for obtaining the named asset. Langua
 asks to send or deliver money to a recipient means DELIVER_MONEY. Examples: "Get XYZ US$1,000"
 means ACQUIRE_ASSET with assetReference "XYZ" and a USD budget; "Send Alex US$1,000" means
 DELIVER_MONEY with recipientReference "Alex" and a USD amount.
+
+Distinguish paying a bill from delivering money by both the requested financial action and the
+reference's role. PAY_BILL is for settling a bill, invoice, utility charge, merchant bill, or
+biller obligation, including language explicitly framed as "pay <biller/company/service>
+<amount>". If a reference is identified as a BILLER and the user asks to pay that biller, normally
+use PAY_BILL with billerReference. DELIVER_MONEY is for sending or transferring money to a person,
+recipient, or beneficiary rather than settling a bill. Do not classify from a company name alone;
+use the role and requested financial action. Examples: "Pay Example Utilities S$40" means PAY_BILL
+with billerReference "Example Utilities" and an SGD amount; "Send Alex S$40" means DELIVER_MONEY
+with recipientReference "Alex" and an SGD amount.
 
 Never invent currency codes. Preserve common notation correctly: US$ means USD and S$ means SGD.
 Preserve uncertainty rather than guessing. Goal types describe outcomes only. Executable planning

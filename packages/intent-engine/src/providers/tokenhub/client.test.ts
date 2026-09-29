@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { IntentDraftV1, type IntentDraftV1 as IntentDraft } from "@parlance/contracts";
+import { ModelBackedIntentInterpreter } from "../../interpreter/interpreter.js";
 import { INTENT_PROMPT_VERSION, INTENT_V1_SYSTEM_PROMPT } from "../../prompts/intent-v1.js";
 import { INTENT_CANDIDATE_SCHEMA, projectTokenHubTransportCandidate, TokenHubIntentModelClient, TokenHubProviderError, type TokenHubTransport } from "./client.js";
 import { TokenHubConfigurationError, loadTokenHubConfig } from "./config.js";
@@ -135,22 +136,27 @@ it("requires all four goal slots and allows every unused variant to be null", ()
 });
 
 it("requires one semantic provider slot for every actual constraint and preference variant", () => {
-  const constraints = INTENT_CANDIDATE_SCHEMA.properties.constraints as unknown as { required: readonly string[]; additionalProperties: boolean; properties: Record<string, { type?: string | readonly string[]; description?: string }> };
+  const constraints = INTENT_CANDIDATE_SCHEMA.properties.constraints as unknown as { required: readonly string[]; additionalProperties: boolean; properties: Record<string, { type?: string | readonly string[]; description?: string; required?: readonly string[]; additionalProperties?: boolean; properties?: Record<string, { type?: string; minimum?: number; minLength?: number; description?: string }> }> };
   const preferences = INTENT_CANDIDATE_SCHEMA.properties.preferences as unknown as { required: readonly string[]; additionalProperties: boolean; properties: Record<string, { type?: string | readonly string[]; description?: string }> };
   const references = INTENT_CANDIDATE_SCHEMA.properties.references as unknown as { items: { required: readonly string[]; additionalProperties: boolean; properties: Record<string, { type?: string | readonly string[] }> } };
   expect(constraints).toMatchObject({ required: ["maxTotalCost", "minimumAvailableBalances", "excludedAccounts", "maxLockInDays"], additionalProperties: false });
   expect(constraints.properties.maxTotalCost?.type).toEqual(["object", "null"]);
   expect(constraints.properties.minimumAvailableBalances?.type).toBe("array");
   expect(constraints.properties.excludedAccounts?.type).toBe("array");
-  expect(constraints.properties.maxLockInDays?.type).toEqual(["integer", "null"]);
+  expect(constraints.properties.maxLockInDays?.type).toEqual(["object", "null"]);
+  expect(constraints.properties.maxLockInDays?.required).toEqual(["days", "evidence"]);
+  expect(constraints.properties.maxLockInDays?.additionalProperties).toBe(false);
+  expect(constraints.properties.maxLockInDays?.properties?.days).toMatchObject({ type: "integer", minimum: 0 });
+  expect(constraints.properties.maxLockInDays?.properties?.evidence).toMatchObject({ type: "string", minLength: 1 });
   expect(constraints.properties.maxTotalCost?.description).toContain("overall spending or cost ceiling");
   expect(constraints.properties.excludedAccounts?.description).toContain("not to use or touch");
   expect(constraints.properties.maxTotalCost?.description).toContain("explicitly stated");
   expect(constraints.properties.minimumAvailableBalances?.description).toContain("explicitly stated");
   expect(constraints.properties.excludedAccounts?.description).toContain("explicitly prohibited");
   expect(constraints.properties.maxLockInDays?.description).toContain("Null means no lock-in restriction was stated");
-  expect(constraints.properties.maxLockInDays?.description).toContain("Zero means the user explicitly requires zero lock-in days");
-  expect(constraints.properties.maxLockInDays?.description).toContain("must never be used as a default");
+  expect(constraints.properties.maxLockInDays?.description).toContain("Zero days is valid only with verbatim evidence");
+  expect(constraints.properties.maxLockInDays?.description).toContain("never use zero as a default");
+  expect(constraints.properties.maxLockInDays?.properties?.evidence?.description).toContain("exact phrase copied verbatim");
   expect(preferences).toMatchObject({ required: ["minimizeTotalCost", "minimizeFx", "fastest", "preferredAccounts"], additionalProperties: false });
   expect(preferences.properties.minimizeTotalCost?.description).toContain("explicitly prefers");
   expect(preferences.properties.minimizeFx?.description).toContain("explicitly prefers");
@@ -185,9 +191,9 @@ it("projects every constraint slot in deterministic canonical order without chan
       maxTotalCost: { currency: "SGD", minorUnits: "690000" },
       minimumAvailableBalances: [{ money: { currency: "USD", minorUnits: "12345" }, accountReference: "Reserve Account" }],
       excludedAccounts: ["Rainy Day", "Holiday Fund"],
-      maxLockInDays: 30,
+      maxLockInDays: { days: 30, evidence: "lock-in no more than 30 days" },
     }),
-  })).toEqual({
+  }, "Keep Reserve Account funded with lock-in no more than 30 days")).toEqual({
     constraints: [
       { type: "MAX_TOTAL_COST", money: { currency: "SGD", minorUnits: "690000" } },
       { type: "MIN_AVAILABLE_BALANCE", money: { currency: "USD", minorUnits: "12345" }, accountReference: "Reserve Account" },
@@ -200,8 +206,91 @@ it("projects every constraint slot in deterministic canonical order without chan
 
 it("preserves an explicitly emitted zero-day lock-in constraint", () => {
   expect(projectTokenHubTransportCandidate({
-    constraints: transportConstraints({ maxLockInDays: 0 }),
-  })).toEqual({ constraints: [{ type: "MAX_LOCK_IN_DAYS", days: 0 }] });
+    constraints: transportConstraints({ maxLockInDays: { days: 0, evidence: "no lock-in" } }),
+  }, "Acquire Example Deposit with no lock-in")).toEqual({ constraints: [{ type: "MAX_LOCK_IN_DAYS", days: 0 }] });
+});
+
+it.each([
+  "Send USD 7000.00 to Nanyang Technological University",
+  "Send Alex USD 10 from Main",
+])("does not project an unstated lock-in constraint for unrelated transfer: %s", (originalText) => {
+  expect(projectTokenHubTransportCandidate({ constraints: transportConstraints() }, originalText))
+    .toEqual({ constraints: [] });
+});
+
+it("validates the exact unrelated transfer without MAX_LOCK_IN_DAYS", async () => {
+  const originalText = "Send USD 7000.00 to Nanyang Technological University";
+  const transportCandidate = {
+    schemaVersion: "1",
+    goal: {
+      selectedGoalType: "DELIVER_MONEY",
+      goalSlots: {
+        deliverMoney: { amount: { currency: "USD", minorUnits: "700000" }, recipientReference: "Nanyang Technological University" },
+        acquireAsset: null,
+        payBill: null,
+        moveFunds: null,
+      },
+    },
+    constraints: transportConstraints(),
+    preferences: transportPreferences(),
+    references: [{ reference: "Nanyang Technological University", expectedEntityType: "BENEFICIARY" }],
+  };
+  const interpreter = new ModelBackedIntentInterpreter(
+    new TokenHubIntentModelClient(config, transportReturning(JSON.stringify(transportCandidate))),
+  );
+  const draft = await interpreter.interpretUserRequest({ text: originalText, userId: "regression" });
+  expect(draft.goal).toEqual({
+    type: "DELIVER_MONEY",
+    amount: { currency: "USD", minorUnits: "700000" },
+    recipientReference: "Nanyang Technological University",
+  });
+  expect(draft.constraints).toEqual([]);
+});
+
+it("projects evidence-backed zero-day and thirty-day lock-in constraints exactly", () => {
+  expect(projectTokenHubTransportCandidate({
+    constraints: transportConstraints({ maxLockInDays: { days: 0, evidence: "zero-lock-in" } }),
+  }, "Use only a zero-lock-in deposit")).toEqual({ constraints: [{ type: "MAX_LOCK_IN_DAYS", days: 0 }] });
+  expect(projectTokenHubTransportCandidate({
+    constraints: transportConstraints({ maxLockInDays: { days: 30, evidence: "lock-in no more than 30 days" } }),
+  }, "Choose a deposit with lock-in no more than 30 days")).toEqual({ constraints: [{ type: "MAX_LOCK_IN_DAYS", days: 30 }] });
+});
+
+it.each([
+  ["legacy numeric zero", 0, "Send USD 7000.00 to Nanyang Technological University"],
+  ["missing evidence", { days: 0 }, "Use a deposit with no lock-in"],
+  ["empty evidence", { days: 0, evidence: "" }, "Use a deposit with no lock-in"],
+  ["unrelated evidence", { days: 0, evidence: "Send USD 7000.00" }, "Send USD 7000.00 to Nanyang Technological University"],
+  ["evidence absent from original text", { days: 0, evidence: "no lock-in" }, "Send USD 7000.00 to Nanyang Technological University"],
+] as const)("leaves %s unprojected for final IntentDraftV1 rejection", (_name, maxLockInDays, originalText) => {
+  const projected = projectTokenHubTransportCandidate({
+    constraints: transportConstraints({ maxLockInDays }),
+  }, originalText) as { constraints: unknown };
+  expect(Array.isArray(projected.constraints)).toBe(false);
+  expect(IntentDraftV1.safeParse({
+    schemaVersion: "1",
+    originalText,
+    goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "700000" }, recipientReference: "Nanyang Technological University" },
+    constraints: projected.constraints,
+    preferences: [],
+    references: [{ reference: "Nanyang Technological University", expectedEntityType: "BENEFICIARY" }],
+  }).success).toBe(false);
+});
+
+it("surfaces unsupported lock-in evidence as INVALID_MODEL_OUTPUT", async () => {
+  const originalText = "Acquire Example Deposit with no timing restriction";
+  const transportCandidate = {
+    schemaVersion: "1",
+    goal: transportGoal(),
+    constraints: transportConstraints({ maxLockInDays: { days: 0, evidence: "no timing restriction" } }),
+    preferences: transportPreferences(),
+    references: [{ reference: "XYZ", expectedEntityType: "ASSET" }],
+  };
+  const interpreter = new ModelBackedIntentInterpreter(
+    new TokenHubIntentModelClient(config, transportReturning(JSON.stringify(transportCandidate))),
+  );
+  await expect(interpreter.interpretUserRequest({ text: originalText, userId: "regression" }))
+    .rejects.toMatchObject({ code: "INVALID_MODEL_OUTPUT" });
 });
 
 it("does not infer constraints from originalText or audit references", () => {
@@ -326,6 +415,27 @@ it("distinguishes acquiring an asset for a budget from sending money to a recipi
   expect(INTENT_V1_SYSTEM_PROMPT).toContain('ACQUIRE_ASSET with assetReference "XYZ" and a USD budget');
   expect(INTENT_V1_SYSTEM_PROMPT).toContain('"Send Alex US$1,000"');
   expect(INTENT_V1_SYSTEM_PROMPT).toContain('DELIVER_MONEY with recipientReference "Alex" and a USD amount');
+});
+
+it("distinguishes paying a biller from delivering money to a beneficiary", () => {
+  const selectedGoalType = goalSchema().properties.selectedGoalType as { description?: string };
+  const slots = goalSlotsSchema().properties as Record<string, { description?: string; properties?: Record<string, { description?: string }> }>;
+
+  expect(INTENT_V1_SYSTEM_PROMPT).toContain("PAY_BILL is for settling a bill, invoice, utility charge, merchant bill, or\nbiller obligation");
+  expect(INTENT_V1_SYSTEM_PROMPT).toContain("reference is identified as a BILLER");
+  expect(INTENT_V1_SYSTEM_PROMPT).toContain("DELIVER_MONEY is for sending or transferring money to a person");
+  expect(INTENT_V1_SYSTEM_PROMPT).toContain("Do not classify from a company name alone");
+  expect(INTENT_V1_SYSTEM_PROMPT).toContain('"Pay Example Utilities S$40" means PAY_BILL');
+  expect(INTENT_V1_SYSTEM_PROMPT).toContain('billerReference "Example Utilities" and an SGD amount');
+  expect(INTENT_V1_SYSTEM_PROMPT).toContain('"Send Alex S$40" means DELIVER_MONEY');
+  expect(INTENT_V1_SYSTEM_PROMPT).toContain('recipientReference "Alex" and an SGD amount');
+
+  expect(selectedGoalType.description).toContain("settling a bill, invoice, utility charge, merchant bill, or biller obligation");
+  expect(selectedGoalType.description).toContain("person, recipient, or beneficiary rather than settling a bill");
+  expect(slots.payBill?.description).toContain("pay <biller/company/service> <amount>");
+  expect(slots.payBill?.properties?.billerReference?.description).toContain("A BILLER reference being paid normally belongs here");
+  expect(slots.deliverMoney?.description).toContain("person, recipient, or beneficiary rather than settling a bill");
+  expect(slots.deliverMoney?.properties?.recipientReference?.description).toContain("Do not use this field for a biller being paid");
 });
 
 it("does not permit an empty goal under its intended provider structure", () => {
