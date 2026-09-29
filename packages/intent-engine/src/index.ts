@@ -1,10 +1,10 @@
 import type { BankStateSnapshotV1, CompilerResultV1, EntityBinding, IntentDraftV1 } from "@parlance/contracts";
-export type { IntentInterpreter, IntentModelClient, IntentModelInput, InterpretUserRequestInput, IntentValidationIssue } from "./interpreter/types.js";
+export type { IntentInterpreter, IntentModelClient, IntentModelInput, InterpretUserRequestInput, IntentValidationIssue, ModelClientDiagnostic } from "./interpreter/types.js";
 export { IntentInterpreterError } from "./interpreter/errors.js";
 export { ModelBackedIntentInterpreter } from "./interpreter/interpreter.js";
 export { INTENT_PROMPT_VERSION } from "./prompts/intent-v1.js";
-export { createTokenHubIntentInterpreter, TokenHubIntentModelClient, TokenHubProviderError, loadTokenHubConfig, TokenHubConfigurationError } from "./providers/tokenhub/index.js";
-export type { TokenHubConfig } from "./providers/tokenhub/index.js";
+export { createTokenHubIntentInterpreter, projectTokenHubTransportCandidate, TokenHubIntentModelClient, TokenHubProviderError, loadTokenHubConfig, TokenHubConfigurationError } from "./providers/tokenhub/index.js";
+export type { TokenHubConfig, TokenHubIntentInterpreterOptions, TokenHubThinkingMode } from "./providers/tokenhub/index.js";
 export type { EntityGrounder, EntityGroundingInput, EntityGroundingResult, EntityRepository, GroundableEntityType, GroundingCandidate, GroundingEntity, GroundingResolutionMethod } from "./grounding/types.js";
 export { DeterministicEntityGrounder } from "./grounding/grounder.js";
 export { EntityGroundingError } from "./grounding/errors.js";

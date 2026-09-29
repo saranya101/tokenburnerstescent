@@ -16,6 +16,19 @@ export interface IntentModelClient {
   generateIntent(input: IntentModelInput): Promise<unknown>;
 }
 
+/** Optional, provider-sanitized diagnostic data for development tooling. Never include headers or secrets. */
+export interface ModelClientDiagnostic {
+  status?: number;
+  code?: string;
+  type?: string;
+  message?: string;
+  requestId?: string;
+}
+
+export interface ModelClientDiagnosticError extends Error {
+  diagnostic?: ModelClientDiagnostic;
+}
+
 export interface IntentInterpreter {
   interpretUserRequest(input: InterpretUserRequestInput): Promise<IntentDraftV1>;
 }
@@ -25,4 +38,6 @@ export type IntentValidationIssue = {
   code: string;
   message: string;
   keys?: readonly string[];
+  expected?: string;
+  received?: string;
 };

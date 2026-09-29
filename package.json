@@ -10,7 +10,8 @@
     "test": "turbo test && pnpm compiler:test",
     "compiler:dev": "cd services/compiler && uvicorn app.main:app --reload --port 8001",
     "compiler:lint": "cd services/compiler && ./.venv/bin/ruff check . && ./.venv/bin/ruff format --check .",
-    "compiler:test": "cd services/compiler && ./.venv/bin/pytest"
+    "compiler:test": "cd services/compiler && ./.venv/bin/pytest",
+    "eval:intent:live": "pnpm --filter @parlance/intent-engine exec tsx ../../evaluation/intent-live/cli.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

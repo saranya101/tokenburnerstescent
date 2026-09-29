@@ -17,3 +17,4 @@ __pycache__/
 .env.*
 !.env.example
 .DS_Store
+evaluation/results/tokenhub-intent-*.json
