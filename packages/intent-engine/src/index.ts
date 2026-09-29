@@ -16,6 +16,9 @@ export { DeterministicIntentAmbiguityDetector } from "./ambiguity/detector.js";
 export type { GoalContractBuildInput, GoalContractBuilder, GoalContractMetadata, GoalContractValidationIssue } from "./goal-contract/types.js";
 export { DeterministicGoalContractBuilder } from "./goal-contract/builder.js";
 export { GoalContractBuilderError } from "./goal-contract/errors.js";
+export type { DeterministicExplanationV1, ExplanationInput, ExplanationKind, ExplanationRenderer, ExplanationStatement, ExplanationStatementKind } from "./explanation/types.js";
+export { DeterministicExplanationRenderer, renderExplanationText } from "./explanation/renderer.js";
+export { ExplanationInputError } from "./explanation/errors.js";
 export interface FinancialAmbiguityV1 { field: string; reason: string; candidateEntityIds: readonly string[]; }
 export interface AmbiguityDetector { detectFinancialAmbiguity(draft: IntentDraftV1, entities: readonly EntityBinding[], state?: BankStateSnapshotV1): Promise<readonly FinancialAmbiguityV1[]>; }
 export interface CompilerExplainer { explainCompilerResult(result: CompilerResultV1): Promise<string>; }
