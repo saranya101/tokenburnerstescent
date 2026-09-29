@@ -46,6 +46,10 @@ export interface AdversarialEvaluationCase {
   readonly expected?: IntentSemanticRequirements;
   readonly forbidden: AdversarialForbiddenOutcomes;
   readonly expectedDisposition: AdversarialDisposition;
+  /** Additional equally safe outcomes accepted for this adversarial input. */
+  readonly acceptedDispositions?: readonly AdversarialDisposition[];
+  /** Interpreter-stage expectation when the main disposition depends on later orchestration. */
+  readonly interpreterExpectedDisposition?: "VALID_INTENT" | "INVALID_MODEL_OUTPUT" | "REJECT_EXECUTABLE_SEMANTICS";
 }
 
 export interface AdversarialEvaluationObservation {

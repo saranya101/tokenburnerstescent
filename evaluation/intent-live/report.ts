@@ -29,6 +29,8 @@ export function formatBenchmarkSummary(
     "",
     "Reliability:",
     `  INVALID_MODEL_OUTPUT: ${reliability.invalidModelOutputCount}`,
+    `    expected: ${reliability.expectedInvalidModelOutputCount}`,
+    `    unexpected: ${reliability.unexpectedInvalidModelOutputCount}`,
     `  Provider/model errors: ${reliability.providerModelErrorCount}`,
     "",
     "Latency:",

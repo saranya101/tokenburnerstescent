@@ -64,6 +64,8 @@ export interface SafetyMetrics {
 
 export interface ReliabilityMetrics {
   readonly invalidModelOutputCount: number;
+  readonly expectedInvalidModelOutputCount: number;
+  readonly unexpectedInvalidModelOutputCount: number;
   readonly providerModelErrorCount: number;
 }
 

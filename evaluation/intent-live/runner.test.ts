@@ -105,7 +105,12 @@ it("aggregates pass rates, safety counts, reliability, and latency by case", () 
       inventedForbiddenHardConstraints: 1,
       missingRequiredHardConstraints: 1,
     },
-    reliability: { invalidModelOutputCount: 1, providerModelErrorCount: 1 },
+    reliability: {
+      invalidModelOutputCount: 1,
+      expectedInvalidModelOutputCount: 0,
+      unexpectedInvalidModelOutputCount: 1,
+      providerModelErrorCount: 1,
+    },
     latency: { minMs: 10, medianMs: 25, p95Ms: 40, maxMs: 40 },
   });
 });
@@ -156,7 +161,7 @@ it("counts provider errors and retains only sanitized diagnostics", async () => 
   });
 });
 
-it("classifies sanitized executable validation keys without needing a raw candidate", async () => {
+it("still counts sanitized executable validation keys when a safe-invalid fixture receives executable semantics", async () => {
   const interpreter = new FakeInterpreter(async () => {
     throw new IntentInterpreterError(
       "INVALID_MODEL_OUTPUT",
@@ -170,8 +175,62 @@ it("classifies sanitized executable validation keys without needing a raw candid
     configuration: safeConfiguration,
     now: () => 0,
   });
-  expect(report.cases[0]).toMatchObject({ status: "PASS", actualDisposition: "REJECT_EXECUTABLE_SEMANTICS" });
+  expect(report.cases[0]).toMatchObject({ status: "FAIL", actualDisposition: "REJECT_EXECUTABLE_SEMANTICS" });
   expect(report.aggregate.safety.executableSemanticsViolations).toBe(1);
+});
+
+it("counts expected and unexpected INVALID_MODEL_OUTPUT separately", async () => {
+  const interpreter = new FakeInterpreter(async () => {
+    throw new IntentInterpreterError(
+      "INVALID_MODEL_OUTPUT",
+      "The intent model returned an invalid intent draft.",
+      [{ path: ["goal"], code: "invalid_union", message: "Invalid input" }],
+    );
+  });
+  const expectedReport = await runIntentBenchmark({
+    interpreter,
+    selection: "action-fx-convert-only",
+    configuration: safeConfiguration,
+    now: () => 0,
+  });
+  const unexpectedReport = await runIntentBenchmark({
+    interpreter,
+    selection: "happy-deliver-money",
+    configuration: safeConfiguration,
+    now: () => 0,
+  });
+  expect(expectedReport.aggregate.reliability).toMatchObject({
+    invalidModelOutputCount: 1,
+    expectedInvalidModelOutputCount: 1,
+    unexpectedInvalidModelOutputCount: 0,
+  });
+  expect(unexpectedReport.aggregate.reliability).toMatchObject({
+    invalidModelOutputCount: 1,
+    expectedInvalidModelOutputCount: 0,
+    unexpectedInvalidModelOutputCount: 1,
+  });
+});
+
+it("uses the interpreter-stage disposition for orchestration-only ambiguity fixtures", async () => {
+  const interpreter = new FakeInterpreter(async (input) => ({
+    schemaVersion: "1",
+    originalText: input.text,
+    goal: { type: "MOVE_FUNDS", amount: { currency: "SGD", minorUnits: "5000" }, destinationAccountReference: "that savings one" },
+    constraints: [],
+    preferences: [],
+    references: [{ reference: "that savings one", expectedEntityType: "ACCOUNT" }],
+  }));
+  const report = await runIntentBenchmark({
+    interpreter,
+    selection: "messy-ambiguous-move",
+    configuration: safeConfiguration,
+    now: () => 0,
+  });
+  expect(report.cases[0]).toMatchObject({
+    expectedDisposition: "VALID_INTENT",
+    actualDisposition: "VALID_INTENT",
+    status: "PASS",
+  });
 });
 
 it("excludes and redacts secret configuration from JSON reports", () => {

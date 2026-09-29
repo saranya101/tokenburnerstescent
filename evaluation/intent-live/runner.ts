@@ -118,6 +118,12 @@ export function aggregateBenchmarkResults(results: readonly BenchmarkCaseResult[
     },
     reliability: {
       invalidModelOutputCount: results.filter((result) => result.actualDisposition === "INVALID_MODEL_OUTPUT").length,
+      expectedInvalidModelOutputCount: results.filter((result) =>
+        result.actualDisposition === "INVALID_MODEL_OUTPUT" && result.status === "PASS"
+      ).length,
+      unexpectedInvalidModelOutputCount: results.filter((result) =>
+        result.actualDisposition === "INVALID_MODEL_OUTPUT" && result.status === "FAIL"
+      ).length,
       providerModelErrorCount: results.filter((result) => result.actualDisposition === "PROVIDER_ERROR").length,
     },
     latency: calculateLatencyMetrics(results.map((result) => result.latencyMs)),
@@ -160,11 +166,12 @@ function evaluateValidatedDraft(
     });
   }
 
-  const evaluation = evaluateAdversarialCandidate(fixture.evaluationCase, { candidate: draft });
+  const interpreterCase = interpreterStageCase(fixture.evaluationCase);
+  const evaluation = evaluateAdversarialCandidate(interpreterCase, { candidate: draft });
   const failures = failedAssertions(evaluation.assertions);
   return caseResult({
     fixture,
-    expectedDisposition: fixture.evaluationCase.expectedDisposition,
+    expectedDisposition: formatExpectedDispositions(interpreterCase),
     actualDisposition: evaluation.actualDisposition,
     passed: evaluation.status === "PASS",
     failures,
@@ -179,7 +186,13 @@ function evaluateInterpreterFailure(
   error: unknown,
   latencyMs: number,
 ): BenchmarkCaseResult {
-  const expectedDisposition = fixture.dataset === "semantic" ? "VALID_INTENT" : fixture.evaluationCase.expectedDisposition;
+  const adversarialCase = fixture.dataset === "adversarial"
+    ? interpreterStageCase(fixture.evaluationCase)
+    : undefined;
+  const expectedDispositions = adversarialCase === undefined
+    ? ["VALID_INTENT"]
+    : [adversarialCase.expectedDisposition, ...(adversarialCase.acceptedDispositions ?? [])];
+  const expectedDisposition = expectedDispositions.join(" | ");
   if (error instanceof IntentInterpreterError) {
     const diagnostic: SafeBenchmarkFailureDiagnostic = {
       kind: error.code,
@@ -200,7 +213,7 @@ function evaluateInterpreterFailure(
       : hasExecutableOrAuthorityFinding
         ? "REJECT_EXECUTABLE_SEMANTICS"
         : "INVALID_MODEL_OUTPUT";
-    const passed = actualDisposition === expectedDisposition;
+    const passed = expectedDispositions.includes(actualDisposition);
     return {
       fixtureId: fixture.evaluationCase.id,
       dataset: fixture.dataset,
@@ -229,6 +242,19 @@ function evaluateInterpreterFailure(
     diagnostic: { kind: "UNEXPECTED_ERROR", message: "The benchmark case failed without a sanitized interpreter diagnostic." },
     inputText: fixture.evaluationCase.inputText,
   };
+}
+
+function interpreterStageCase(evaluationCase: AdversarialEvaluationCase): AdversarialEvaluationCase {
+  if (evaluationCase.interpreterExpectedDisposition === undefined) return evaluationCase;
+  return {
+    ...evaluationCase,
+    expectedDisposition: evaluationCase.interpreterExpectedDisposition,
+    acceptedDispositions: [],
+  };
+}
+
+function formatExpectedDispositions(evaluationCase: AdversarialEvaluationCase): string {
+  return [evaluationCase.expectedDisposition, ...(evaluationCase.acceptedDispositions ?? [])].join(" | ");
 }
 
 function findingsFromValidationIssues(
