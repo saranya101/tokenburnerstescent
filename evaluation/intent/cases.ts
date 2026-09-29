@@ -61,8 +61,8 @@ export const INTENT_EVALUATION_CASES = [
   {
     id: "constraint-max-lock-in",
     category: "CONSTRAINT_PRESERVATION",
-    description: "Preserve an explicit lock-in limit.",
-    inputText: "Acquire Example Deposit with no more than 30 lock-in days.",
+    description: "Preserve an explicit lock-in limit on an otherwise contract-complete acquisition.",
+    inputText: "Acquire Example Deposit with a S$1,000 budget and no more than 30 lock-in days.",
     expected: { goalType: "ACQUIRE_ASSET", requiredConstraints: [{ type: "MAX_LOCK_IN_DAYS", days: 30 }] },
   },
   {
