@@ -35,5 +35,6 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
   app.get("/v1/executions/:id", async (request, reply) => { const value = await services.execution.get(RouteId.parse(request.params).id); return value ? value.result : reply.code(404).send({ code: "EXECUTION_NOT_FOUND" }); });
   app.get("/v1/executions/:id/detail", async (request, reply) => { const value = await services.execution.detail(RouteId.parse(request.params).id); return value ?? reply.code(404).send({ code: "EXECUTION_NOT_FOUND" }); });
   app.get("/v1/opportunities", async () => []); app.get("/v1/ops/executions", async () => (await services.execution.list()).map((item) => ({ state: item.executionState, result: item.result }))); app.get("/v1/ops/executions/recoverable", async () => (await services.execution.listRecoverable()).map((item) => ({ state: item.executionState, approvalId: item.approvalId, traceId: item.traceId, result: item.result }))); app.get("/v1/ops/audit", async () => services.repository.listAudit());
+  app.get("/v1/ops/runs", async (_request, reply) => services.ops ? services.ops.listRuns() : reply.code(503).send({ code: "OPS_READ_MODEL_UNAVAILABLE" }));
   app.get("/v1/traces/:id/events", async (_request, reply) => { reply.header("content-type", "text/event-stream"); return "event: ready\ndata: {\"authoritative\":false}\n\n"; });
 }

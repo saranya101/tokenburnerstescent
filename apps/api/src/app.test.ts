@@ -40,4 +40,14 @@ describe("API status handling", () => {
     const app = buildApp(injected); const response = await app.inject({ method: "POST", url: "/v1/goal-candidates/candidate-1/confirm", payload: { contractHash: "caller", status: "CONFIRMED", confirmedAt: "2026-09-25T00:00:00Z", recipientId: "ben-other" } });
     expect(response.statusCode).toBe(400); expect(confirm).not.toHaveBeenCalled(); await app.close();
   });
+
+  it("exposes the ops projection as read-only", async () => {
+    const injected = services(); injected.ops = { listRuns: async () => [] };
+    const app = buildApp(injected);
+    const read = await app.inject({ method: "GET", url: "/v1/ops/runs" });
+    const mutation = await app.inject({ method: "POST", url: "/v1/ops/runs", payload: {} });
+    expect(read.statusCode).toBe(200); expect(read.json()).toEqual([]);
+    expect(mutation.statusCode).toBe(404);
+    await app.close();
+  });
 });
