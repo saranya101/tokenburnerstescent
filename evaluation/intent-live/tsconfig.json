@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "typeRoots": ["../../packages/intent-engine/node_modules/@types", "../../node_modules/@types"]
+  },
+  "include": ["./**/*.ts"]
+}
