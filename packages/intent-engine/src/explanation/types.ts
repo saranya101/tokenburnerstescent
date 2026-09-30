@@ -5,9 +5,10 @@ import type {
   FinancialPlanV1,
   GoalContractV1,
 } from "@parlance/contracts";
+import type { GoalContractCandidate } from "../goal-contract/types.js";
 
 export type ExplanationInput =
-  | { readonly subject: "GOAL"; readonly goal: GoalContractV1 }
+  | { readonly subject: "GOAL"; readonly goal: GoalContractCandidate | GoalContractV1 }
   | { readonly subject: "PLAN"; readonly plan: FinancialPlanV1; readonly goal?: GoalContractV1 }
   | { readonly subject: "COMPILER_RESULT"; readonly result: CompilerResultV1; readonly goal?: GoalContractV1 }
   | { readonly subject: "EXECUTION_RESULT"; readonly result: ExecutionResultV1 };

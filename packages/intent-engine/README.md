@@ -1,7 +1,7 @@
 # Person B: language intelligence
 
 `@parlance/intent-engine` translates user language into an untrusted `IntentDraftV1`, grounds its
-human references, identifies ambiguity, builds a canonical `GoalContractV1`, and renders
+human references, identifies ambiguity, builds a lifecycle-free `GoalContractCandidateV1`, and renders
 deterministic explanations. It does not create financial-plan steps, approve anything, execute
 bank operations, or write to a bank.
 
@@ -15,7 +15,8 @@ user text
   -> grounding requirements
   -> exact / alias resolution or semantic candidates
   -> ambiguity gate
-  -> canonical GoalContractV1
+  -> lifecycle-free GoalContractCandidateV1
+  -> Person A confirmation and canonical GoalContractV1
   -> deterministic explanation
 ```
 
@@ -31,8 +32,10 @@ user text
 - Exact canonical-name matches resolve first, followed by exact alias matches. Multiple exact or
   alias matches are ambiguous. Semantic retrieval runs only when explicitly requested after both
   deterministic stages miss; it returns `CANDIDATES` and never auto-resolves identity.
-- Only fully resolved canonical IDs enter `GoalContractV1`. Ambiguous, missing, and semantic
-  candidate results stay in Person B/orchestration and never reach the compiler.
+- Only fully resolved canonical IDs enter `GoalContractCandidateV1`. Its bindings remain
+  unconfirmed, and it contains no ID, user ID, version, status, hash, timestamps, or persistence
+  metadata. Person A alone confirms the candidate and creates the canonical `GoalContractV1`.
+  Ambiguous, missing, and semantic candidate results stay in Person B/orchestration.
 - Explanations are pure deterministic rendering of validated goals, plans, compiler results, or
   execution results. They do not call an LLM, add operations or reasons, or expose internal IDs
   when a human label is available.
@@ -45,7 +48,7 @@ Person A should compose through the package root:
 - `createDbGroundingStack()` for user-scoped DB exact/alias and pgvector candidate retrieval;
 - `groundingRequirementsForIntent()` to derive authoritative grounding work;
 - `DeterministicIntentAmbiguityDetector` for the pre-contract clarification gate;
-- `DeterministicGoalContractBuilder` for the canonical-ID handoff;
+- `DeterministicGoalContractBuilder` for the lifecycle-free canonical-ID candidate handoff;
 - `DeterministicExplanationRenderer` and `renderExplanationText()` for deterministic prose.
 
 The package also exports provider-neutral interfaces and in-memory implementations for dependency

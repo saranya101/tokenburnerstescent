@@ -7,6 +7,7 @@ import {
   type MoneyV1,
 } from "@parlance/contracts";
 import { ExplanationInputError } from "./errors.js";
+import { GoalContractCandidateV1 } from "../goal-contract/types.js";
 import type {
   DeterministicExplanationV1,
   ExplanationInput,
@@ -15,6 +16,7 @@ import type {
 } from "./types.js";
 
 type Goal = GoalContractV1;
+type GoalSummary = Pick<Goal, "schemaVersion" | "goal" | "constraints" | "preferences" | "entityBindings">;
 type Plan = FinancialPlanV1;
 
 /** Pure, provider-independent rendering from validated deterministic contracts. */
@@ -22,7 +24,11 @@ export class DeterministicExplanationRenderer implements ExplanationRenderer {
   explain(input: ExplanationInput): DeterministicExplanationV1 {
     switch (input.subject) {
       case "GOAL":
-        return explainGoal(GoalContractV1.parse(input.goal));
+        return explainGoal(
+          "id" in input.goal
+            ? GoalContractV1.parse(input.goal)
+            : GoalContractCandidateV1.parse(input.goal)
+        );
       case "PLAN": {
         const plan = FinancialPlanV1.parse(input.plan);
         const goal = input.goal === undefined ? undefined : GoalContractV1.parse(input.goal);
@@ -64,7 +70,7 @@ export function renderExplanationText(explanation: DeterministicExplanationV1): 
   return [explanation.title, ...explanation.statements.map(({ text }) => text)].join("\n");
 }
 
-function explainGoal(goal: Goal): DeterministicExplanationV1 {
+function explainGoal(goal: GoalSummary): DeterministicExplanationV1 {
   const labels = entityLabels(goal);
   const statements: ExplanationStatement[] = [
     statement("GOAL", goalText(goal, labels), "goal"),
@@ -150,7 +156,7 @@ function explainExecution(result: ExecutionResultV1): DeterministicExplanationV1
   return { schemaVersion: "1", kind: "EXECUTION_RESULT", title: "Execution result", statements };
 }
 
-function goalText(goal: Goal, labels: ReadonlyMap<string, string>): string {
+function goalText(goal: GoalSummary, labels: ReadonlyMap<string, string>): string {
   switch (goal.goal.type) {
     case "DELIVER_MONEY":
       return `Deliver ${formatMoney(goal.goal.amount)} to ${labelFor(labels, goal.goal.recipientId, "the selected recipient")}.`;
@@ -175,7 +181,7 @@ function goalText(goal: Goal, labels: ReadonlyMap<string, string>): string {
   }
 }
 
-function constraintText(constraint: Goal["constraints"][number], labels: ReadonlyMap<string, string>): string {
+function constraintText(constraint: GoalSummary["constraints"][number], labels: ReadonlyMap<string, string>): string {
   switch (constraint.type) {
     case "MAX_TOTAL_COST":
       return `Keep the total cost at or below ${formatMoney(constraint.money)}.`;
@@ -190,7 +196,7 @@ function constraintText(constraint: Goal["constraints"][number], labels: Readonl
   }
 }
 
-function preferenceText(preference: Goal["preferences"][number], labels: ReadonlyMap<string, string>): string {
+function preferenceText(preference: GoalSummary["preferences"][number], labels: ReadonlyMap<string, string>): string {
   switch (preference.type) {
     case "MINIMIZE_TOTAL_COST": return "Prefer a lower total cost when feasible.";
     case "MINIMIZE_FX": return "Prefer less foreign-exchange conversion when feasible.";
@@ -216,7 +222,7 @@ function planStepText(step: FinancialPlanStepV1, labels: ReadonlyMap<string, str
   }
 }
 
-function entityLabels(goal: Goal): ReadonlyMap<string, string> {
+function entityLabels(goal: GoalSummary): ReadonlyMap<string, string> {
   const labels = new Map<string, string>();
   const conflicts = new Set<string>();
   for (const binding of goal.entityBindings) {

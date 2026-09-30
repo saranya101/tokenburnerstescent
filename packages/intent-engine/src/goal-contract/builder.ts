@@ -1,6 +1,6 @@
-import { GoalContractV1, type EntityBinding, type GoalContractV1 as GoalContract, type IntentDraftV1 } from "@parlance/contracts";
+import { type EntityBinding, type IntentDraftV1 } from "@parlance/contracts";
 import { GoalContractBuilderError } from "./errors.js";
-import type { GoalContractBuildInput, GoalContractBuilder, GoalContractValidationIssue } from "./types.js";
+import { GoalContractCandidateV1, type GoalContractBuildInput, type GoalContractBuilder, type GoalContractCandidate, type GoalContractValidationIssue } from "./types.js";
 import type { EntityGroundingResult, GroundableEntityType } from "../grounding/types.js";
 import { groundingRequirementsForIntent, type IntentGroundingRequirement } from "../grounding/requirements.js";
 import { normalizeEntityReference } from "../grounding/normalizer.js";
@@ -8,31 +8,23 @@ import { normalizeEntityReference } from "../grounding/normalizer.js";
 type ResolvedGrounding = Extract<EntityGroundingResult, { status: "RESOLVED" }>;
 
 /**
- * Converts validated human-language intent into the canonical-ID handoff boundary. No unresolved
- * grounding result, candidate, or human reference reaches downstream planning through this builder.
+ * Converts validated human-language intent into Person B's lifecycle-free canonical-ID candidate.
+ * No unresolved grounding result, semantic candidate, or human reference crosses this boundary.
  */
 export class DeterministicGoalContractBuilder implements GoalContractBuilder {
-  build(input: GoalContractBuildInput): GoalContract {
+  build(input: GoalContractBuildInput): GoalContractCandidate {
     assertConsistentBindings(input.groundingResults);
     const resolver = new ReferenceResolver(input.groundingResults);
     const candidate = {
       schemaVersion: "1",
-      id: input.metadata.id,
-      userId: input.metadata.userId,
-      version: input.metadata.version,
-      ...(input.metadata.sourceIntentDraftId === undefined ? {} : { sourceIntentDraftId: input.metadata.sourceIntentDraftId }),
       goal: groundedGoal(input.draft, resolver),
       constraints: groundedConstraints(input.draft, resolver),
       preferences: groundedPreferences(input.draft, resolver),
-      entityBindings: entityBindings(groundingRequirementsForIntent(input.draft), resolver, input.metadata.bindingConfirmed),
-      status: input.metadata.status,
-      contractHash: input.metadata.contractHash,
-      createdAt: input.metadata.createdAt,
-      ...(input.metadata.confirmedAt === undefined ? {} : { confirmedAt: input.metadata.confirmedAt }),
+      entityBindings: entityBindings(groundingRequirementsForIntent(input.draft), resolver),
     };
-    const parsed = GoalContractV1.safeParse(candidate);
+    const parsed = GoalContractCandidateV1.safeParse(candidate);
     if (!parsed.success) {
-      throw new GoalContractBuilderError("INVALID_GOAL_CONTRACT", "The canonical goal contract is invalid.", undefined, validationIssues(parsed.error));
+      throw new GoalContractBuilderError("INVALID_GOAL_CONTRACT", "The goal contract candidate is invalid.", undefined, validationIssues(parsed.error));
     }
     return parsed.data;
   }
@@ -78,14 +70,14 @@ function groundedPreferences(draft: IntentDraftV1, resolver: ReferenceResolver):
     : preference);
 }
 
-function entityBindings(occurrences: readonly IntentGroundingRequirement[], resolver: ReferenceResolver, confirmed: boolean): readonly EntityBinding[] {
+function entityBindings(occurrences: readonly IntentGroundingRequirement[], resolver: ReferenceResolver): readonly EntityBinding[] {
   const bindings = new Map<string, EntityBinding>();
   for (const occurrence of occurrences) {
     const grounding = resolver.resolve(occurrence.field, occurrence.reference, occurrence.expectedEntityType);
     const key = `${occurrence.reference}\u0000${grounding.entityType}\u0000${grounding.entityId}`;
     const existing = bindings.get(key);
     if (existing === undefined || resolutionRank(grounding.resolutionMethod) < resolutionRank(existing.resolutionMethod)) {
-      bindings.set(key, { schemaVersion: "1", reference: occurrence.reference, entityType: grounding.entityType, entityId: grounding.entityId, resolutionMethod: grounding.resolutionMethod, confirmed });
+      bindings.set(key, { schemaVersion: "1", reference: occurrence.reference, entityType: grounding.entityType, entityId: grounding.entityId, resolutionMethod: grounding.resolutionMethod, confirmed: false });
     }
   }
   return [...bindings.values()].sort((left, right) => left.reference.localeCompare(right.reference) || left.entityType.localeCompare(right.entityType) || left.entityId.localeCompare(right.entityId));

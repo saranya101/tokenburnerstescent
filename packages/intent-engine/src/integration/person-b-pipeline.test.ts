@@ -24,16 +24,6 @@ const detector = new DeterministicIntentAmbiguityDetector();
 const builder = new DeterministicGoalContractBuilder();
 const renderer = new DeterministicExplanationRenderer();
 
-const metadata = {
-  id: "goal-integration-1",
-  userId: "user-a",
-  version: 1,
-  status: "AWAITING_GOAL_CONFIRMATION" as const,
-  contractHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  createdAt: "2026-09-30T00:00:00Z",
-  bindingConfirmed: false,
-};
-
 function intent(
   originalText: string,
   goal: IntentDraft["goal"],
@@ -60,7 +50,7 @@ async function resolvedPipeline(draft: IntentDraft, grounder: EntityGrounder) {
   const groundingResults = await groundIntent(draft, grounder);
   const ambiguity = detector.analyze({ draft, groundingResults });
   expect(ambiguity).toEqual({ status: "CLEAR" });
-  const contract = builder.build({ draft, groundingResults, metadata });
+  const contract = builder.build({ draft, groundingResults });
   const explanation = renderer.explain({ subject: "GOAL", goal: contract });
   return { groundingResults, contract, explanation };
 }
@@ -154,7 +144,7 @@ it("stops an ambiguous exact match before GoalContract construction", async () =
     status: "NEEDS_CLARIFICATION",
     clarifications: [{ reason: "AMBIGUOUS_ENTITY", originalReference: "Shared Recipient" }],
   });
-  expect(() => builder.build({ draft, groundingResults, metadata })).toThrow(expect.objectContaining({
+  expect(() => builder.build({ draft, groundingResults })).toThrow(expect.objectContaining({
     code: "UNRESOLVED_REFERENCE",
   }));
 });
@@ -182,7 +172,7 @@ it("keeps high-scoring semantic candidates as clarification-only results", async
     status: "NEEDS_CLARIFICATION",
     clarifications: [{ reason: "MULTIPLE_SEMANTIC_CANDIDATES" }],
   });
-  expect(() => builder.build({ draft, groundingResults, metadata })).toThrow(expect.objectContaining({
+  expect(() => builder.build({ draft, groundingResults })).toThrow(expect.objectContaining({
     code: "UNRESOLVED_REFERENCE",
   }));
 });
@@ -292,7 +282,7 @@ it("fails closed for DB entity types without a safe canonical model", async () =
   }]);
   expect(client.query).not.toHaveBeenCalled();
   expect(detector.analyze({ draft, groundingResults })).toMatchObject({ status: "NEEDS_CLARIFICATION" });
-  expect(() => builder.build({ draft, groundingResults, metadata })).toThrow(expect.objectContaining({
+  expect(() => builder.build({ draft, groundingResults })).toThrow(expect.objectContaining({
     code: "UNRESOLVED_REFERENCE",
   }));
 });

@@ -5,7 +5,8 @@ import type { AmbiguityAnalysisResult, ClarificationItem, IntentAmbiguityAnalysi
 
 /**
  * Deterministic pre-contract ambiguity gate. It never infers identity from an LLM or similarity
- * score, and unresolved results must be clarified before any GoalContractV1 reaches the compiler.
+ * score, and unresolved results must be clarified before Person B emits a goal candidate for
+ * Person A's explicit confirmation flow.
  */
 export class DeterministicIntentAmbiguityDetector implements IntentAmbiguityDetector {
   analyze(input: IntentAmbiguityAnalysisInput): AmbiguityAnalysisResult {
