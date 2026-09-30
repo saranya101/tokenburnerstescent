@@ -1,26 +1,22 @@
+import type { Clarification, ClarificationOption } from "../../lib/parlance-api";
 import { clarificationCopy } from "../../lib/customer-safety-copy";
+import { Icon } from "../ui/icon";
 
-const candidates = [
-  { id: "john-tan", name: "John Tan", bank: "DBS beneficiary", account: "•••• 2841" },
-  { id: "john-lim", name: "John Lim", bank: "DBS beneficiary", account: "•••• 9920" },
-];
-
-export function ClarificationCard({ options = candidates, reference = "John", onSelect, onCancel }: { options?: typeof candidates; reference?: string; onSelect(candidate: typeof candidates[number]): void; onCancel(): void }) {
-  const question = options.length > 1
-    ? `Which ${reference} did you mean?`
-    : options.length === 1
-      ? `Did you mean “${options[0]?.name}”?`
-      : `Please clarify “${reference}”`;
+export function ClarificationCard({ clarification, onSelect, onCancel }: { clarification: Clarification; onSelect(option: ClarificationOption): void; onCancel(): void }) {
+  const question = clarification.options.length > 1
+    ? `Which ${clarification.originalReference} did you mean?`
+    : clarification.options.length === 1
+      ? `Did you mean “${clarification.options[0]?.displayName}”?`
+      : `Please clarify “${clarification.originalReference}”`;
   return <section className="product-card clarification-card" aria-labelledby="clarification-heading">
     <p className="eyebrow">One detail needs your attention</p>
     <h2 id="clarification-heading">{question}</h2>
-    <p className="card-description">{clarificationCopy(options.length)}</p>
-    <div className="candidate-list">{options.map((candidate) => <button type="button" className="candidate" key={candidate.id} onClick={() => onSelect(candidate)}>
-      <span className="avatar" aria-hidden="true">{candidate.name.split(" ").map((part) => part[0]).join("")}</span>
-      <span className="candidate-copy"><strong>{candidate.name}</strong><span>{candidate.bank}</span></span>
-      <span className="candidate-account">{candidate.account}</span><span className="candidate-arrow"><Icon name="arrow" /></span>
-    </button>)}</div>
+    <p className="card-description">{clarificationCopy(clarification.options.length)}</p>
+    {clarification.options.length > 0 ? <div className="candidate-list">{clarification.options.map((candidate) => <button type="button" className="candidate" key={`${candidate.entityType}:${candidate.entityId}`} onClick={() => onSelect(candidate)}>
+      <span className="avatar" aria-hidden="true">{candidate.displayName.split(" ").map((part) => part[0]).join("").slice(0, 2)}</span>
+      <span className="candidate-copy"><strong>{candidate.displayName}</strong><span>{candidate.entityType.toLowerCase()}</span></span>
+      <span className="candidate-arrow"><Icon name="arrow" /></span>
+    </button>)}</div> : <p className="card-description">Try describing this detail more specifically in a new request.</p>}
     <button type="button" className="text-button" onClick={onCancel}>Cancel request</button>
   </section>;
 }
-import { Icon } from "../ui/icon";

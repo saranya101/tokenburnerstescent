@@ -1,6 +1,6 @@
 import type { IconName } from "../ui/icon";
 
-export type BankingSection = "home" | "accounts" | "pay" | "cards" | "invest" | "parlance";
+export type BankingSection = "home" | "accounts" | "pay" | "cards" | "invest" | "parlance" | "settings";
 export type BankingNavItem = { id: BankingSection; label: string; href: string; icon: IconName };
 
 export const customerDesktopNavigation: BankingNavItem[] = [

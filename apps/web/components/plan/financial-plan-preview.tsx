@@ -1,8 +1,8 @@
-import type { DemoScenario } from "../chat/demo-data";
+import type { PlanPresentation } from "../chat/presentation";
 import { Icon } from "../ui/icon";
 import { PlanRoute } from "./plan-route";
 
-export function FinancialPlanPreview({ scenario, onApprove, onCancel }: { scenario: DemoScenario; onApprove(): void; onCancel(): void }) {
+export function FinancialPlanPreview({ scenario, onApprove, onCancel, busy = false }: { scenario: PlanPresentation; onApprove(): void; onCancel(): void; busy?: boolean }) {
   const source = scenario.steps[0]?.meta.find((item) => item.label === "Source")?.value ?? scenario.steps[0]?.summary.split("→")[0]?.trim();
   return <section className="product-card plan-card" aria-labelledby="plan-heading">
     <div className="card-heading-row"><div><p className="eyebrow">Your transaction plan</p><h2 id="plan-heading">{scenario.planTitle}</h2></div><span className="plan-state"><Icon name="check" />Ready for review</span></div>
@@ -13,6 +13,6 @@ export function FinancialPlanPreview({ scenario, onApprove, onCancel }: { scenar
     </div>
     {scenario.preservedConstraints.length > 1 && <div className="preserved-panel"><p>Also protected</p>{scenario.preservedConstraints.slice(1).map((constraint) => <span key={constraint}><Icon name="check" />{constraint}</span>)}</div>}
     <div className="approval-callout"><Icon name="shield" /><div><strong>Nothing moves until you approve this exact plan.</strong><p>Any meaningful change requires your approval again.</p></div></div>
-    <div className="card-actions"><button className="button secondary" type="button" onClick={onCancel}>Cancel</button><button className="button bank-primary" type="button" onClick={onApprove}>Review &amp; approve</button></div>
+    <div className="card-actions"><button className="button secondary" type="button" onClick={onCancel} disabled={busy}>Cancel</button><button className="button bank-primary" type="button" onClick={onApprove} disabled={busy}>{busy ? "Waiting for passkey…" : "Confirm with passkey"}</button></div>
   </section>;
 }

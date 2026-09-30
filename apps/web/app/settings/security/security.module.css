@@ -1,0 +1,5 @@
+.page { width:min(880px,100%); margin:0 auto; }
+.page>header { margin-bottom:24px; padding-bottom:22px; border-bottom:1px solid var(--line); }
+.page>header p { margin:0 0 5px; color:var(--red); font-size:.7rem; font-weight:750; }
+.page>header h1 { margin:0; font-size:1.9rem; font-weight:600; letter-spacing:-.03em; }
+.page>header span { display:block; margin-top:8px; color:var(--body); font-size:.78rem; }

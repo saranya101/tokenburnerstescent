@@ -1,9 +1,9 @@
-import type { DemoScenario } from "../chat/demo-data";
+import type { PlanPresentation } from "../chat/presentation";
 import { Icon } from "../ui/icon";
 
 export type RouteStepState = "pending" | "active" | "complete" | "unavailable" | "not-executed";
 
-export function PlanRoute({ scenario, states, statusLabels, compact = false }: { scenario: DemoScenario; states?: RouteStepState[]; statusLabels?: Array<string | undefined>; compact?: boolean }) {
+export function PlanRoute({ scenario, states, statusLabels, compact = false }: { scenario: PlanPresentation; states?: RouteStepState[]; statusLabels?: Array<string | undefined>; compact?: boolean }) {
   return <div className={`premium-route ${compact ? "is-compact" : ""}`} aria-label="Transaction plan">
     {scenario.steps.map((step, index) => {
       const state = states?.[index] ?? "pending";

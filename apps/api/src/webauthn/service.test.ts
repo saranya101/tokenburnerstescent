@@ -131,6 +131,15 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("WebAuthn Phase 1 registration", () => {
+  it("reports whether the configured customer already has an active passkey", async () => {
+    const values = setup();
+    await expect(values.service.registrationStatus()).resolves.toEqual({ status: "NOT_ENROLLED", userVerification: "required" });
+    await values.repository.saveWebAuthnCredential({ id: "credential-row", userId: "demo-user", credentialId: "credential-1", publicKey: new Uint8Array([1]), userHandle: new Uint8Array([2]), signCount: 0, transports: ["internal"], deviceType: "multiDevice", backedUp: true });
+    await expect(values.service.registrationStatus()).resolves.toEqual({ status: "READY", userVerification: "required" });
+    await expect(values.service.registrationOptions()).rejects.toThrow("PASSKEY_ALREADY_ENROLLED");
+    expect(values.repository.challenges.size).toBe(0);
+  });
+
   it("issues and persists a cryptographic registration challenge for the configured demo user and RP", async () => {
     const { service, repository } = setup(); const issued = await service.registrationOptions(); const stored = repository.challenges.get(issued.challengeId)!;
     expect(stored).toMatchObject({ userId: "demo-user", purpose: "REGISTRATION", expectedRpId: "localhost", expectedOrigin: "http://localhost:3000", status: "ISSUED" });
@@ -144,6 +153,7 @@ describe("WebAuthn Phase 1 registration", () => {
     expect(verifier.calls[0]).toMatchObject({ expectedChallenge: challenge.challenge, expectedOrigin: "http://localhost:3000", expectedRpId: "localhost" });
     expect(repository.credentials.get("credential-1")).toMatchObject({ userId: "demo-user", signCount: 0, backedUp: true });
     expect(repository.challenges.get(issued.challengeId)?.status).toBe("CONSUMED");
+    expect(repository).toMatchObject({ approvals: 0, executions: 0 }); expect(repository.evidences.size).toBe(0);
   });
 
   it("rejects expired, revoked, replayed, and incorrectly signed challenges", async () => {

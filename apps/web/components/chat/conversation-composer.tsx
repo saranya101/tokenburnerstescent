@@ -13,7 +13,6 @@ export function ConversationComposer({ initialValue = "", compact = false, onSub
     <label className="sr-only" htmlFor="goal-message">Describe your financial goal</label>
     <div className="composer-field">
       <textarea id="goal-message" value={value} onChange={(event) => setValue(event.target.value)} onKeyDown={onKeyDown} rows={compact ? 2 : 3} placeholder="Describe a financial goal in your own words…" autoFocus={compact} />
-      <button className="voice-button" type="button" aria-label="Use voice input (prototype only)" title="Voice input is a prototype affordance"><Icon name="mic" /></button>
       <button className="send-button" type="submit" disabled={!value.trim()} aria-label="Send message">
         <Icon name="send" />
       </button>
@@ -21,6 +20,6 @@ export function ConversationComposer({ initialValue = "", compact = false, onSub
     {!compact && <div className="suggestion-row" aria-label="Example goals">
       {suggestions.map((suggestion) => <button key={suggestion} type="button" className="suggestion-chip" onClick={() => { setValue(suggestion); onSubmit(suggestion); }}>{suggestion}</button>)}
     </div>}
-    <p className="composer-hint">Press Enter to continue · Shift + Enter for a new line · Voice is a prototype affordance</p>
+    <p className="composer-hint">Press Enter to continue · Shift + Enter for a new line</p>
   </form>;
 }

@@ -17,14 +17,14 @@ export function BankingShell({ active, children }: { active: BankingSection; chi
 
     <aside className="banking-sidebar" aria-label="Banking navigation">
       <nav>{customerDesktopNavigation.map((item) => <Link key={item.id} href={item.href} className={`${active === item.id ? "is-active" : ""} ${item.id === "parlance" ? "is-parlance" : ""}`}><Icon name={item.icon} />{item.label}{item.id === "parlance" && <small>NEW</small>}</Link>)}</nav>
-      <nav className="sidebar-secondary" aria-label="Support"><a href="#settings"><Icon name="settings" />Settings</a><a href="#help"><Icon name="help" />Help & support</a></nav>
+      <nav className="sidebar-secondary" aria-label="Support"><Link href="/settings/security" className={active === "settings" ? "is-active" : ""}><Icon name="settings" />Settings</Link><a href="#help"><Icon name="help" />Help & support</a></nav>
     </aside>
 
     <main className="banking-content">{children}</main>
 
     <nav className="mobile-nav" aria-label="Mobile banking navigation">
       {customerMobileNavigation.map((item) => <Link key={item.id} href={item.href} className={active === item.id ? "is-active" : ""}><Icon name={item.icon} /><small>{item.label}</small></Link>)}
-      <button type="button"><Icon name="more" /><small>More</small></button>
+      <Link href="/settings/security" className={active === "settings" ? "is-active" : ""}><Icon name="more" /><small>More</small></Link>
     </nav>
   </div>;
 }

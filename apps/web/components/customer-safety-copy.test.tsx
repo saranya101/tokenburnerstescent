@@ -2,16 +2,15 @@ import { ExecutionResultV1 } from "@parlance/contracts";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { DemoScenario } from "./chat/demo-data";
+import type { PlanPresentation } from "../lib/customer-presentation";
 import { ReapprovalCard } from "./execution/reapproval-card";
 import { SafeStopCard } from "./execution/safe-stop-card";
 import { ClarificationCard } from "./goal/clarification-card";
 
-const scenario: DemoScenario = {
+const scenario: PlanPresentation = {
   goal: { eyebrow: "Send money", title: "Send USD 70.00", description: "Send money", details: [], constraints: [], preferences: [] },
   planTitle: "One transfer", planSummary: "Latest account state checked", preservedConstraints: [],
   steps: [{ id: "send", kind: "Transfer", title: "Send USD 70.00", summary: "Account → beneficiary", meta: [] }],
-  outcome: "safe-stop",
 };
 
 function stopped(reason: string) {

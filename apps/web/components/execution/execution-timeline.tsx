@@ -1,4 +1,4 @@
-import type { PlanStep, DemoScenario } from "../chat/demo-data";
+import type { PlanPresentation, PlanStep } from "../chat/presentation";
 import { PlanRoute, type RouteStepState } from "../plan/plan-route";
 import { Icon } from "../ui/icon";
 
@@ -11,8 +11,8 @@ function routeState(status: TimelineStatus | undefined): RouteStepState {
   return "pending";
 }
 
-export function ExecutionTimeline({ title = "Your approved plan", items, steps = [], scenario }: { title?: string; items: TimelineItem[]; steps?: PlanStep[]; scenario?: DemoScenario }) {
-  const routeScenario: DemoScenario = scenario ?? { goal: { eyebrow: "", title: "", description: "", details: [], constraints: [], preferences: [] }, planTitle: title, planSummary: "", steps, preservedConstraints: [], outcome: "success" };
+export function ExecutionTimeline({ title = "Your approved plan", items, steps = [], scenario }: { title?: string; items: TimelineItem[]; steps?: PlanStep[]; scenario?: PlanPresentation }) {
+  const routeScenario: PlanPresentation = scenario ?? { goal: { eyebrow: "", title: "", description: "", details: [], constraints: [], preferences: [] }, planTitle: title, planSummary: "", steps, preservedConstraints: [] };
   const routeStates = steps.map((_, index) => routeState(items[index + 2]?.status));
   const complete = items.every((item) => item.status === "complete");
   const terminalStep = steps.at(-1);

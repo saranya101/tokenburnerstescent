@@ -72,11 +72,19 @@ export class WebAuthnService {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
+  async registrationStatus() {
+    const userId = demoEnrollmentUser();
+    if (!(await this.repository.webAuthnUserExists(userId))) throw new Error("DEMO_WEBAUTHN_USER_NOT_FOUND");
+    const credentials = await this.repository.listActiveWebAuthnCredentials(userId);
+    return { status: credentials.length > 0 ? "READY" as const : "NOT_ENROLLED" as const, userVerification: "required" as const };
+  }
+
   async registrationOptions() {
     const config = webAuthnConfig();
     const userId = demoEnrollmentUser();
     if (!(await this.repository.webAuthnUserExists(userId))) throw new Error("DEMO_WEBAUTHN_USER_NOT_FOUND");
     const existing = await this.repository.listActiveWebAuthnCredentials(userId);
+    if (existing.length > 0) throw new Error("PASSKEY_ALREADY_ENROLLED");
     const userHandle = existing[0]?.userHandle ?? new Uint8Array(randomBytes(32));
     const challengeBytes = randomChallenge();
     const options = await generateRegistrationOptions({

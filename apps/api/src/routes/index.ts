@@ -27,6 +27,7 @@ export async function registerRoutes(app: FastifyInstance, services: ApiServices
   app.post("/v1/messages", async (request) => services.messages.receive(request.body, trace(request.headers)));
   app.post("/v1/goal-candidates/:id/confirm", async (request) => { EmptyInput.parse(request.body ?? {}); return services.messages.confirm(RouteId.parse(request.params).id, trace(request.headers)); });
   app.post("/v1/goals/:id/compile", async (request) => services.compilation.compile(RouteId.parse(request.params).id, trace(request.headers)));
+  app.get("/v1/webauthn/registration/status", async () => services.webauthn.registrationStatus());
   app.post("/v1/webauthn/registration/options", async (request) => { EmptyInput.parse(request.body ?? {}); return services.webauthn.registrationOptions(); });
   app.post("/v1/webauthn/registration/verify", async (request) => { const body = RegistrationVerificationInput.parse(request.body); return services.webauthn.verifyRegistration(body.challengeId, body.credential as RegistrationResponseJSON); });
   app.post("/v1/plans/:id/approval-options", async (request) => { EmptyInput.parse(request.body ?? {}); return services.webauthn.approvalOptions(RouteId.parse(request.params).id, trace(request.headers)); });
