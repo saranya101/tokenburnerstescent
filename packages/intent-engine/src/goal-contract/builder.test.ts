@@ -67,6 +67,42 @@ it("preserves original references in deterministic, deduplicated entity bindings
   expect(contract.entityBindings).toEqual([{ schemaVersion: "1", reference: "Main", entityType: "ACCOUNT", entityId: "acc_main", resolutionMethod: "EXACT", confirmed: false }]);
 });
 
+it("builds from the semantic role when supplemental metadata contradicts it", () => {
+  const draft = intent(
+    { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "700000" }, recipientReference: "Nanyang Technological University" },
+    [],
+    [],
+    [{ reference: "Nanyang Technological University", expectedEntityType: "ASSET" }],
+  );
+  const contract = build(draft, [
+    resolved("Nanyang Technological University", "BENEFICIARY", "ben-ntu"),
+    { status: "NOT_FOUND", reference: "Nanyang Technological University", expectedEntityType: "ASSET" },
+  ]);
+  expect(contract.goal).toMatchObject({ type: "DELIVER_MONEY", recipientId: "ben-ntu" });
+  expect(contract.entityBindings).toEqual([{
+    schemaVersion: "1",
+    reference: "Nanyang Technological University",
+    entityType: "BENEFICIARY",
+    entityId: "ben-ntu",
+    resolutionMethod: "EXACT",
+    confirmed: false,
+  }]);
+});
+
+it("allows one normalized phrase to bind independently in distinct semantic roles", () => {
+  const draft = intent(
+    { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "100" }, recipientReference: "Shared Name" },
+    [{ type: "EXCLUDED_ACCOUNT", accountReference: "Shared Name" }],
+  );
+  const contract = build(draft, [
+    resolved("Shared Name", "BENEFICIARY", "ben-shared"),
+    resolved("Shared Name", "ACCOUNT", "acc-shared"),
+  ]);
+  expect(contract.goal).toMatchObject({ recipientId: "ben-shared" });
+  expect(contract.constraints).toEqual([{ type: "EXCLUDED_ACCOUNT", accountId: "acc-shared" }]);
+  expect(contract.entityBindings).toHaveLength(2);
+});
+
 it("requires and audits declared references even when their expected type is omitted", () => {
   const draft = intent(
     { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "100" }, recipientReference: "NTU" }, [], [],

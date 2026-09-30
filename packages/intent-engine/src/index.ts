@@ -9,8 +9,16 @@ export type { EntityGrounder, EntityGroundingInput, EntityGroundingResult, Entit
 export { DeterministicEntityGrounder } from "./grounding/grounder.js";
 export { EntityGroundingError } from "./grounding/errors.js";
 export { InMemoryEntityRepository } from "./grounding/repository.js";
+export { DbEntityRepository } from "./grounding/db-repository.js";
+export type { GroundingRawQueryClient } from "./grounding/db-types.js";
+export { createDbGroundingStack } from "./grounding/db-factory.js";
+export type { DbGroundingStackOptions } from "./grounding/db-factory.js";
 export { normalizeEntityReference } from "./grounding/normalizer.js";
+export { groundingRequirementsForIntent } from "./grounding/requirements.js";
+export type { IntentGroundingRequirement } from "./grounding/requirements.js";
 export type { SemanticEntityCandidate, SemanticEntityRetriever, SemanticEntityRetrievalInput } from "./retrieval/types.js";
+export { cosineDistanceToSimilarity, ENTITY_ALIAS_EMBEDDING_DIMENSIONS, PgVectorSemanticEntityRetriever } from "./retrieval/pgvector.js";
+export type { SemanticReferenceEmbedder } from "./retrieval/pgvector.js";
 export type { AmbiguityAnalysisResult, AmbiguityReasonCode, ClarificationItem, ClarificationOption, IntentAmbiguityAnalysisInput, IntentAmbiguityDetector } from "./ambiguity/types.js";
 export { DeterministicIntentAmbiguityDetector } from "./ambiguity/detector.js";
 export type { GoalContractBuildInput, GoalContractBuilder, GoalContractMetadata, GoalContractValidationIssue } from "./goal-contract/types.js";

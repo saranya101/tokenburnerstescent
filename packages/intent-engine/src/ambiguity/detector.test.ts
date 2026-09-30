@@ -108,3 +108,19 @@ it("does not ask when a hard exclusion overrides a resolved soft account prefere
   );
   expect(detector.analyze({ draft: value, groundingResults: [resolved("NTU", "BENEFICIARY", "ben_ntu"), resolved("Main", "ACCOUNT", "acc_main")] })).toEqual({ status: "CLEAR" });
 });
+
+it("ignores contradictory supplemental typing when the semantic recipient is resolved", () => {
+  const value = draft(
+    { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "700000" }, recipientReference: "Nanyang Technological University" },
+    [],
+    [],
+    [{ reference: "Nanyang Technological University", expectedEntityType: "ASSET" }],
+  );
+  expect(detector.analyze({
+    draft: value,
+    groundingResults: [
+      resolved("Nanyang Technological University", "BENEFICIARY", "ben-ntu"),
+      { status: "NOT_FOUND", reference: "Nanyang Technological University", expectedEntityType: "ASSET" },
+    ],
+  })).toEqual({ status: "CLEAR" });
+});

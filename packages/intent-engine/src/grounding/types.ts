@@ -32,8 +32,8 @@ export type EntityGroundingResult =
   | { status: "NOT_FOUND"; reference: string; expectedEntityType?: GroundableEntityType };
 
 export interface EntityRepository {
-  findByCanonicalName(normalizedName: string, expectedEntityType?: GroundableEntityType): readonly GroundingEntity[];
-  findByAlias(normalizedAlias: string, expectedEntityType?: GroundableEntityType): readonly GroundingEntity[];
+  findByCanonicalName(normalizedName: string, expectedEntityType?: GroundableEntityType): readonly GroundingEntity[] | Promise<readonly GroundingEntity[]>;
+  findByAlias(normalizedAlias: string, expectedEntityType?: GroundableEntityType): readonly GroundingEntity[] | Promise<readonly GroundingEntity[]>;
 }
 
 export interface EntityGrounder {

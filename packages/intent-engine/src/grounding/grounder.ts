@@ -10,12 +10,12 @@ export class DeterministicEntityGrounder implements EntityGrounder {
 
   async ground(input: EntityGroundingInput): Promise<EntityGroundingResult> {
     const normalizedReference = normalizeEntityReference(input.reference);
-    const exactMatches = candidates(this.repository.findByCanonicalName(normalizedReference, input.expectedEntityType), input.expectedEntityType);
+    const exactMatches = candidates(await this.repositoryMatches("canonical", normalizedReference, input.expectedEntityType), input.expectedEntityType);
     if (exactMatches.length > 0) {
       return resultForMatches(input, exactMatches, "EXACT");
     }
 
-    const aliasMatches = candidates(this.repository.findByAlias(normalizedReference, input.expectedEntityType), input.expectedEntityType);
+    const aliasMatches = candidates(await this.repositoryMatches("alias", normalizedReference, input.expectedEntityType), input.expectedEntityType);
     if (aliasMatches.length > 0) {
       return resultForMatches(input, aliasMatches, "ALIAS");
     }
@@ -24,6 +24,20 @@ export class DeterministicEntityGrounder implements EntityGrounder {
       throw new EntityGroundingError("SEMANTIC_RETRIEVER_UNAVAILABLE", "Semantic candidate retrieval is not configured.");
     }
     return this.semanticCandidates(input);
+  }
+
+  private async repositoryMatches(
+    source: "canonical" | "alias",
+    normalizedReference: string,
+    expectedEntityType: GroundableEntityType | undefined,
+  ): Promise<readonly GroundingEntity[]> {
+    try {
+      return source === "canonical"
+        ? await this.repository.findByCanonicalName(normalizedReference, expectedEntityType)
+        : await this.repository.findByAlias(normalizedReference, expectedEntityType);
+    } catch {
+      throw new EntityGroundingError("ENTITY_REPOSITORY_ERROR", "Deterministic entity lookup failed.");
+    }
   }
 
   private async semanticCandidates(input: EntityGroundingInput): Promise<EntityGroundingResult> {
