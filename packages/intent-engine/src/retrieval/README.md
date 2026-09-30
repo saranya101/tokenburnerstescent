@@ -14,3 +14,9 @@ and obligations have no canonical tables. Those types deliberately return no DB 
 
 Embedding generation is injected through `SemanticReferenceEmbedder`. No TokenHub or other
 embedding provider is selected by this package.
+
+The cosine query is ready for pgvector, but production deployment still needs a reviewed vector
+index and migration/operations plan. Until the DB schema gains a canonical account label and
+canonical biller/obligation models, those types intentionally return no DB candidates. Asset
+queries are scoped through the user's existing `Holding`, which must not be mistaken for a complete
+acquirable-asset catalog.

@@ -33,33 +33,30 @@ export class DeterministicExplanationRenderer implements ExplanationRenderer {
         const goal = input.goal === undefined ? undefined : GoalContractV1.parse(input.goal);
         if (result.status === "SAT") return explainPlan(result.plan, goal, "COMPILER_SAT");
         if (result.status === "UNSAT") {
+          const internalReferences = compilerInternalReferences(result.reason.details, goal);
           return {
             schemaVersion: "1",
             kind: "COMPILER_UNSAT",
             title: "No feasible plan was found",
             statements: [
-              statement("REASON", result.reason.message, "compiler.reason"),
+              statement("REASON", redactInternalReferences(result.reason.message, internalReferences), "compiler.reason"),
               ...result.relaxations.map((relaxation, index) =>
-                statement("RELAXATION", `Compiler-provided option: ${relaxation.suggestion}`, "compiler.relaxations", index)
+                statement("RELAXATION", `Compiler-provided option: ${redactInternalReferences(relaxation.suggestion, internalReferences)}`, "compiler.relaxations", index)
               ),
             ],
           };
         }
+        const internalReferences = compilerInternalReferences(result.reason.details, goal);
         return {
           schemaVersion: "1",
           kind: "POLICY_BLOCKED",
           title: "The request is blocked by policy",
-          statements: [statement("REASON", result.reason.message, "compiler.reason")],
+          statements: [statement("REASON", redactInternalReferences(result.reason.message, internalReferences), "compiler.reason")],
         };
       }
       case "EXECUTION_RESULT":
         return explainExecution(ExecutionResultV1.parse(input.result));
     }
-  }
-
-  /** Compatibility bridge for the package's pre-existing CompilerExplainer interface. */
-  async explainCompilerResult(result: CompilerResultV1): Promise<string> {
-    return renderExplanationText(this.explain({ subject: "COMPILER_RESULT", result }));
   }
 }
 
@@ -254,6 +251,67 @@ function formatMoney(money: MoneyV1): string {
 
 function groupDigits(value: string): string {
   return value.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+/** Compiler prose is authoritative, but internal identifiers are not user-facing facts. */
+function redactInternalReferences(text: string, internalReferences: ReadonlySet<string>): string {
+  let safe = text;
+  for (const value of [...internalReferences].sort((left, right) => right.length - left.length)) {
+    if (value.length > 0) safe = safe.split(value).join("[internal reference]");
+  }
+  return safe
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "[internal reference]")
+    .replace(/\b(?:acc|account|asset|ben|beneficiary|biller|entity|obligation|recipient|goal|plan|execution|exec|quote|step)_[a-z0-9][a-z0-9_-]*\b/gi, "[internal reference]")
+    .replace(/\b(?:acc|ben|biller|entity|obligation|recipient|goal|plan|execution|exec|quote|step)-[a-z0-9][a-z0-9_-]*\b/gi, "[internal reference]");
+}
+
+function compilerInternalReferences(details: Readonly<Record<string, unknown>> | undefined, goal: Goal | undefined): ReadonlySet<string> {
+  const values = new Set<string>();
+  if (goal !== undefined) {
+    addInternalReference(values, goal.id);
+    addInternalReference(values, goal.userId);
+    addInternalReference(values, goal.sourceIntentDraftId);
+    addInternalReference(values, goal.contractHash);
+    for (const binding of goal.entityBindings) addInternalReference(values, binding.entityId);
+    switch (goal.goal.type) {
+      case "DELIVER_MONEY": addInternalReference(values, goal.goal.recipientId); break;
+      case "ACQUIRE_ASSET": addInternalReference(values, goal.goal.assetId); break;
+      case "PAY_BILL": addInternalReference(values, goal.goal.billerId); break;
+      case "MOVE_FUNDS":
+        addInternalReference(values, goal.goal.sourceAccountId);
+        addInternalReference(values, goal.goal.destinationAccountId);
+        break;
+    }
+    for (const constraint of goal.constraints) {
+      if (constraint.type === "EXCLUDED_ACCOUNT" || constraint.type === "MIN_AVAILABLE_BALANCE") {
+        addInternalReference(values, constraint.accountId);
+      }
+    }
+    for (const preference of goal.preferences) {
+      if (preference.type === "PREFER_ACCOUNT") addInternalReference(values, preference.accountId);
+    }
+  }
+  collectInternalDetailValues(details, undefined, values);
+  return values;
+}
+
+function collectInternalDetailValues(value: unknown, key: string | undefined, values: Set<string>): void {
+  if (typeof value === "string") {
+    if (key !== undefined && /(?:id|ids|hash|providerRef|bankReference)$/i.test(key)) addInternalReference(values, value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectInternalDetailValues(item, key, values);
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  for (const [nestedKey, nestedValue] of Object.entries(value)) {
+    collectInternalDetailValues(nestedValue, nestedKey, values);
+  }
+}
+
+function addInternalReference(values: Set<string>, value: string | undefined): void {
+  if (value !== undefined && value.length > 0) values.add(value);
 }
 
 function statement(

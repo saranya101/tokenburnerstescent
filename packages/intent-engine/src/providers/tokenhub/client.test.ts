@@ -107,6 +107,15 @@ it("uses configured model, the existing prompt, exact user input, and structured
     response_format: expect.objectContaining({ type: "json_schema" }),
   }));
   expect(transport.createCompletion).toHaveBeenCalledWith(expect.not.objectContaining({ thinking: expect.anything() }));
+  const request = vi.mocked(transport.createCompletion).mock.calls[0]?.[0];
+  expect(Object.keys(request ?? {}).sort()).toEqual(["messages", "model", "response_format", "temperature"]);
+  expect(JSON.stringify(request)).not.toContain(config.apiKey);
+  expect(request).not.toHaveProperty("userId");
+  expect(request).not.toHaveProperty("bankState");
+  expect(request).not.toHaveProperty("goalContract");
+  expect(request).not.toHaveProperty("financialPlan");
+  expect(request).not.toHaveProperty("approval");
+  expect(request).not.toHaveProperty("execution");
 });
 
 it.each(["disabled", "enabled"] as const)("sends TokenHub thinking mode %s when configured", async (thinking) => {
