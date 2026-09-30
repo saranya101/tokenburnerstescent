@@ -10,6 +10,7 @@ import {
 import { ApprovalV1, GoalContractV1 } from "@parlance/contracts";
 import type { BankPort, ParlanceRepository } from "../orchestration/ports.js";
 import { hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
+import { financialPlanExpired, requireActiveFinancialPlan } from "../security/plan-validity.js";
 import { canonicalJson } from "../security/canonical-hash.js";
 import { ApprovalPayloadV1, buildApprovalPayload } from "./approval-payload.js";
 import type { AuthenticationVerifier, RegistrationVerifier, StoredApprovalEvidence, WebAuthnRepository } from "./types.js";
@@ -134,6 +135,8 @@ export class WebAuthnService {
     const config = webAuthnConfig();
     const storedPlan = await this.repository.getPlan(planId);
     if (!storedPlan) throw new Error("PLAN_NOT_FOUND");
+    const issuedAt = this.now();
+    requireActiveFinancialPlan(storedPlan.plan, issuedAt);
     const storedGoal = await this.repository.getConfirmedGoal(storedPlan.plan.goalContractId);
     if (!storedGoal) throw new Error("CONFIRMED_GOAL_NOT_FOUND");
     if (storedGoal.contract.version !== storedPlan.plan.goalContractVersion || hashGoalContract(storedGoal.contract) !== storedGoal.contract.contractHash || hashFinancialPlan(storedPlan.plan) !== storedPlan.plan.planHash) throw new Error("APPROVAL_HASH_MISMATCH");
@@ -142,7 +145,6 @@ export class WebAuthnService {
     if (snapshot.stateVersion !== storedPlan.plan.bankStateVersion) throw new Error("APPROVAL_STATE_CHANGED");
     const credentials = await this.repository.listActiveWebAuthnCredentials(storedGoal.contract.userId);
     if (credentials.length === 0) throw new Error("PASSKEY_CREDENTIAL_NOT_FOUND");
-    const issuedAt = this.now();
     const approvalExpiresAt = new Date(issuedAt.getTime() + APPROVAL_TTL_MS);
     const { payload, payloadHash } = buildApprovalPayload({ goal: storedGoal.contract, plan: storedPlan.plan, bankStateVersion: snapshot.stateVersion, approvalExpiresAt });
     const challengeBytes = randomChallenge();
@@ -177,6 +179,10 @@ export class WebAuthnService {
 
     const storedPlan = await this.repository.getPlan(planId);
     if (!storedPlan) throw new Error("PLAN_NOT_FOUND");
+    if (financialPlanExpired(storedPlan.plan, now)) {
+      await this.repository.revokeWebAuthnChallenge(challenge.id, now);
+      throw new Error("FINANCIAL_PLAN_EXPIRED");
+    }
     const storedGoal = await this.repository.getConfirmedGoal(storedPlan.plan.goalContractId);
     if (!storedGoal) throw new Error("CONFIRMED_GOAL_NOT_FOUND");
     const goal = GoalContractV1.parse(storedGoal.contract);

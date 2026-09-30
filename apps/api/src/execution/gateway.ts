@@ -1,5 +1,6 @@
 import type { ApprovalV1, FinancialActionV1, FinancialPlanStepV1, FinancialPlanV1, GoalContractV1 } from "@parlance/contracts";
 import { canonicalJson } from "../security/canonical-hash.js";
+import { requireActiveFinancialPlan } from "../security/plan-validity.js";
 import type { BankPort, BankWriteResult } from "../orchestration/ports.js";
 import type { StoredApprovalEvidence } from "../webauthn/types.js";
 const ALLOWLIST = new Set<FinancialActionV1>(["TRANSFER", "FX_CONVERT", "MOVE_FUNDS", "PAY_BILL", "BUY_ASSET", "SELL_ASSET"]);
@@ -9,6 +10,7 @@ export interface BankOperation { path: "fx" | "transfer" | "payment" | "buy"; pa
 
 export function verifyExecutionApproval(input: ExecutionApproval): void {
   if (input.goal.status !== "CONFIRMED") throw new Error("Goal is not confirmed");
+  requireActiveFinancialPlan(input.plan, new Date());
   if (input.approvalRevokedAt) throw new Error("Approval revoked");
   if (Date.parse(input.approval.approvedAt) > Date.now()) throw new Error("Approval is not active yet");
   if (Date.parse(input.approval.expiresAt) <= Date.now()) throw new Error("Approval expired");

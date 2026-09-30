@@ -15,7 +15,8 @@ const fixedNow = new Date("2026-09-23T10:00:00.000Z");
 function authoritativeRecords(): { goal: StoredGoal; plan: StoredPlan; state: BankStateSnapshotV1 } {
   const rawGoal = GoalContractV1.parse({ ...(fixture("goal-contract.json") as object), userId: "demo-user", contractHash: "0".repeat(64) });
   const goalContract = GoalContractV1.parse({ ...rawGoal, contractHash: hashGoalContract(rawGoal) });
-  const rawPlan = FinancialPlanV1.parse({ ...(fixture("financial-plan.json") as object), goalContractId: goalContract.id, goalContractVersion: goalContract.version, bankStateVersion: 7, planHash: "0".repeat(64) });
+  const rawPlan = FinancialPlanV1.parse({ ...(fixture("financial-plan.json") as object), goalContractId: goalContract.id, goalContractVersion: goalContract.version, bankStateVersion: 7,
+    validity: { ...(FinancialPlanV1.parse(fixture("financial-plan.json")).validity), validUntil: new Date(fixedNow.getTime() + 60 * 60_000).toISOString() }, planHash: "0".repeat(64) });
   const financialPlan = FinancialPlanV1.parse({ ...rawPlan, planHash: hashFinancialPlan(rawPlan) });
   const state = BankStateSnapshotV1.parse({ ...(fixture("bank-state.json") as object), userId: "demo-user", stateVersion: 7 });
   return { goal: { rowId: "goal-row", contract: goalContract }, plan: { goalRowId: "goal-row", plan: financialPlan }, state };
@@ -107,8 +108,14 @@ const assertion = (challenge: string, id = "credential-1", signature = "valid"):
 
 function setup() {
   const records = authoritativeRecords(); const repository = new MemoryRepository(records.goal, records.plan); const bank = new ControlledBank(records.state); const verifier = new TestVerifier(); const authenticationVerifier = new TestAuthenticationVerifier();
-  const service = new WebAuthnService(repository as unknown as ParlanceRepository & WebAuthnRepository, bank, verifier, authenticationVerifier, () => new Date(fixedNow));
-  return { ...records, repository, bank, verifier, authenticationVerifier, service };
+  let currentNow = new Date(fixedNow);
+  const service = new WebAuthnService(repository as unknown as ParlanceRepository & WebAuthnRepository, bank, verifier, authenticationVerifier, () => new Date(currentNow));
+  return { ...records, repository, bank, verifier, authenticationVerifier, service, setNow(value: Date) { currentNow = new Date(value); } };
+}
+
+function setPlanExpiry(values: ReturnType<typeof setup>, validUntil: Date): void {
+  const unhashed = FinancialPlanV1.parse({ ...values.plan.plan, validity: { ...values.plan.plan.validity, validUntil: validUntil.toISOString() }, planHash: "0".repeat(64) });
+  values.plan.plan = FinancialPlanV1.parse({ ...unhashed, planHash: hashFinancialPlan(unhashed) });
 }
 
 async function approvalCeremony(values: ReturnType<typeof setup>) {
@@ -175,6 +182,20 @@ describe("WebAuthn Phase 1 registration", () => {
 });
 
 describe("WebAuthn Phase 1 approval options", () => {
+  it("rejects an expired persisted plan before issuing a challenge or creating authorization records", async () => {
+    const values = setup(); setPlanExpiry(values, fixedNow);
+    await expect(values.service.approvalOptions(values.plan.plan.id, "trace-expired-options")).rejects.toThrow("FINANCIAL_PLAN_EXPIRED");
+    expect(values.repository.challenges.size).toBe(0); expect(values.repository.evidences.size).toBe(0);
+    expect(values.repository).toMatchObject({ approvals: 0, executions: 0 }); expect(values.bank).toMatchObject({ reads: 0, writes: 0 });
+  });
+
+  it("does not revive an expired persisted plan when the bank returns the same quote ID with a fresh expiry", async () => {
+    const values = setup(); setPlanExpiry(values, fixedNow);
+    values.bank.state = BankStateSnapshotV1.parse({ ...values.bank.state, fxQuotes: values.bank.state.fxQuotes.map((quote) => ({ ...quote, id: values.plan.plan.validity.requiredQuoteIds[0]!, expiresAt: new Date(fixedNow.getTime() + 60 * 60_000).toISOString() })) });
+    await expect(values.service.approvalOptions(values.plan.plan.id, "trace-same-quote")).rejects.toThrow("FINANCIAL_PLAN_EXPIRED");
+    expect(values.bank.reads).toBe(0); expect(values.repository.challenges.size).toBe(0);
+  });
+
   it("binds only authoritative goal, plan, state, and server expiry without creating approval, execution, or bank writes", async () => {
     const { service, repository, bank, goal, plan } = setup();
     await repository.saveWebAuthnCredential({ id: "credential-row", userId: goal.contract.userId, credentialId: "credential-1", publicKey: new Uint8Array([1]), userHandle: new Uint8Array([2]), signCount: 0, transports: ["internal"], deviceType: "multiDevice", backedUp: true });
@@ -193,6 +214,14 @@ describe("WebAuthn Phase 1 approval options", () => {
 });
 
 describe("WebAuthn Phase 2A approval verification", () => {
+  it("rejects authorization when the plan expires after challenge issuance", async () => {
+    const values = setup(); setPlanExpiry(values, new Date(fixedNow.getTime() + 1_000)); const { issued, challenge } = await approvalCeremony(values);
+    values.setNow(new Date(fixedNow.getTime() + 1_000));
+    await expect(values.service.verifyApproval(values.plan.plan.id, issued.challengeId, assertion(challenge.challenge), "trace-plan-expired")).rejects.toThrow("FINANCIAL_PLAN_EXPIRED");
+    expect(values.repository.challenges.get(issued.challengeId)?.status).toBe("REVOKED"); expect(values.authenticationVerifier.calls).toHaveLength(0);
+    expect(values.repository.evidences.size).toBe(0); expect(values.repository).toMatchObject({ approvals: 0, executions: 0 }); expect(values.bank.writes).toBe(0);
+  });
+
   it("creates immutable evidence, PASSKEY approval, and AUTHORIZED execution from a verified assertion", async () => {
     const values = setup(); const { issued, challenge } = await approvalCeremony(values);
     const result = await values.service.verifyApproval(values.plan.plan.id, issued.challengeId, assertion(challenge.challenge), "trace-verify");

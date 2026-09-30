@@ -6,6 +6,7 @@ import {
 } from "@parlance/intent-engine";
 import { z } from "zod";
 import { canonicalHash, hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
+import { financialPlanExpired } from "../security/plan-validity.js";
 import { bankOperation, ExecutionGateway, verifyExecutionApproval, verifyExecutionAuthorization } from "../execution/gateway.js";
 import { assertCompilerBinding, materiallyEquivalentRoute, simulateFinancialStep, stepPreservesConstraints, terminalStepSatisfiesGoal, type RevalidationOutcome } from "../execution/goal-preservation.js";
 import type { BankPort, BankWriteResult, CompilerPort, GoalConfirmationMetadata, GoalConfirmationRepository, ParlanceRepository } from "./ports.js";
@@ -94,7 +95,7 @@ function bankWriteResult(value: unknown): BankWriteResult {
 }
 
 export class ExecutionService {
-  constructor(private readonly repository: ParlanceRepository, private readonly bank: BankPort, private readonly compiler: CompilerPort) {}
+  constructor(private readonly repository: ParlanceRepository, private readonly bank: BankPort, private readonly compiler: CompilerPort, private readonly now: () => Date = () => new Date()) {}
   async run(executionId: string, traceId: string) {
     const execution = await this.repository.getExecution(executionId); if (!execution) throw new Error("EXECUTION_NOT_FOUND");
     if (["COMPLETED", "FAILED", "PAUSED", "REAPPROVAL_REQUIRED"].includes(execution.executionState)) return execution.result;
@@ -103,10 +104,17 @@ export class ExecutionService {
     const storedGoal = await this.repository.getConfirmedGoal(storedPlan.plan.goalContractId); if (!storedGoal) throw new Error("CONFIRMED_GOAL_NOT_FOUND");
     if (hashGoalContract(storedGoal.contract) !== storedGoal.contract.contractHash) throw new Error("GOAL_HASH_MISMATCH");
     if (hashFinancialPlan(storedPlan.plan) !== storedPlan.plan.planHash) throw new Error("PLAN_HASH_MISMATCH");
+    const audit = (eventType: string, payload: Record<string, unknown>) => this.repository.recordExecutionAudit({ executionId, eventType, traceId, payload: { timestamp: this.now().toISOString(), traceId, executionId, ...payload } });
+    if (financialPlanExpired(storedPlan.plan, this.now())) {
+      const explanation = "The approved plan expired before execution and must be refreshed and approved again.";
+      const result = ExecutionResultV1.parse({ schemaVersion: "1", executionId, planId: storedPlan.plan.id, status: "UNKNOWN", startedStateVersion: execution.result.startedStateVersion, steps: execution.result.steps, goalOutcome: { achieved: false, summary: explanation } });
+      await audit("EXECUTION_BANK_OPERATION_PREVENTED", { category: "EXECUTION", outcome: "REPLAN_REQUIRED", reason: "FINANCIAL_PLAN_EXPIRED", explanation });
+      await this.repository.blockExecution({ executionId, state: "REAPPROVAL_REQUIRED", reason: "FINANCIAL_PLAN_EXPIRED", explanation, result, traceId });
+      return result;
+    }
     const executionState = execution.executionState === "EXECUTING" ? "EXECUTING" : "AUTHORIZED";
     const approvalVerification = { goal: storedGoal.contract, plan: storedPlan.plan, approval: approval.approval, ...(approval.evidence ? { approvalEvidence: approval.evidence } : {}), ...(approval.revokedAt ? { approvalRevokedAt: approval.revokedAt } : {}), executionState } as const;
     verifyExecutionApproval(approvalVerification);
-    const audit = (eventType: string, payload: Record<string, unknown>) => this.repository.recordExecutionAudit({ executionId, eventType, traceId, payload: { timestamp: new Date().toISOString(), traceId, executionId, ...payload } });
     await audit("EXECUTION_GOAL_HASH_VERIFIED", { category: "AUTHORIZATION", outcome: "VERIFIED", goalHashVerified: true });
     await audit("EXECUTION_PLAN_HASH_VERIFIED", { category: "AUTHORIZATION", outcome: "VERIFIED", planHashVerified: true });
     let snapshot = await this.bank.getState(storedGoal.contract.userId, traceId); await this.repository.saveSnapshot(snapshot, traceId);
@@ -129,6 +137,7 @@ export class ExecutionService {
 
     for (const [index, step] of storedPlan.plan.steps.entries()) {
       if (stepResults.some((item) => item.stepId === step.id && item.status === "SETTLED")) continue;
+      if (financialPlanExpired(storedPlan.plan, this.now())) return stop(index, "REPLAN_REQUIRED", "REAPPROVAL_REQUIRED", "FINANCIAL_PLAN_EXPIRED", "The approved plan expired before this step and must be refreshed and approved again.");
       snapshot = await this.bank.getState(storedGoal.contract.userId, traceId); await this.repository.saveSnapshot(snapshot, traceId);
       await audit("EXECUTION_LATEST_STATE_LOADED", { category: "STATE_CHECK", outcome: "LOADED", stepKey: step.id, approvedStateVersion: approval.approval.bankStateVersion, expectedStateVersion, observedStateVersion: snapshot.stateVersion });
       const stateChanged = snapshot.stateVersion !== expectedStateVersion;
@@ -143,6 +152,7 @@ export class ExecutionService {
       }
       const idempotencyKey = canonicalHash({ executionId, stepId: step.id }); const stepId = `${executionId}:${step.id}`;
       let authorization = { ...approvalVerification, executionState: executionStarted ? "EXECUTING" as const : "AUTHORIZED" as const, expectedStateVersion, currentStateVersion: snapshot.stateVersion, revalidationSucceeded, idempotencyKey, proposedStep: step };
+      if (financialPlanExpired(storedPlan.plan, this.now())) return stop(index, "REPLAN_REQUIRED", "REAPPROVAL_REQUIRED", "FINANCIAL_PLAN_EXPIRED", "The approved plan expired before this step and must be refreshed and approved again.");
       verifyExecutionAuthorization(authorization);
       if (!executionStarted) { await this.repository.startExecution(executionId, traceId); executionStarted = true; authorization = { ...authorization, executionState: "EXECUTING" }; }
       await audit("GOAL_PRESERVATION_SIMULATION_STARTED", { category: "GOAL_PRESERVATION", outcome: "STARTED", stepKey: step.id, observedStateVersion: snapshot.stateVersion });

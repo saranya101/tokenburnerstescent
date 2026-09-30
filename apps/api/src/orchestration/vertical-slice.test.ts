@@ -8,7 +8,7 @@ import type { BankPort, ParlanceRepository, StoredApproval, StoredExecution, Sto
 import { CompilationService, ExecutionService } from "./services.js";
 import type { StoredApprovalEvidence } from "../webauthn/types.js";
 import { hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
-import { ExecutionGateway } from "../execution/gateway.js";
+import { ExecutionGateway, verifyExecutionApproval } from "../execution/gateway.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(join(process.cwd(), "../../packages/contracts/fixtures/01-ntu-transfer", name), "utf8"));
 
@@ -71,6 +71,11 @@ const applePlan = (stateVersion = 7): FinancialPlanV1 => {
   return { ...raw, planHash: hashFinancialPlan(raw) };
 };
 
+const planWithExpiry = (plan: FinancialPlanV1, validUntil: Date): FinancialPlanV1 => {
+  const unhashed = FinancialPlanV1.parse({ ...plan, validity: { ...plan.validity, validUntil: validUntil.toISOString() }, planHash: "0".repeat(64) });
+  return FinancialPlanV1.parse({ ...unhashed, planHash: hashFinancialPlan(unhashed) });
+};
+
 const appleState = (investments: boolean, stateVersion = 7): BankStateSnapshotV1 => BankStateSnapshotV1.parse({ ...(fixture("bank-state.json") as object), stateVersion,
   accounts: BankStateSnapshotV1.parse(fixture("bank-state.json")).accounts.map((account) => account.id === "acc-usd" ? { ...account, type: "BROKERAGE", capabilities: [...account.capabilities, "TRADE_ASSET"] } : account),
   assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: investments, settlementCurrency: "USD" }], serviceAvailability: { transfers: true, fx: true, billPayments: true, investments } });
@@ -86,7 +91,7 @@ async function authorize(repository: MemoryRepository, plan: FinancialPlanV1) {
 describe("NTU transfer vertical slice", () => {
   it("compiles, binds approval, executes exactly once, and records audit transitions", async () => {
     const rawGoal = GoalContractV1.parse({ ...(fixture("goal-contract.json") as object), constraints: [], contractHash: "0".repeat(64) }); const goal = { ...rawGoal, contractHash: hashGoalContract(rawGoal) }; const repository = new MemoryRepository(goal); const bank = await bankAdapter();
-    const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: { ...(fixture("financial-plan.json") as object), bankStateVersion: state.stateVersion } }); } };
+    const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { const fixturePlan = FinancialPlanV1.parse({ ...(fixture("financial-plan.json") as object), bankStateVersion: state.stateVersion }); return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: { ...fixturePlan, validity: { ...fixturePlan.validity, validUntil: new Date(Date.now() + 60_000).toISOString() } } }); } };
     const compiled = await new CompilationService(repository, bank, compiler).compile(goal.id, "trace-ntu"); expect(compiled.status).toBe("SAT"); if (compiled.status !== "SAT") throw new Error("Expected SAT");
     const authorized = await authorize(repository, compiled.plan);
     const executionService = new ExecutionService(repository, bank, compiler); const completed = await executionService.run(authorized.execution.executionId, "trace-ntu"); expect(completed.status).toBe("COMPLETED"); expect(completed.finalStateVersion).toBe(9); expect(completed.steps).toHaveLength(2);
@@ -94,6 +99,26 @@ describe("NTU transfer vertical slice", () => {
     expect(repository.snapshot?.stateVersion).toBe(9); expect(repository.audit).toContain("PLAN_AUTHORIZED");
   });
   it("allows only one local claim for concurrent identical execution attempts", async () => { const raw = GoalContractV1.parse(fixture("goal-contract.json")); const repository = new MemoryRepository({ ...raw, contractHash: hashGoalContract(raw) }); const claims = await Promise.all([repository.claimIdempotency({ key: "same-step", scope: "BANK_EXECUTION_STEP", requestHash: "same-request" }), repository.claimIdempotency({ key: "same-step", scope: "BANK_EXECUTION_STEP", requestHash: "same-request" })]); expect(claims.filter((claim) => claim.status === "CLAIMED")).toHaveLength(1); expect(claims.filter((claim) => claim.status === "REPLAY")).toHaveLength(1); });
+
+  it("blocks an authorized plan that expires before execution with zero bank writes", async () => {
+    const goal = appleGoal(); const expiredAt = new Date("2026-09-30T06:00:00.000Z"); const plan = planWithExpiry(applePlan(), expiredAt);
+    const repository = new MemoryRepository(goal); const bank = new ControlledBank(appleState(true)); const approved = await authorize(repository, plan); const before = bank.snapshot;
+    const compiler = { async compile() { throw new Error("compiler must not run for an expired plan"); } };
+    const result = await new ExecutionService(repository, bank, compiler, () => new Date(expiredAt.getTime() + 1)).run(approved.execution.executionId, "trace-expired-execution");
+    expect(result).toMatchObject({ status: "UNKNOWN", goalOutcome: { achieved: false } }); expect(repository.execution?.executionState).toBe("REAPPROVAL_REQUIRED");
+    expect(bank.writes).toBe(0); expect(bank.snapshot).toEqual(before);
+    expect(repository.audit).toContainEqual(expect.objectContaining({ eventType: "EXECUTION_BANK_OPERATION_PREVENTED", payload: expect.objectContaining({ reason: "FINANCIAL_PLAN_EXPIRED" }) }));
+  });
+
+  it("recompiles an expired confirmed goal into a fresh plan without transferring the old approval", async () => {
+    const goal = appleGoal(); const oldPlan = planWithExpiry(applePlan(), new Date(Date.now() - 1)); const repository = new MemoryRepository(goal); const bank = new ControlledBank(appleState(true)); const oldAuthorization = await authorize(repository, oldPlan);
+    const freshPlan = planWithExpiry(FinancialPlanV1.parse({ ...applePlan(), id: "plan-apple-refreshed", planHash: "0".repeat(64) }), new Date(Date.now() + 60_000));
+    const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: { ...freshPlan, bankStateVersion: state.stateVersion } }); } };
+    const result = await new CompilationService(repository, bank, compiler).compile(goal.id, "trace-refresh"); if (result.status !== "SAT") throw new Error("Expected SAT");
+    expect(result.plan.id).toBe("plan-apple-refreshed"); expect(result.plan.id).not.toBe(oldPlan.id);
+    expect(() => verifyExecutionApproval({ goal, plan: result.plan, approval: oldAuthorization.approval, approvalEvidence: oldAuthorization.evidence, executionState: "AUTHORIZED" })).toThrow("Approval is for a different plan");
+    expect(bank.writes).toBe(0);
+  });
 
   it("blocks FX before mutation when AAPL becomes unavailable and the remaining goal is unsatisfiable", async () => {
     const goal = appleGoal(); const plan = applePlan(); const repository = new MemoryRepository(goal); const bank = new ControlledBank(appleState(false)); const approved = await authorize(repository, plan);
