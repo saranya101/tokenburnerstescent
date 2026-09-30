@@ -1,20 +1,17 @@
 import { clarificationFor } from "./clarification.js";
 import type { EntityGroundingResult, GroundableEntityType } from "../grounding/types.js";
+import { groundingRequirementsForIntent } from "../grounding/requirements.js";
 import type { AmbiguityAnalysisResult, ClarificationItem, IntentAmbiguityAnalysisInput, IntentAmbiguityDetector } from "./types.js";
-import { intentReferenceOccurrences } from "../references.js";
 
 /**
  * Deterministic pre-contract ambiguity gate. It never infers identity from an LLM or similarity
- * score, and unresolved results must be clarified before any GoalContractV1 reaches the compiler.
+ * score, and unresolved results must be clarified before Person B emits a goal candidate for
+ * Person A's explicit confirmation flow.
  */
 export class DeterministicIntentAmbiguityDetector implements IntentAmbiguityDetector {
   analyze(input: IntentAmbiguityAnalysisInput): AmbiguityAnalysisResult {
-    const seen = new Set<string>();
     const clarifications: ClarificationItem[] = [];
-    for (const occurrence of intentReferenceOccurrences(input.draft)) {
-      const key = `${occurrence.reference}\u0000${occurrence.expectedEntityType ?? ""}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+    for (const occurrence of groundingRequirementsForIntent(input.draft)) {
       const grounding = matchingGrounding(input.groundingResults, occurrence.reference, occurrence.expectedEntityType);
       if (grounding?.status === "RESOLVED") continue;
       clarifications.push(clarificationFor(occurrence.field, occurrence.reference, occurrence.expectedEntityType, grounding));

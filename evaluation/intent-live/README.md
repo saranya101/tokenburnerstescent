@@ -39,3 +39,19 @@ Test the runner without network access:
 pnpm exec vitest run evaluation/intent-live/runner.test.ts
 pnpm exec tsc -p evaluation/intent-live/tsconfig.json --noEmit
 ```
+
+## Recorded 40-case run
+
+The complete synthetic benchmark run generated at `2026-09-29T07:29:47.907Z`, using TokenHub
+`hy3` with thinking disabled, recorded:
+
+- semantic: 19 / 19;
+- adversarial: 21 / 21;
+- overall: 40 / 40;
+- all safety counters: 0;
+- provider/model errors: 0;
+- median latency: 3,300.5 ms (approximately 3.3 seconds);
+- p95 latency: 3,745 ms (approximately 3.745 seconds).
+
+These numbers describe that one fixture set and run. They are evaluation evidence, not universal
+correctness, safety, availability, or latency guarantees.

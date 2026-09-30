@@ -1,4 +1,4 @@
-import type { IntentDraftV1 } from "@parlance/contracts";
+import { GoalContractV1, type IntentDraftV1 } from "@parlance/contracts";
 import { expect, it } from "vitest";
 import { DeterministicGoalContractBuilder } from "./builder.js";
 import { GoalContractBuilderError } from "./errors.js";
@@ -6,7 +6,6 @@ import { GoalContractCandidateV1 } from "./types.js";
 import type { EntityGroundingResult } from "../grounding/types.js";
 
 const builder = new DeterministicGoalContractBuilder();
-
 function intent(goal: unknown, constraints: unknown[] = [], preferences: unknown[] = [], references: unknown[] = []): IntentDraftV1 {
   return {
     schemaVersion: "1", originalText: "test", goal, constraints, preferences, references,
@@ -21,10 +20,11 @@ function build(draft: IntentDraftV1, groundingResults: readonly EntityGroundingR
   return builder.build({ draft, groundingResults });
 }
 
-it("maps DELIVER_MONEY to a canonical recipient ID and validates the final contract", () => {
+it("maps DELIVER_MONEY to a canonical recipient ID and validates the lifecycle-free candidate", () => {
   const contract = build(intent({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "500000" }, recipientReference: "NTU" }), [resolved("NTU", "BENEFICIARY", "ben_ntu")]);
   expect(contract.goal).toEqual({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "500000" }, recipientId: "ben_ntu" });
   expect(GoalContractCandidateV1.safeParse(contract).success).toBe(true);
+  expect(GoalContractV1.safeParse(contract).success).toBe(false);
 });
 
 it("maps ACQUIRE_ASSET references while preserving budget-only and quantity forms", () => {
@@ -63,6 +63,42 @@ it("preserves original references in deterministic, deduplicated entity bindings
   expect(contract.entityBindings).toEqual([{ schemaVersion: "1", reference: "Main", entityType: "ACCOUNT", entityId: "acc_main", resolutionMethod: "EXACT", confirmed: false }]);
 });
 
+it("builds from the semantic role when supplemental metadata contradicts it", () => {
+  const draft = intent(
+    { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "700000" }, recipientReference: "Nanyang Technological University" },
+    [],
+    [],
+    [{ reference: "Nanyang Technological University", expectedEntityType: "ASSET" }],
+  );
+  const contract = build(draft, [
+    resolved("Nanyang Technological University", "BENEFICIARY", "ben-ntu"),
+    { status: "NOT_FOUND", reference: "Nanyang Technological University", expectedEntityType: "ASSET" },
+  ]);
+  expect(contract.goal).toMatchObject({ type: "DELIVER_MONEY", recipientId: "ben-ntu" });
+  expect(contract.entityBindings).toEqual([{
+    schemaVersion: "1",
+    reference: "Nanyang Technological University",
+    entityType: "BENEFICIARY",
+    entityId: "ben-ntu",
+    resolutionMethod: "EXACT",
+    confirmed: false,
+  }]);
+});
+
+it("allows one normalized phrase to bind independently in distinct semantic roles", () => {
+  const draft = intent(
+    { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "100" }, recipientReference: "Shared Name" },
+    [{ type: "EXCLUDED_ACCOUNT", accountReference: "Shared Name" }],
+  );
+  const contract = build(draft, [
+    resolved("Shared Name", "BENEFICIARY", "ben-shared"),
+    resolved("Shared Name", "ACCOUNT", "acc-shared"),
+  ]);
+  expect(contract.goal).toMatchObject({ recipientId: "ben-shared" });
+  expect(contract.constraints).toEqual([{ type: "EXCLUDED_ACCOUNT", accountId: "acc-shared" }]);
+  expect(contract.entityBindings).toHaveLength(2);
+});
+
 it("requires and audits declared references even when their expected type is omitted", () => {
   const draft = intent(
     { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "100" }, recipientReference: "NTU" }, [], [],
@@ -87,11 +123,21 @@ it("fails deterministically for missing, wrong-type, and inconsistent groundings
   expect(() => build(value, [resolved("NTU", "BENEFICIARY", "ben_one"), resolved("NTU", "BENEFICIARY", "ben_two")])).toThrow(expect.objectContaining({ code: "INCONSISTENT_BINDING" }));
 });
 
-it("returns semantic candidate data only and never authors lifecycle or hash fields", () => {
-  const candidate = build(intent({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "100" }, recipientReference: "NTU" }), [resolved("NTU", "BENEFICIARY", "ben_ntu")]);
-  expect(candidate).not.toHaveProperty("contractHash");
-  expect(candidate).not.toHaveProperty("status");
-  expect(candidate).not.toHaveProperty("createdAt");
-  expect(candidate).not.toHaveProperty("confirmedAt");
-  expect(candidate.entityBindings[0]?.confirmed).toBe(false);
+it("leaves lifecycle ownership and confirmation exclusively to Person A", () => {
+  const contract = build(intent({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "100" }, recipientReference: "NTU" }), [resolved("NTU", "BENEFICIARY", "ben_ntu")]);
+  expect(Object.keys(contract).sort()).toEqual(["constraints", "entityBindings", "goal", "preferences", "schemaVersion"]);
+  expect(contract.entityBindings[0]?.confirmed).toBe(false);
+  expect(contract).not.toHaveProperty("id");
+  expect(contract).not.toHaveProperty("userId");
+  expect(contract).not.toHaveProperty("version");
+  expect(contract).not.toHaveProperty("status");
+  expect(contract).not.toHaveProperty("contractHash");
+  expect(contract).not.toHaveProperty("createdAt");
+  expect(contract).not.toHaveProperty("confirmedAt");
+});
+
+it("rejects confirmed bindings at the candidate schema boundary", () => {
+  const contract = build(intent({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "100" }, recipientReference: "NTU" }), [resolved("NTU", "BENEFICIARY", "ben_ntu")]);
+  const confirmed = { ...contract, entityBindings: contract.entityBindings.map((binding) => ({ ...binding, confirmed: true })) };
+  expect(GoalContractCandidateV1.safeParse(confirmed).success).toBe(false);
 });

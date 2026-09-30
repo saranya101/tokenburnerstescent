@@ -98,3 +98,14 @@ it("sanitizes semantic retrieval errors", async () => {
   });
   await expect(grounder(entities, retriever).ground({ reference: "my university", semanticSearch: {} })).rejects.toBeInstanceOf(EntityGroundingError);
 });
+
+it("sanitizes asynchronous repository errors", async () => {
+  const repository = {
+    findByCanonicalName: vi.fn().mockRejectedValue(new Error("database connection details")),
+    findByAlias: vi.fn(),
+  };
+  await expect(new DeterministicEntityGrounder(repository).ground({ reference: "NTU" })).rejects.toMatchObject({
+    code: "ENTITY_REPOSITORY_ERROR",
+    message: "Deterministic entity lookup failed.",
+  });
+});

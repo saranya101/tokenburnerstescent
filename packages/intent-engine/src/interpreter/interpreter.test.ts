@@ -34,6 +34,22 @@ it("validates a DELIVER_MONEY outcome and preserves the exact raw input", async 
   expect(draft.goal.type === "DELIVER_MONEY" && draft.goal.amount.minorUnits).toBe("500000");
 });
 
+it("sends only interpretation data to the model client", async () => {
+  const generateIntent = vi.fn().mockResolvedValue(deliveryCandidate);
+  const interpreter = new ModelBackedIntentInterpreter({ generateIntent });
+  await interpreter.interpretUserRequest({ text: rawInput, userId: "private-user-id" });
+
+  expect(generateIntent).toHaveBeenCalledOnce();
+  const modelInput = generateIntent.mock.calls[0]?.[0] as Record<string, unknown>;
+  expect(Object.keys(modelInput).sort()).toEqual(["promptVersion", "systemPrompt", "text"]);
+  expect(modelInput.text).toBe(rawInput);
+  expect(JSON.stringify(modelInput)).not.toContain("private-user-id");
+  expect(modelInput).not.toHaveProperty("accountBalances");
+  expect(modelInput).not.toHaveProperty("canonicalIds");
+  expect(modelInput).not.toHaveProperty("approval");
+  expect(modelInput).not.toHaveProperty("execution");
+});
+
 it("accepts a valid MOVE_FUNDS customer outcome", async () => {
   const draft = await interpreterFor({
     schemaVersion: "1", goal: { type: "MOVE_FUNDS", amount: { currency: "SGD", minorUnits: "10000" }, destinationAccountReference: "Rainy Day" },

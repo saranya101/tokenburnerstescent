@@ -169,6 +169,26 @@ it("uses only supplied UNSAT reasons and compiler-provided relaxation suggestion
   expect(text).not.toContain("acc-secret");
 });
 
+it("redacts internal identifiers embedded in compiler-authored prose", () => {
+  const result = CompilerResultV1.parse({
+    schemaVersion: "1",
+    status: "UNSAT",
+    reason: {
+      code: "NO_ROUTE",
+      message: "Account acc-secret cannot fund goal goal-secret for execution 25b3b5aa-2b51-4f20-8f48-b9ab3465a361.",
+      details: { internalAccountId: "acc-secret", nested: { candidateIds: ["goal-secret"] } },
+    },
+    relaxations: [{ constraintType: "EXCLUDED_ACCOUNT", suggestion: "Allow acc-secret for this request." }],
+  });
+  const text = renderExplanationText(renderer.explain({ subject: "COMPILER_RESULT", result }));
+
+  expect(text).toContain("Account [internal reference] cannot fund goal [internal reference]");
+  expect(text).toContain("Compiler-provided option: Allow [internal reference] for this request.");
+  expect(text).not.toContain("acc-secret");
+  expect(text).not.toContain("goal-secret");
+  expect(text).not.toContain("25b3b5aa-2b51-4f20-8f48-b9ab3465a361");
+});
+
 it("does not invent options or reasons when optional compiler data is empty", () => {
   const result = CompilerResultV1.parse({
     schemaVersion: "1",

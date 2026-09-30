@@ -2,13 +2,14 @@ import { type EntityBinding, type IntentDraftV1 } from "@parlance/contracts";
 import { GoalContractBuilderError } from "./errors.js";
 import { GoalContractCandidateV1, type GoalContractBuildInput, type GoalContractBuilder, type GoalContractCandidate, type GoalContractValidationIssue } from "./types.js";
 import type { EntityGroundingResult, GroundableEntityType } from "../grounding/types.js";
-import { intentReferenceOccurrences, type IntentReferenceOccurrence } from "../references.js";
+import { groundingRequirementsForIntent, type IntentGroundingRequirement } from "../grounding/requirements.js";
+import { normalizeEntityReference } from "../grounding/normalizer.js";
 
 type ResolvedGrounding = Extract<EntityGroundingResult, { status: "RESOLVED" }>;
 
 /**
- * Converts validated human-language intent into the canonical-ID handoff boundary. No unresolved
- * grounding result, candidate, or human reference reaches downstream planning through this builder.
+ * Converts validated human-language intent into Person B's lifecycle-free canonical-ID candidate.
+ * No unresolved grounding result, semantic candidate, or human reference crosses this boundary.
  */
 export class DeterministicGoalContractBuilder implements GoalContractBuilder {
   build(input: GoalContractBuildInput): GoalContractCandidate {
@@ -19,11 +20,11 @@ export class DeterministicGoalContractBuilder implements GoalContractBuilder {
       goal: groundedGoal(input.draft, resolver),
       constraints: groundedConstraints(input.draft, resolver),
       preferences: groundedPreferences(input.draft, resolver),
-      entityBindings: entityBindings(intentReferenceOccurrences(input.draft), resolver),
+      entityBindings: entityBindings(groundingRequirementsForIntent(input.draft), resolver),
     };
     const parsed = GoalContractCandidateV1.safeParse(candidate);
     if (!parsed.success) {
-      throw new GoalContractBuilderError("INVALID_GOAL_CONTRACT", "The canonical goal contract is invalid.", undefined, validationIssues(parsed.error));
+      throw new GoalContractBuilderError("INVALID_GOAL_CONTRACT", "The goal contract candidate is invalid.", undefined, validationIssues(parsed.error));
     }
     return parsed.data;
   }
@@ -69,14 +70,14 @@ function groundedPreferences(draft: IntentDraftV1, resolver: ReferenceResolver):
     : preference);
 }
 
-function entityBindings(occurrences: readonly IntentReferenceOccurrence[], resolver: ReferenceResolver): readonly EntityBinding[] {
+function entityBindings(occurrences: readonly IntentGroundingRequirement[], resolver: ReferenceResolver): readonly EntityBinding[] {
   const bindings = new Map<string, EntityBinding>();
   for (const occurrence of occurrences) {
     const grounding = resolver.resolve(occurrence.field, occurrence.reference, occurrence.expectedEntityType);
-    const key = `${grounding.reference}\u0000${grounding.entityType}\u0000${grounding.entityId}`;
+    const key = `${occurrence.reference}\u0000${grounding.entityType}\u0000${grounding.entityId}`;
     const existing = bindings.get(key);
     if (existing === undefined || resolutionRank(grounding.resolutionMethod) < resolutionRank(existing.resolutionMethod)) {
-      bindings.set(key, { schemaVersion: "1", reference: grounding.reference, entityType: grounding.entityType, entityId: grounding.entityId, resolutionMethod: grounding.resolutionMethod, confirmed: false });
+      bindings.set(key, { schemaVersion: "1", reference: occurrence.reference, entityType: grounding.entityType, entityId: grounding.entityId, resolutionMethod: grounding.resolutionMethod, confirmed: false });
     }
   }
   return [...bindings.values()].sort((left, right) => left.reference.localeCompare(right.reference) || left.entityType.localeCompare(right.entityType) || left.entityId.localeCompare(right.entityId));
@@ -90,15 +91,21 @@ class ReferenceResolver {
     if (sameReference.length === 0) {
       throw new GoalContractBuilderError("MISSING_GROUNDING", "A required reference has no grounding result.", [errorDetail(field, reference, expectedEntityType)]);
     }
-    const unresolved = sameReference.find((result) => result.status !== "RESOLVED");
+    const matching = sameReference.filter((result) => matchesExpectedType(result, expectedEntityType));
+    if (matching.length === 0) {
+      const wrongType = expectedEntityType === undefined
+        ? undefined
+        : sameReference.find((result): result is ResolvedGrounding => result.status === "RESOLVED" && result.entityType !== expectedEntityType);
+      if (wrongType !== undefined) {
+        throw new GoalContractBuilderError("TYPE_MISMATCH", "A reference resolved to an unexpected entity type.", [errorDetail(field, reference, expectedEntityType)]);
+      }
+      throw new GoalContractBuilderError("MISSING_GROUNDING", "A required reference has no matching grounding result.", [errorDetail(field, reference, expectedEntityType)]);
+    }
+    const unresolved = matching.find((result) => result.status !== "RESOLVED");
     if (unresolved !== undefined) {
       throw new GoalContractBuilderError("UNRESOLVED_REFERENCE", "A required reference is not fully resolved.", [errorDetail(field, reference, expectedEntityType)]);
     }
-    const resolved = sameReference as readonly ResolvedGrounding[];
-    const wrongType = expectedEntityType === undefined ? undefined : resolved.find((result) => result.entityType !== expectedEntityType);
-    if (wrongType !== undefined) {
-      throw new GoalContractBuilderError("TYPE_MISMATCH", "A reference resolved to an unexpected entity type.", [errorDetail(field, reference, expectedEntityType)]);
-    }
+    const resolved = matching as readonly ResolvedGrounding[];
     const ids = [...new Set(resolved.map((result) => result.entityId))];
     if (ids.length !== 1) {
       throw new GoalContractBuilderError("INCONSISTENT_BINDING", "A reference resolved to inconsistent canonical IDs.", [{ ...errorDetail(field, reference, expectedEntityType), entityIds: ids }]);
@@ -116,18 +123,26 @@ function errorDetail(field: string, reference: string, expectedEntityType: Groun
 }
 
 function assertConsistentBindings(results: readonly EntityGroundingResult[]): void {
-  const idsByReference = new Map<string, Set<string>>();
+  const idsByReferenceAndType = new Map<string, { reference: string; entityType: GroundableEntityType; ids: Set<string> }>();
   for (const result of results) {
     if (result.status !== "RESOLVED") continue;
-    const ids = idsByReference.get(result.reference) ?? new Set<string>();
-    ids.add(`${result.entityType}\u0000${result.entityId}`);
-    idsByReference.set(result.reference, ids);
+    const key = `${normalizeEntityReference(result.reference)}\u0000${result.entityType}`;
+    const entry = idsByReferenceAndType.get(key) ?? { reference: result.reference, entityType: result.entityType, ids: new Set<string>() };
+    entry.ids.add(result.entityId);
+    idsByReferenceAndType.set(key, entry);
   }
-  for (const [reference, entityKeys] of idsByReference) {
-    if (entityKeys.size > 1) {
-      throw new GoalContractBuilderError("INCONSISTENT_BINDING", "A human reference has inconsistent canonical bindings.", [{ reference, entityIds: [...entityKeys].map((value) => value.split("\u0000")[1] ?? value) }]);
+  for (const { reference, entityType, ids } of idsByReferenceAndType.values()) {
+    if (ids.size > 1) {
+      throw new GoalContractBuilderError("INCONSISTENT_BINDING", "A human reference has inconsistent canonical bindings for one semantic role.", [{ reference, expectedEntityType: entityType, entityIds: [...ids] }]);
     }
   }
+}
+
+function matchesExpectedType(result: EntityGroundingResult, expectedEntityType: GroundableEntityType | undefined): boolean {
+  if (expectedEntityType === undefined) return true;
+  if (result.status === "RESOLVED") return result.entityType === expectedEntityType;
+  if (result.expectedEntityType === expectedEntityType) return true;
+  return result.status !== "NOT_FOUND" && result.candidates.some((candidate) => candidate.entityType === expectedEntityType);
 }
 
 function resolutionRank(method: EntityBinding["resolutionMethod"]): number {
