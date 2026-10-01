@@ -2,7 +2,13 @@ import type { EntityBinding } from "@parlance/contracts";
 import type { SemanticEntityCandidate } from "../retrieval/types.js";
 
 export type GroundableEntityType = EntityBinding["entityType"];
-export type GroundingResolutionMethod = Extract<EntityBinding["resolutionMethod"], "EXACT" | "ALIAS">;
+export type GroundingResolutionMethod = Extract<EntityBinding["resolutionMethod"], "EXACT" | "ALIAS" | "USER_CONFIRMED">;
+
+export interface AccountGroundingEvidence {
+  currency: string;
+  accountType: string;
+  availableMinorUnits?: string;
+}
 
 export interface EntityGroundingInput {
   reference: string;
@@ -17,12 +23,14 @@ export interface GroundingEntity {
   entityId: string;
   canonicalName: string;
   aliases?: readonly string[];
+  account?: AccountGroundingEvidence;
 }
 
 export interface GroundingCandidate {
   entityType: GroundableEntityType;
   entityId: string;
   canonicalName: string;
+  account?: AccountGroundingEvidence;
 }
 
 export type EntityGroundingResult =
@@ -34,6 +42,7 @@ export type EntityGroundingResult =
 export interface EntityRepository {
   findByCanonicalName(normalizedName: string, expectedEntityType?: GroundableEntityType): readonly GroundingEntity[] | Promise<readonly GroundingEntity[]>;
   findByAlias(normalizedAlias: string, expectedEntityType?: GroundableEntityType): readonly GroundingEntity[] | Promise<readonly GroundingEntity[]>;
+  findBySemanticEvidence?(normalizedReference: string, expectedEntityType?: GroundableEntityType): readonly GroundingEntity[] | Promise<readonly GroundingEntity[]>;
 }
 
 export interface EntityGrounder {

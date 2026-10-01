@@ -4,6 +4,7 @@ const apiBaseUrl = (): string => (process.env.API_URL?.trim() || "http://127.0.0
 
 const postRoutes = [
   /^messages$/u,
+  /^clarifications\/[^/]+\/answer$/u,
   /^webauthn\/registration\/(?:options|verify)$/u,
   /^goal-candidates\/[^/]+\/confirm$/u,
   /^goals\/[^/]+\/compile$/u,

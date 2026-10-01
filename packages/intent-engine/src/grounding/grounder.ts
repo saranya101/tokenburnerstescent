@@ -19,11 +19,22 @@ export class DeterministicEntityGrounder implements EntityGrounder {
     if (aliasMatches.length > 0) {
       return resultForMatches(input, aliasMatches, "ALIAS");
     }
+    const evidenceMatches = candidates(await this.evidenceMatches(normalizedReference, input.expectedEntityType), input.expectedEntityType);
+    if (evidenceMatches.length > 0) return resultForMatches(input, evidenceMatches, "ALIAS");
     if (input.semanticSearch === undefined) return notFoundResult(input);
     if (this.semanticRetriever === undefined) {
       throw new EntityGroundingError("SEMANTIC_RETRIEVER_UNAVAILABLE", "Semantic candidate retrieval is not configured.");
     }
     return this.semanticCandidates(input);
+  }
+
+  private async evidenceMatches(normalizedReference: string, expectedEntityType: GroundableEntityType | undefined): Promise<readonly GroundingEntity[]> {
+    if (this.repository.findBySemanticEvidence === undefined) return [];
+    try {
+      return await this.repository.findBySemanticEvidence(normalizedReference, expectedEntityType);
+    } catch {
+      throw new EntityGroundingError("ENTITY_REPOSITORY_ERROR", "Deterministic entity lookup failed.");
+    }
   }
 
   private async repositoryMatches(
@@ -99,7 +110,7 @@ function candidates(entities: readonly GroundingEntity[], expectedEntityType: Gr
   const unique = new Map<string, GroundingCandidate>();
   for (const entity of entities) {
     if (expectedEntityType === undefined || entity.entityType === expectedEntityType) {
-      unique.set(`${entity.entityType}\u0000${entity.entityId}`, { entityType: entity.entityType, entityId: entity.entityId, canonicalName: entity.canonicalName });
+      unique.set(`${entity.entityType}\u0000${entity.entityId}`, { entityType: entity.entityType, entityId: entity.entityId, canonicalName: entity.canonicalName, ...(entity.account === undefined ? {} : { account: entity.account }) });
     }
   }
   return [...unique.values()].sort((left, right) => left.entityType.localeCompare(right.entityType) || left.entityId.localeCompare(right.entityId));

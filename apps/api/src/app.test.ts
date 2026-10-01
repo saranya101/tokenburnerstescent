@@ -5,7 +5,7 @@ function services(input: { databaseReady?: boolean; compilerReady?: boolean; moc
   const compile = input.compileError ? async () => { throw new Error(input.compileError); } : async () => ({ status: "UNSAT" });
   return {
     repository: { isReady: async () => input.databaseReady ?? true },
-    messages: { receive: async () => ({}), confirm: async () => ({}) }, compilation: { compile }, execution: {}, webauthn: {},
+    messages: { receive: async () => ({}), answerClarification: async () => ({}), confirm: async () => ({}) }, compilation: { compile }, execution: {}, webauthn: {},
     dependencies: { compiler: { isReady: async () => input.compilerReady ?? true }, bank: { isReady: async () => input.mockBankReady ?? true } },
   } as unknown as ApiServices;
 }
@@ -39,6 +39,15 @@ describe("API status handling", () => {
     const confirm = vi.fn(); const injected = services(); injected.messages = { receive: async () => ({}), confirm } as unknown as ApiServices["messages"];
     const app = buildApp(injected); const response = await app.inject({ method: "POST", url: "/v1/goal-candidates/candidate-1/confirm", payload: { contractHash: "caller", status: "CONFIRMED", confirmedAt: "2026-09-25T00:00:00Z", recipientId: "ben-other" } });
     expect(response.statusCode).toBe(400); expect(confirm).not.toHaveBeenCalled(); await app.close();
+  });
+
+  it("accepts only a candidate choice or typed text for clarification continuation", async () => {
+    const answerClarification = vi.fn().mockResolvedValue({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-1", clarifications: [] });
+    const injected = services(); injected.messages = { receive: async () => ({}), answerClarification, confirm: async () => ({}) } as unknown as ApiServices["messages"];
+    const app = buildApp(injected);
+    const valid = await app.inject({ method: "POST", url: "/v1/clarifications/clarification-1/answer", payload: { selectedCandidateId: "acc-1" } });
+    const invalid = await app.inject({ method: "POST", url: "/v1/clarifications/clarification-1/answer", payload: { selectedCandidateId: "acc-1", entityBinding: { entityId: "acc-1", confirmed: true }, goalContractHash: "caller" } });
+    expect(valid.statusCode).toBe(200); expect(answerClarification).toHaveBeenCalledOnce(); expect(invalid.statusCode).toBe(400); await app.close();
   });
 
   it("exposes the ops projection as read-only", async () => {

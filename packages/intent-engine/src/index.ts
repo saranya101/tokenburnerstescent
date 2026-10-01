@@ -4,7 +4,7 @@ export { ModelBackedIntentInterpreter } from "./interpreter/interpreter.js";
 export { INTENT_PROMPT_VERSION } from "./prompts/intent-v1.js";
 export { createTokenHubIntentInterpreter, loadTokenHubConfig, TokenHubConfigurationError } from "./providers/tokenhub/index.js";
 export type { TokenHubConfig, TokenHubIntentInterpreterOptions, TokenHubThinkingMode } from "./providers/tokenhub/index.js";
-export type { EntityGrounder, EntityGroundingInput, EntityGroundingResult, EntityRepository, GroundableEntityType, GroundingCandidate, GroundingEntity, GroundingResolutionMethod } from "./grounding/types.js";
+export type { AccountGroundingEvidence, EntityGrounder, EntityGroundingInput, EntityGroundingResult, EntityRepository, GroundableEntityType, GroundingCandidate, GroundingEntity, GroundingResolutionMethod } from "./grounding/types.js";
 export { DeterministicEntityGrounder } from "./grounding/grounder.js";
 export { EntityGroundingError } from "./grounding/errors.js";
 export { InMemoryEntityRepository } from "./grounding/repository.js";

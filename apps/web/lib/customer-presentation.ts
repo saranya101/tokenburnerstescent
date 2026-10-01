@@ -14,8 +14,8 @@ export function formatMoney(money: MoneyV1): string {
   return `${money.currency} ${negative ? "-" : ""}${whole}${fraction}`;
 }
 
-function names(goal: Pick<GoalContractV1, "entityBindings">): Map<string, string> {
-  return new Map(goal.entityBindings.map((binding) => [binding.entityId, binding.reference]));
+function names(goal: Pick<GoalContractV1, "entityBindings">, referenceLabels: ReadonlyMap<string, string> = new Map()): Map<string, string> {
+  return new Map(goal.entityBindings.map((binding) => [binding.entityId, referenceLabels.get(binding.reference) ?? binding.reference]));
 }
 const named = (map: Map<string, string>, id: string): string => map.get(id) ?? id;
 
@@ -33,8 +33,8 @@ function preferenceText(preference: GoalContractV1["preferences"][number], map: 
   return "Use the fastest safe route";
 }
 
-export function presentGoal(goal: Pick<GoalContractV1, "goal" | "constraints" | "preferences" | "entityBindings">): GoalSummary {
-  const map = names(goal); const details: GoalDetail[] = []; let eyebrow = "Your request"; let title = "Complete your financial goal"; let description = "Parlance will ask banking systems to find a safe route.";
+export function presentGoal(goal: Pick<GoalContractV1, "goal" | "constraints" | "preferences" | "entityBindings">, referenceLabels: ReadonlyMap<string, string> = new Map()): GoalSummary {
+  const map = names(goal, referenceLabels); const details: GoalDetail[] = []; let eyebrow = "Your request"; let title = "Complete your financial goal"; let description = "Parlance will ask banking systems to find a safe route.";
   if (goal.goal.type === "DELIVER_MONEY") { const recipient = named(map, goal.goal.recipientId); eyebrow = "Send money"; title = `Send ${formatMoney(goal.goal.amount)} to ${recipient}`; description = `A transfer to your confirmed ${recipient} beneficiary.`; details.push({ label: "Recipient", value: recipient }, { label: "Amount", value: formatMoney(goal.goal.amount) }); }
   if (goal.goal.type === "ACQUIRE_ASSET") { const asset = named(map, goal.goal.assetId); eyebrow = "Buy an asset"; title = `Buy ${asset}`; description = "A purchase using a route that remains inside your confirmed limits."; details.push({ label: "Asset", value: asset }); if (goal.goal.quantity) details.push({ label: "Quantity", value: goal.goal.quantity }); if (goal.goal.budget) details.push({ label: "Maximum spend", value: formatMoney(goal.goal.budget) }); }
   if (goal.goal.type === "PAY_BILL") { const biller = named(map, goal.goal.billerId); eyebrow = "Pay a bill"; title = `Pay ${biller}`; description = "A payment to your confirmed biller."; details.push({ label: "Biller", value: biller }); if (goal.goal.amount) details.push({ label: "Amount", value: formatMoney(goal.goal.amount) }); }

@@ -28,6 +28,7 @@ const registration: RegistrationCredentialJSON = { id: "credential-1", rawId: "c
 function setup(overrides: Partial<ParlanceApi> = {}, passkeyResult: AuthenticationCredentialJSON | Error = credential) {
   const api = {
     sendMessage: vi.fn().mockResolvedValue({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: candidate }),
+    answerClarification: vi.fn().mockResolvedValue({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: candidate }),
     confirmGoal: vi.fn().mockResolvedValue(goal), compileGoal: vi.fn().mockResolvedValue({ schemaVersion: "1", status: "SAT", plan }),
     approvalOptions: vi.fn().mockResolvedValue({ challengeId: "challenge-1", options: { challenge: "challenge" } }),
     verifyApproval: vi.fn().mockResolvedValue({ approval: ApprovalV1.parse({ schemaVersion: "1", id: "approval-1", userId: "user-1", goalContractId: goal.id, goalContractVersion: 1, goalContractHash: goal.contractHash, financialPlanId: plan.id, financialPlanHash: plan.planHash, bankStateVersion: 7, method: "PASSKEY", approvedAt: "2026-09-28T00:02:00.000Z", expiresAt: "2026-09-28T00:12:00.000Z", signatureReference: "evidence-1" }), execution: pending }),
@@ -58,12 +59,28 @@ it("runs the real multi-step customer sequence through completion", async () => 
   expect(values.api.approvalOptions).toHaveBeenCalledWith(plan.id); expect(values.api.verifyApproval).toHaveBeenCalledWith(plan.id, "challenge-1", credential); expect(values.api.runExecution).toHaveBeenCalledWith("execution-1");
 });
 
-it("renders a backend clarification and continues by resubmitting the selected meaning", async () => {
+it("continues a backend clarification through its persisted identifier without resending the request", async () => {
   const clarification = { reason: "AMBIGUOUS_ENTITY", field: "recipientReference", originalReference: "John", questionKey: "clarify.entity.ambiguous", options: [{ entityId: "ben-john-tan", entityType: "BENEFICIARY" as const, displayName: "John Tan" }] };
-  const values = setup({ sendMessage: vi.fn().mockResolvedValueOnce({ status: "NEEDS_CLARIFICATION", clarifications: [clarification] }).mockResolvedValueOnce({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: candidate }) });
+  const values = setup({ sendMessage: vi.fn().mockResolvedValueOnce({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-1", clarifications: [clarification] }) });
   await values.flow.submitMessage("Send money to John"); expect(values.flow.state.phase).toBe("CLARIFICATION");
   await values.flow.answerClarification(clarification, clarification.options[0]!); expect(values.flow.state.phase).toBe("GOAL_REVIEW");
-  expect(values.api.sendMessage).toHaveBeenLastCalledWith("Send money to John Tan"); expect(values.api.sendMessage).not.toHaveBeenLastCalledWith(expect.stringContaining("ben-john-tan"));
+  expect(values.api.sendMessage).toHaveBeenCalledOnce(); expect(values.api.answerClarification).toHaveBeenCalledWith("clarification-1", { selectedCandidateId: "ben-john-tan" });
+  expect(values.flow.state).toMatchObject({ answers: [{ reference: "John", answer: "John Tan" }] });
+});
+
+it("sends typed clarification text for server-side grounding and never supplies a binding", async () => {
+  const clarification = { reason: "ENTITY_NOT_FOUND", field: "preferences[0].accountReference", originalReference: "my SGD account", questionKey: "clarify.entity.not_found", options: [] };
+  const values = setup({ sendMessage: vi.fn().mockResolvedValue({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-account", clarifications: [clarification] }) });
+  await values.flow.submitMessage("Send NTU USD 7000 using my SGD account"); await values.flow.answerClarificationText(clarification, "DBS Multiplier Account");
+  expect(values.api.answerClarification).toHaveBeenCalledWith("clarification-account", { answerText: "DBS Multiplier Account" });
+  expect(JSON.stringify(vi.mocked(values.api.answerClarification).mock.calls)).not.toMatch(/entityId|entityBinding|confirmed|goalContractHash|planHash/u);
+});
+
+it("cancels clarification without confirmation, compilation, approval, or execution", async () => {
+  const clarification = { reason: "ENTITY_NOT_FOUND", field: "recipientReference", originalReference: "John", questionKey: "clarify.entity.not_found", options: [] };
+  const values = setup({ sendMessage: vi.fn().mockResolvedValue({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-cancel", clarifications: [clarification] }) });
+  await values.flow.submitMessage("Send John $500"); values.flow.reset();
+  expect(values.flow.state.phase).toBe("COMPOSE"); expect(values.api.answerClarification).not.toHaveBeenCalled(); expect(values.api.confirmGoal).not.toHaveBeenCalled(); expect(values.api.compileGoal).not.toHaveBeenCalled(); expect(values.api.approvalOptions).not.toHaveBeenCalled(); expect(values.api.runExecution).not.toHaveBeenCalled();
 });
 
 it("does not confirm, compile, authorize, or execute when candidate data arrives without a customer action", async () => {

@@ -1,13 +1,13 @@
 import type { ExecutionResultV1, FinancialPlanV1, GoalContractV1 } from "@parlance/contracts";
-import type { Clarification, ClarificationOption, GoalCandidate, ParlanceApi } from "./parlance-api";
+import type { Clarification, ClarificationOption, GoalCandidate, MessageResponse, ParlanceApi } from "./parlance-api";
 import { PasskeyCancelledError, type PasskeyClient } from "./passkey";
 
 type Context = { requestText: string; goal: GoalContractV1; plan: FinancialPlanV1 };
 export type CustomerFlowState =
   | { phase: "COMPOSE" }
   | { phase: "INTERPRETING"; requestText: string }
-  | { phase: "CLARIFICATION"; requestText: string; clarifications: Clarification[] }
-  | { phase: "GOAL_REVIEW"; requestText: string; candidateId: string; candidate: GoalCandidate }
+  | { phase: "CLARIFICATION"; requestText: string; clarificationId: string; clarifications: Clarification[]; answers: ClarificationAnswer[] }
+  | { phase: "GOAL_REVIEW"; requestText: string; candidateId: string; candidate: GoalCandidate; answers: ClarificationAnswer[] }
   | { phase: "CONFIRMING_GOAL"; requestText: string; candidate: GoalCandidate }
   | { phase: "GOAL_CONFIRMATION_FAILED"; requestText: string; candidateId: string; candidate: GoalCandidate; message: string }
   | { phase: "COMPILING"; requestText: string; goal: GoalContractV1 }
@@ -25,12 +25,14 @@ export type CustomerFlowState =
   | { phase: "ERROR"; requestText?: string; message: string };
 
 export type StateListener = (state: CustomerFlowState) => void;
+export type ClarificationAnswer = { reference: string; answer: string };
 
 function message(error: unknown): string { return error instanceof Error ? error.message : "REQUEST_FAILED"; }
 
 export class CustomerFlowController {
   state: CustomerFlowState = { phase: "COMPOSE" };
   private meaningConfirmationInFlight = false;
+  private clarificationInFlight = false;
   constructor(private readonly api: ParlanceApi, private readonly passkey: PasskeyClient, private readonly listener: StateListener = () => undefined) {}
 
   private transition(state: CustomerFlowState): void { this.state = state; this.listener(state); }
@@ -42,18 +44,36 @@ export class CustomerFlowController {
     this.transition({ phase: "INTERPRETING", requestText });
     try {
       const response = await this.api.sendMessage(text);
-      if (response.status === "NEEDS_CLARIFICATION") this.transition({ phase: "CLARIFICATION", requestText, clarifications: response.clarifications });
-      else this.transition({ phase: "GOAL_REVIEW", requestText, candidateId: response.candidateId, candidate: response.goalCandidate });
+      this.applyInterpretation(response, requestText, []);
     } catch (error) { this.transition({ phase: "ERROR", requestText, message: message(error) }); }
   }
 
   async answerClarification(clarification: Clarification, option: ClarificationOption): Promise<void> {
     if (this.state.phase !== "CLARIFICATION") throw new Error("INVALID_FLOW_STATE");
-    const requestText = this.state.requestText;
-    const resolvedText = requestText.includes(clarification.originalReference)
-      ? requestText.replace(clarification.originalReference, option.displayName)
-      : `${requestText}\nUse ${option.displayName} for ${clarification.field}.`;
-    await this.interpret(resolvedText, requestText);
+    await this.continueClarification(clarification, { selectedCandidateId: option.entityId }, option.displayName);
+  }
+
+  async answerClarificationText(clarification: Clarification, answerText: string): Promise<void> {
+    if (this.state.phase !== "CLARIFICATION") throw new Error("INVALID_FLOW_STATE");
+    const answer = answerText.trim(); if (!answer) return;
+    await this.continueClarification(clarification, { answerText: answer }, answer);
+  }
+
+  private async continueClarification(clarification: Clarification, answer: { selectedCandidateId: string } | { answerText: string }, displayAnswer: string): Promise<void> {
+    if (this.clarificationInFlight) return;
+    if (this.state.phase !== "CLARIFICATION") throw new Error("INVALID_FLOW_STATE");
+    const { requestText, clarificationId, answers } = this.state;
+    this.clarificationInFlight = true;
+    try {
+      const response = await this.api.answerClarification(clarificationId, answer);
+      this.applyInterpretation(response, requestText, [...answers, { reference: clarification.originalReference, answer: displayAnswer }]);
+    } catch (error) { this.transition({ phase: "ERROR", requestText, message: message(error) }); }
+    finally { this.clarificationInFlight = false; }
+  }
+
+  private applyInterpretation(response: MessageResponse, requestText: string, answers: ClarificationAnswer[]): void {
+    if (response.status === "NEEDS_CLARIFICATION") this.transition({ phase: "CLARIFICATION", requestText, clarificationId: response.clarificationId, clarifications: response.clarifications, answers });
+    else this.transition({ phase: "GOAL_REVIEW", requestText, candidateId: response.candidateId, candidate: response.goalCandidate, answers });
   }
 
   async confirmMeaning(): Promise<void> {

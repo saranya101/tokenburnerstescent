@@ -13,6 +13,7 @@ export function useCustomerFlow() {
     state,
     submitMessage: useCallback((text: string) => controller.current!.submitMessage(text), []),
     answerClarification: useCallback((clarification: Parameters<CustomerFlowController["answerClarification"]>[0], option: Parameters<CustomerFlowController["answerClarification"]>[1]) => controller.current!.answerClarification(clarification, option), []),
+    answerClarificationText: useCallback((clarification: Parameters<CustomerFlowController["answerClarificationText"]>[0], answer: string) => controller.current!.answerClarificationText(clarification, answer), []),
     confirmMeaning: useCallback(() => controller.current!.confirmMeaning(), []),
     authorizeAndExecute: useCallback(() => controller.current!.authorizeAndExecute(), []),
     passkeyEnrolled: useCallback(() => controller.current!.passkeyEnrolled(), []),

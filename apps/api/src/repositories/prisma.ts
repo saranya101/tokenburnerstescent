@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@parlance/db";
 import { ApprovalV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1, IntentDraftV1, type CompilerResultV1 } from "@parlance/contracts";
 import { GoalContractCandidateV1 } from "@parlance/intent-engine";
-import type { GoalConfirmationRepository, ParlanceRepository, StoredApproval, StoredExecution, StoredGoal, StoredGoalCandidate, StoredPlan } from "../orchestration/ports.js";
+import type { ClarificationProgress, GoalConfirmationRepository, ParlanceRepository, StoredApproval, StoredClarificationRequest, StoredExecution, StoredGoal, StoredGoalCandidate, StoredPlan } from "../orchestration/ports.js";
 import type { ApprovalPayload, NewWebAuthnChallenge, NewWebAuthnCredential, StoredApprovalEvidence, StoredWebAuthnChallenge, StoredWebAuthnCredential, VerifiedPasskeyAuthorizationInput, WebAuthnRepository } from "../webauthn/types.js";
 
 const json = (value: unknown): Prisma.InputJsonValue => value as Prisma.InputJsonValue;
@@ -58,6 +58,18 @@ function mapGoalCandidate(row: IntentDraftRow): StoredGoalCandidate {
   };
 }
 
+function mapClarification(row: IntentDraftRow): StoredClarificationRequest {
+  if (typeof row.payload !== "object" || row.payload === null || Array.isArray(row.payload)) throw new Error("CLARIFICATION_INVALID");
+  const payload = row.payload as Record<string, unknown>;
+  if (payload.kind !== "CLARIFICATION_PENDING_V1" || typeof payload.goalContractId !== "string" || typeof payload.version !== "number" || typeof payload.originalText !== "string" || !Array.isArray(payload.groundingResults) || !Array.isArray(payload.clarifications)) throw new Error("CLARIFICATION_INVALID");
+  return {
+    clarificationId: row.id, goalContractId: payload.goalContractId, userId: row.userId, version: payload.version,
+    createdAt: row.createdAt.toISOString(), originalText: payload.originalText, intentDraft: IntentDraftV1.parse(payload.intentDraft),
+    groundingResults: payload.groundingResults as StoredClarificationRequest["groundingResults"],
+    clarifications: payload.clarifications as StoredClarificationRequest["clarifications"],
+  };
+}
+
 type PlanRow = Prisma.FinancialPlanGetPayload<{ include: { steps: true } }>;
 function mapPlan(row: PlanRow): FinancialPlanV1 {
   return FinancialPlanV1.parse({ schemaVersion: row.schemaVersion, id: row.id, goalContractId: row.goalContractKey,
@@ -110,6 +122,50 @@ export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirm
   async getConfirmedGoal(contractId: string): Promise<StoredGoal | null> {
     const row = await this.db.goalContract.findFirst({ where: { contractKey: contractId, status: "CONFIRMED" }, orderBy: { version: "desc" }, include: { constraints: true, entityBindings: true } });
     return row ? mapGoal(row) : null;
+  }
+  async saveClarification(input: Parameters<GoalConfirmationRepository["saveClarification"]>[0]): Promise<StoredClarificationRequest> {
+    const intentDraft = IntentDraftV1.parse(input.intentDraft); const createdAt = new Date(input.createdAt);
+    const row = await this.db.$transaction(async (tx) => {
+      const conversation = await tx.conversation.create({ data: { userId: input.userId, createdAt, messages: { create: { role: "USER", content: input.originalText, traceId: input.traceId, createdAt } } } });
+      return tx.intentDraftRecord.create({ data: {
+        id: input.clarificationId, userId: input.userId, conversationId: conversation.id, schemaVersion: intentDraft.schemaVersion,
+        payload: json({ kind: "CLARIFICATION_PENDING_V1", goalContractId: input.goalContractId, version: input.version, originalText: input.originalText, intentDraft, groundingResults: input.groundingResults, clarifications: input.clarifications }),
+        status: "NEEDS_CLARIFICATION", createdAt,
+      } });
+    });
+    return mapClarification(row);
+  }
+  async getClarification(clarificationId: string): Promise<StoredClarificationRequest | null> {
+    const row = await this.db.intentDraftRecord.findFirst({ where: { id: clarificationId, status: "NEEDS_CLARIFICATION" } });
+    return row ? mapClarification(row) : null;
+  }
+  async advanceClarification(input: Parameters<GoalConfirmationRepository["advanceClarification"]>[0]): Promise<ClarificationProgress> {
+    return this.db.$transaction(async (tx) => {
+      const current = await tx.intentDraftRecord.findUnique({ where: { id: input.clarificationId } });
+      if (current === null) throw new Error("CLARIFICATION_NOT_FOUND");
+      if (current.status !== "NEEDS_CLARIFICATION") {
+        if (current.status === "AWAITING_GOAL_CONFIRMATION") return { status: "AWAITING_GOAL_CONFIRMATION", candidate: mapGoalCandidate(current) };
+        throw new Error("CLARIFICATION_NOT_ANSWERABLE");
+      }
+      const pending = mapClarification(current);
+      const payload = input.candidate === undefined
+        ? { kind: "CLARIFICATION_PENDING_V1", goalContractId: pending.goalContractId, version: pending.version, originalText: pending.originalText, intentDraft: pending.intentDraft, groundingResults: input.groundingResults, clarifications: input.clarifications }
+        : { kind: "GOAL_CANDIDATE_V1", goalContractId: pending.goalContractId, version: pending.version, intentDraft: pending.intentDraft, candidate: GoalContractCandidateV1.parse(input.candidate) };
+      const status = input.candidate === undefined ? "NEEDS_CLARIFICATION" : "AWAITING_GOAL_CONFIRMATION";
+      if (input.candidate !== undefined) {
+        const claimed = await tx.intentDraftRecord.updateMany({ where: { id: input.clarificationId, status: "NEEDS_CLARIFICATION" }, data: { payload: json(payload), status } });
+        if (claimed.count === 0) {
+          const completed = await tx.intentDraftRecord.findUnique({ where: { id: input.clarificationId } });
+          if (completed?.status === "AWAITING_GOAL_CONFIRMATION") return { status: "AWAITING_GOAL_CONFIRMATION", candidate: mapGoalCandidate(completed) };
+          throw new Error("CLARIFICATION_NOT_ANSWERABLE");
+        }
+        await tx.message.create({ data: { conversationId: current.conversationId, role: "USER", content: input.answerText, traceId: input.traceId } });
+        const updated = await tx.intentDraftRecord.findUniqueOrThrow({ where: { id: input.clarificationId } });
+        return { status: "AWAITING_GOAL_CONFIRMATION", candidate: mapGoalCandidate(updated) };
+      }
+      const updated = await tx.intentDraftRecord.update({ where: { id: input.clarificationId }, data: { payload: json(payload), status, conversation: { update: { messages: { create: { role: "USER", content: input.answerText, traceId: input.traceId } } } } } });
+      return { status: "NEEDS_CLARIFICATION", request: mapClarification(updated) };
+    });
   }
   async saveGoalCandidate(input: Parameters<GoalConfirmationRepository["saveGoalCandidate"]>[0]): Promise<StoredGoalCandidate> {
     const intentDraft = IntentDraftV1.parse(input.intentDraft);

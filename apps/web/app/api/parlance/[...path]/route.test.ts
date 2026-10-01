@@ -26,3 +26,12 @@ it("allows the read-only customer passkey status route", async () => {
   const response = await GET(new NextRequest("http://localhost/api/parlance/webauthn/registration/status"), { params: Promise.resolve({ path: ["webauthn", "registration", "status"] }) });
   expect(response.status).toBe(200); expect(upstream).toHaveBeenCalledWith("http://api.internal:4001/v1/webauthn/registration/status", expect.objectContaining({ method: "GET", cache: "no-store" }));
 });
+
+it("proxies a clarification answer without adding authoritative fields", async () => {
+  process.env.API_URL = "http://api.internal:4001";
+  const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: {} }), { status: 200, headers: { "content-type": "application/json" } }));
+  vi.stubGlobal("fetch", upstream);
+  const response = await POST(new NextRequest("http://localhost/api/parlance/clarifications/clarification-1/answer", { method: "POST", body: JSON.stringify({ selectedCandidateId: "acc-1" }), headers: { "content-type": "application/json" } }), { params: Promise.resolve({ path: ["clarifications", "clarification-1", "answer"] }) });
+  expect(response.status).toBe(200);
+  expect(upstream).toHaveBeenCalledWith("http://api.internal:4001/v1/clarifications/clarification-1/answer", expect.objectContaining({ body: JSON.stringify({ selectedCandidateId: "acc-1" }) }));
+});

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { CompilerResultV1, ExecutionResultV1, GoalContractV1, type FinancialPlanV1 } from "@parlance/contracts";
 import {
   DeterministicGoalContractBuilder, DeterministicIntentAmbiguityDetector, GoalContractCandidateV1, intentReferenceOccurrences,
-  type EntityGrounder, type GoalContractBuilder, type IntentAmbiguityDetector, type IntentInterpreter,
+  type ClarificationItem, type EntityGrounder, type EntityGroundingResult, type GoalContractBuilder, type GroundableEntityType, type IntentAmbiguityDetector, type IntentInterpreter,
 } from "@parlance/intent-engine";
 import { z } from "zod";
 import { canonicalHash, hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
@@ -12,6 +12,10 @@ import { assertCompilerBinding, materiallyEquivalentRoute, simulateFinancialStep
 import type { BankPort, BankWriteResult, CompilerPort, GoalConfirmationMetadata, GoalConfirmationRepository, ParlanceRepository } from "./ports.js";
 
 const MessageInput = z.object({ userId: z.string().min(1), text: z.string().min(1) }).strict();
+const ClarificationAnswerInput = z.union([
+  z.object({ selectedCandidateId: z.string().min(1) }).strict(),
+  z.object({ answerText: z.string().trim().min(1) }).strict(),
+]);
 export type EntityGrounderFactory = (userId: string) => EntityGrounder;
 
 export class MessageOrchestrationService {
@@ -35,7 +39,12 @@ export class MessageOrchestrationService {
       : { reference: item.reference, expectedEntityType: item.expectedEntityType })));
     const ambiguity = this.ambiguityDetector.analyze({ draft: intentDraft, groundingResults });
     if (ambiguity.status === "NEEDS_CLARIFICATION") {
-      return { status: "NEEDS_CLARIFICATION" as const, intentDraft, clarifications: ambiguity.clarifications };
+      const stored = await this.repository.saveClarification({
+        clarificationId: this.newId(), goalContractId: this.newId(), userId: input.userId, version: 1,
+        createdAt: this.now().toISOString(), originalText: input.text, intentDraft, groundingResults,
+        clarifications: ambiguity.clarifications, traceId,
+      });
+      return { status: "NEEDS_CLARIFICATION" as const, clarificationId: stored.clarificationId, clarifications: stored.clarifications };
     }
     const candidate = GoalContractCandidateV1.parse(this.goalBuilder.build({ draft: intentDraft, groundingResults }));
     const stored = await this.repository.saveGoalCandidate({
@@ -43,6 +52,43 @@ export class MessageOrchestrationService {
       createdAt: this.now().toISOString(), candidate, originalText: input.text, intentDraft, traceId,
     });
     return { status: "AWAITING_GOAL_CONFIRMATION" as const, candidateId: stored.candidateId, goalCandidate: stored.candidate };
+  }
+
+  async answerClarification(clarificationId: string, value: unknown, traceId: string) {
+    const answer = ClarificationAnswerInput.parse(value);
+    const pending = await this.repository.getClarification(clarificationId);
+    if (pending === null) {
+      const completed = await this.repository.getGoalCandidate(clarificationId);
+      if (completed !== null) return { status: "AWAITING_GOAL_CONFIRMATION" as const, candidateId: completed.candidateId, goalCandidate: completed.candidate };
+      throw new Error("CLARIFICATION_NOT_FOUND");
+    }
+    const clarification = pending.clarifications[0];
+    if (clarification === undefined) throw new Error("CLARIFICATION_NOT_ANSWERABLE");
+    const requirement = intentReferenceOccurrences(pending.intentDraft).find((item) => item.field === clarification.field && item.reference === clarification.originalReference);
+    if (requirement === undefined) throw new Error("CLARIFICATION_REQUIREMENT_NOT_FOUND");
+
+    const grounder = this.grounderForUser(pending.userId);
+    const resolved = "selectedCandidateId" in answer
+      ? selectedGrounding(clarification, answer.selectedCandidateId, requirement.expectedEntityType)
+      : rebaseGrounding(await grounder.ground(requirement.expectedEntityType === undefined
+        ? { reference: answer.answerText }
+        : { reference: answer.answerText, expectedEntityType: requirement.expectedEntityType }), clarification.originalReference, requirement.expectedEntityType);
+    const groundingResults = replaceGrounding(pending.groundingResults, clarification, resolved);
+    const ambiguity = this.ambiguityDetector.analyze({ draft: pending.intentDraft, groundingResults });
+    const candidate = ambiguity.status === "CLEAR"
+      ? GoalContractCandidateV1.parse(this.goalBuilder.build({ draft: pending.intentDraft, groundingResults }))
+      : undefined;
+    const answerText = "selectedCandidateId" in answer
+      ? clarification.options.find((option) => option.entityId === answer.selectedCandidateId)?.displayName ?? answer.selectedCandidateId
+      : answer.answerText;
+    const progress = await this.repository.advanceClarification({
+      clarificationId, answerText, groundingResults,
+      clarifications: ambiguity.status === "CLEAR" ? [] : ambiguity.clarifications,
+      ...(candidate === undefined ? {} : { candidate }), traceId,
+    });
+    return progress.status === "AWAITING_GOAL_CONFIRMATION"
+      ? { status: "AWAITING_GOAL_CONFIRMATION" as const, candidateId: progress.candidate.candidateId, goalCandidate: progress.candidate.candidate }
+      : { status: "NEEDS_CLARIFICATION" as const, clarificationId: progress.request.clarificationId, clarifications: progress.request.clarifications };
   }
 
   async confirm(candidateId: string, traceId: string) {
@@ -68,6 +114,36 @@ export class MessageOrchestrationService {
     };
     return { status: "CONFIRMED" as const, goalContract: confirmed.contract, confirmation: authoritativeConfirmation };
   }
+}
+
+function selectedGrounding(clarification: ClarificationItem, entityId: string, expectedEntityType: GroundableEntityType | undefined): EntityGroundingResult {
+  const option = clarification.options.find((item) => item.entityId === entityId && (expectedEntityType === undefined || item.entityType === expectedEntityType));
+  if (option === undefined) throw new Error("CLARIFICATION_OPTION_INVALID");
+  return { status: "RESOLVED", reference: clarification.originalReference, entityType: option.entityType, entityId: option.entityId, resolutionMethod: "USER_CONFIRMED" };
+}
+
+function rebaseGrounding(result: EntityGroundingResult, reference: string, expectedEntityType: GroundableEntityType | undefined): EntityGroundingResult {
+  if (result.status === "RESOLVED") {
+    if (expectedEntityType !== undefined && result.entityType !== expectedEntityType) return { status: "NOT_FOUND", reference, expectedEntityType };
+    return { status: "RESOLVED", reference, entityType: result.entityType, entityId: result.entityId, resolutionMethod: "USER_CONFIRMED" };
+  }
+  if (result.status === "NOT_FOUND") return expectedEntityType === undefined ? { status: "NOT_FOUND", reference } : { status: "NOT_FOUND", reference, expectedEntityType };
+  if (result.status === "AMBIGUOUS") return expectedEntityType === undefined
+    ? { status: "AMBIGUOUS", reference, candidates: result.candidates }
+    : { status: "AMBIGUOUS", reference, expectedEntityType, candidates: result.candidates };
+  return expectedEntityType === undefined
+    ? { status: "CANDIDATES", reference, candidates: result.candidates }
+    : { status: "CANDIDATES", reference, expectedEntityType, candidates: result.candidates };
+}
+
+function replaceGrounding(results: readonly EntityGroundingResult[], clarification: ClarificationItem, replacement: EntityGroundingResult): EntityGroundingResult[] {
+  let replaced = false;
+  const next = results.map((result) => {
+    if (!replaced && result.reference === clarification.originalReference && result.status !== "RESOLVED") { replaced = true; return replacement; }
+    return result;
+  });
+  if (!replaced) next.push(replacement);
+  return next;
 }
 
 export class CompilationService {

@@ -4,6 +4,7 @@ import type { ApiServices } from "../app.js";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
 const RouteId = z.object({ id: z.string().min(1) });
 const EmptyInput = z.object({}).strict();
+const ClarificationAnswerInput = z.union([z.object({ selectedCandidateId: z.string().min(1) }).strict(), z.object({ answerText: z.string().trim().min(1) }).strict()]);
 const RegistrationVerificationInput = z.object({
   challengeId: z.string().min(1),
   credential: z.object({
@@ -25,6 +26,7 @@ const ApprovalVerificationInput = z.object({
 const trace = (headers: Record<string, unknown>): string => String(headers["x-trace-id"]);
 export async function registerRoutes(app: FastifyInstance, services: ApiServices) {
   app.post("/v1/messages", async (request) => services.messages.receive(request.body, trace(request.headers)));
+  app.post("/v1/clarifications/:id/answer", async (request) => services.messages.answerClarification(RouteId.parse(request.params).id, ClarificationAnswerInput.parse(request.body), trace(request.headers)));
   app.post("/v1/goal-candidates/:id/confirm", async (request) => { EmptyInput.parse(request.body ?? {}); return services.messages.confirm(RouteId.parse(request.params).id, trace(request.headers)); });
   app.post("/v1/goals/:id/compile", async (request) => services.compilation.compile(RouteId.parse(request.params).id, trace(request.headers)));
   app.get("/v1/webauthn/registration/status", async () => services.webauthn.registrationStatus());

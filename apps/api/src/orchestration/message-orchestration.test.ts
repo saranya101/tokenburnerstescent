@@ -4,7 +4,7 @@ import { BankStateSnapshotV1, GoalContractV1, type IntentDraftV1 } from "@parlan
 import type { EntityGrounder, EntityGroundingInput, EntityGroundingResult, IntentInterpreter } from "@parlance/intent-engine";
 import { describe, expect, it, vi } from "vitest";
 import { hashGoalContract } from "../security/canonical-hash.js";
-import type { GoalConfirmationMetadata, GoalConfirmationRepository, ParlanceRepository, StoredGoal, StoredGoalCandidate } from "./ports.js";
+import type { GoalConfirmationMetadata, GoalConfirmationRepository, ParlanceRepository, StoredClarificationRequest, StoredGoal, StoredGoalCandidate } from "./ports.js";
 import { CompilationService, MessageOrchestrationService } from "./services.js";
 
 const snapshot = BankStateSnapshotV1.parse(JSON.parse(readFileSync(join(process.cwd(), "../../packages/contracts/fixtures/01-ntu-transfer/bank-state.json"), "utf8")));
@@ -16,8 +16,22 @@ const transferDraft: IntentDraftV1 = {
 
 class CandidateRepository implements GoalConfirmationRepository {
   candidate?: StoredGoalCandidate;
+  clarification: StoredClarificationRequest | undefined;
   goal?: StoredGoal;
   confirmations = 0;
+  clarificationAdvances = 0;
+  async saveClarification(input: Parameters<GoalConfirmationRepository["saveClarification"]>[0]) { this.clarification = input; return input; }
+  async getClarification(id: string) { return this.clarification?.clarificationId === id ? this.clarification : null; }
+  async advanceClarification(input: Parameters<GoalConfirmationRepository["advanceClarification"]>[0]) {
+    this.clarificationAdvances += 1;
+    if (!this.clarification || this.clarification.clarificationId !== input.clarificationId) throw new Error("CLARIFICATION_NOT_FOUND");
+    if (input.candidate) {
+      this.candidate = { candidateId: this.clarification.clarificationId, goalContractId: this.clarification.goalContractId, userId: this.clarification.userId, version: this.clarification.version, createdAt: this.clarification.createdAt, candidate: input.candidate };
+      this.clarification = undefined; return { status: "AWAITING_GOAL_CONFIRMATION" as const, candidate: this.candidate };
+    }
+    this.clarification = { ...this.clarification, groundingResults: input.groundingResults, clarifications: input.clarifications };
+    return { status: "NEEDS_CLARIFICATION" as const, request: this.clarification };
+  }
   async saveGoalCandidate(input: Parameters<GoalConfirmationRepository["saveGoalCandidate"]>[0]) {
     this.candidate = { candidateId: input.candidateId, goalContractId: input.goalContractId, userId: input.userId, version: input.version, createdAt: input.createdAt, candidate: input.candidate };
     return this.candidate;
@@ -96,7 +110,59 @@ describe("Person B to Person A confirmation boundary", () => {
       ],
     })));
     const result = await messages.receive({ userId: "user-1", text: draft.originalText }, "trace-ambiguous");
-    expect(result.status).toBe("NEEDS_CLARIFICATION"); expect(repository.candidate).toBeUndefined(); expect(repository.goal).toBeUndefined(); expect(compile).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ status: "NEEDS_CLARIFICATION", clarificationId: expect.any(String) }); expect(repository.candidate).toBeUndefined(); expect(repository.goal).toBeUndefined(); expect(compile).not.toHaveBeenCalled();
+    if (result.status !== "NEEDS_CLARIFICATION") throw new Error("Expected clarification");
+    const continued = await messages.answerClarification(result.clarificationId, { selectedCandidateId: "ben-john-2" }, "trace-answer");
+    expect(continued).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { recipientId: "ben-john-2", amount: { currency: "USD", minorUnits: "50000" } } } });
+    expect(repository.goal).toBeUndefined(); expect(repository.confirmations).toBe(0);
+  });
+
+  it("continues a persisted account clarification without reinterpreting the original amount or recipient", async () => {
+    const draft: IntentDraftV1 = { ...transferDraft, originalText: "Send NTU USD 7000 using my SGD account", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "700000" }, recipientReference: "NTU" }, preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }] };
+    const interpreter = new FixedInterpreter(draft); const interpret = vi.spyOn(interpreter, "interpretUserRequest"); const repository = new CandidateRepository();
+    const grounder = new FixedGrounder((input) => input.expectedEntityType === "BENEFICIARY"
+      ? { status: "RESOLVED", reference: input.reference, entityType: "BENEFICIARY", entityId: "ben-ntu", resolutionMethod: "ALIAS" }
+      : { status: "AMBIGUOUS", reference: input.reference, expectedEntityType: "ACCOUNT", candidates: [
+        { entityType: "ACCOUNT", entityId: "acc-sgd-main", canonicalName: "DBS Multiplier Account", account: { currency: "SGD", accountType: "CHECKING", availableMinorUnits: "1733334" } },
+        { entityType: "ACCOUNT", entityId: "acc-sgd-save", canonicalName: "Savings Account", account: { currency: "SGD", accountType: "SAVINGS", availableMinorUnits: "842000" } },
+      ] });
+    const messages = new MessageOrchestrationService(repository, interpreter, () => grounder, undefined, undefined, () => new Date("2026-09-25T10:00:00Z"), (() => { const values = ["clarification-1", "goal-1"]; return () => values.shift()!; })());
+    const pending = await messages.receive({ userId: "user-1", text: draft.originalText }, "trace-message");
+    expect(pending).toMatchObject({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-1", clarifications: [{ options: [{ entityId: "acc-sgd-main" }, { entityId: "acc-sgd-save" }] }] });
+    const continued = await messages.answerClarification("clarification-1", { selectedCandidateId: "acc-sgd-main" }, "trace-answer");
+    expect(continued).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "clarification-1", goalCandidate: {
+      goal: { amount: { currency: "USD", minorUnits: "700000" }, recipientId: "ben-ntu" }, preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd-main" }],
+    } });
+    if (continued.status !== "AWAITING_GOAL_CONFIRMATION") throw new Error("Expected candidate");
+    expect(continued.goalCandidate.entityBindings).toEqual(expect.arrayContaining([expect.objectContaining({ entityId: "acc-sgd-main", resolutionMethod: "USER_CONFIRMED", confirmed: false })]));
+    expect(interpret).toHaveBeenCalledTimes(1); expect(repository.goal).toBeUndefined(); expect(repository.confirmations).toBe(0);
+  });
+
+  it("grounds a typed clarification server-side and makes duplicate answers side-effect free", async () => {
+    const draft: IntentDraftV1 = { ...transferDraft, preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }] };
+    const repository = new CandidateRepository();
+    const grounder = new FixedGrounder((input) => input.expectedEntityType === "BENEFICIARY"
+      ? { status: "RESOLVED", reference: input.reference, entityType: "BENEFICIARY", entityId: "ben-ntu", resolutionMethod: "ALIAS" }
+      : input.reference === "DBS Multiplier Account"
+        ? { status: "RESOLVED", reference: input.reference, entityType: "ACCOUNT", entityId: "acc-sgd-main", resolutionMethod: "ALIAS" }
+        : { status: "NOT_FOUND", reference: input.reference, expectedEntityType: "ACCOUNT" });
+    const messages = new MessageOrchestrationService(repository, new FixedInterpreter(draft), () => grounder, undefined, undefined, undefined, (() => { const values = ["clarification-typed", "goal-typed"]; return () => values.shift()!; })());
+    await messages.receive({ userId: "user-1", text: draft.originalText }, "trace-message");
+    const first = await messages.answerClarification("clarification-typed", { answerText: "DBS Multiplier Account" }, "trace-answer");
+    const duplicate = await messages.answerClarification("clarification-typed", { answerText: "DBS Multiplier Account" }, "trace-duplicate");
+    expect(first).toEqual(duplicate); expect(repository.clarificationAdvances).toBe(1); expect(repository.goal).toBeUndefined();
+  });
+
+  it("keeps an unknown typed account as a safe conversational no-match", async () => {
+    const draft: IntentDraftV1 = { ...transferDraft, preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }] };
+    const repository = new CandidateRepository(); const grounder = new FixedGrounder((input) => input.expectedEntityType === "BENEFICIARY"
+      ? { status: "RESOLVED", reference: input.reference, entityType: "BENEFICIARY", entityId: "ben-ntu", resolutionMethod: "ALIAS" }
+      : { status: "NOT_FOUND", reference: input.reference, expectedEntityType: "ACCOUNT" });
+    const messages = new MessageOrchestrationService(repository, new FixedInterpreter(draft), () => grounder, undefined, undefined, undefined, (() => { const values = ["clarification-missing", "goal-missing"]; return () => values.shift()!; })());
+    await messages.receive({ userId: "user-1", text: draft.originalText }, "trace-message");
+    const result = await messages.answerClarification("clarification-missing", { answerText: "Unknown account" }, "trace-answer");
+    expect(result).toMatchObject({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-missing", clarifications: [{ options: [] }] });
+    expect(repository.candidate).toBeUndefined(); expect(repository.goal).toBeUndefined();
   });
 
   it("does not create a goal candidate for unresolved semantic candidates", async () => {

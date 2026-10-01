@@ -65,7 +65,7 @@ const constraintSlots = () => strict(constraintSlotNames, {
   },
   excludedAccounts: {
     type: "array",
-    description: "Every item must be an explicitly prohibited account, such as an account the user said not to use or touch. Use an empty array when none was explicitly prohibited. Never invent an account or use an empty string or another sentinel for absence.",
+    description: "Every item must be an explicitly prohibited account, supported by exclusion language such as don't use, do not take money from, avoid, or not from. Balance descriptions such as I only have 5,000 in this account or this account has 5,000 are context, not exclusions. Use an empty array when none was explicitly prohibited. Never invent an account or use an empty string or another sentinel for absence.",
     items: id(),
   },
   maxLockInDays: nullableStrict(["days", "evidence"], {
@@ -272,7 +272,9 @@ function projectConstraintSlots(value: unknown, originalText: string | undefined
     });
   }
   for (const accountReference of value.excludedAccounts) {
-    constraints.push({ type: "EXCLUDED_ACCOUNT", accountReference: stripNullFields(accountReference) });
+    if (typeof accountReference === "string" && originalText !== undefined && explicitlyExcludesAccount(originalText, accountReference)) {
+      constraints.push({ type: "EXCLUDED_ACCOUNT", accountReference });
+    }
   }
   if (value.maxLockInDays !== null) {
     if (!isCompleteSlotObject(value.maxLockInDays, ["days", "evidence"])) return stripNullFields(value);
@@ -291,6 +293,27 @@ function projectConstraintSlots(value: unknown, originalText: string | undefined
 
 function explicitlyConcernsLockIn(evidence: string): boolean {
   return /\b(?:lock[ -]?in|locked)\b/i.test(evidence);
+}
+
+function explicitlyExcludesAccount(originalText: string, accountReference: string): boolean {
+  const text = originalText.toLowerCase().replace(/[’]/gu, "'");
+  const reference = accountReference.toLowerCase().replace(/[’]/gu, "'");
+  let offset = text.indexOf(reference);
+  while (offset >= 0) {
+    const clauseStart = Math.max(text.lastIndexOf(".", offset), text.lastIndexOf("!", offset), text.lastIndexOf("?", offset), text.lastIndexOf(";", offset)) + 1;
+    const prefix = text.slice(clauseStart, offset);
+    const suffix = text.slice(offset + reference.length, Math.min(text.length, offset + reference.length + 60));
+    const cue = /\b(?:(?:do not|don't|dont|never)\s+(?:use|touch|take(?:\s+money)?\s+from)|avoid|exclude|not\s+from)\b/gu;
+    const matches = [...prefix.matchAll(cue)];
+    const lastCue = matches.at(-1);
+    if (lastCue !== undefined) {
+      const between = prefix.slice((lastCue.index ?? 0) + lastCue[0].length);
+      if (!/\b(?:but|however|instead)\b/iu.test(between)) return true;
+    }
+    if (/^\s*(?:must\s+)?(?:not\s+be\s+used|is\s+excluded)\b/iu.test(suffix)) return true;
+    offset = text.indexOf(reference, offset + reference.length);
+  }
+  return false;
 }
 
 function projectPreferenceSlots(value: unknown): unknown {

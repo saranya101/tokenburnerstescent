@@ -10,6 +10,8 @@ export interface ClarificationOption {
   entityId: string;
   entityType: GroundableEntityType;
   displayName: string;
+  currency?: string;
+  availableMinorUnits?: string;
 }
 
 /** Structured clarification data; UI wording can be localized without changing its meaning. */

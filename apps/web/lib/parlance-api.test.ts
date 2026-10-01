@@ -49,3 +49,9 @@ it("uses only server-bound passkey enrollment endpoints", async () => {
     { url: "/api/parlance/webauthn/registration/verify", method: "POST", body: JSON.stringify({ challengeId: "registration-1", credential: registration }) },
   ]);
 });
+
+it("continues clarification with only the request identifier and customer answer", async () => {
+  const fetcher = vi.fn().mockResolvedValue(json({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: { schemaVersion: "1", goal: { type: "PAY_BILL", billerId: "biller-1" }, constraints: [], preferences: [], entityBindings: [] } }));
+  const api = createParlanceApi(fetcher as typeof fetch); await api.answerClarification("clarification-1", { selectedCandidateId: "account-1" });
+  expect(fetcher).toHaveBeenCalledWith("/api/parlance/clarifications/clarification-1/answer", expect.objectContaining({ method: "POST", body: JSON.stringify({ selectedCandidateId: "account-1" }) }));
+});

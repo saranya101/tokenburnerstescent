@@ -19,12 +19,13 @@ export function clarificationFor(field: string, reference: string, expectedEntit
   };
 }
 
-function optionsFor(candidates: readonly { entityId: string; entityType: GroundableEntityType; canonicalName: string }[], expectedEntityType: GroundableEntityType | undefined): readonly ClarificationOption[] {
+function optionsFor(candidates: readonly { entityId: string; entityType: GroundableEntityType; canonicalName: string; account?: { currency: string; availableMinorUnits?: string } }[], expectedEntityType: GroundableEntityType | undefined): readonly ClarificationOption[] {
   const unique = new Map<string, ClarificationOption>();
   for (const candidate of candidates) {
     if (expectedEntityType === undefined || candidate.entityType === expectedEntityType) {
       unique.set(`${candidate.entityType}\u0000${candidate.entityId}`, {
         entityId: candidate.entityId, entityType: candidate.entityType, displayName: candidate.canonicalName,
+        ...(candidate.account === undefined ? {} : { currency: candidate.account.currency, ...(candidate.account.availableMinorUnits === undefined ? {} : { availableMinorUnits: candidate.account.availableMinorUnits }) }),
       });
     }
   }

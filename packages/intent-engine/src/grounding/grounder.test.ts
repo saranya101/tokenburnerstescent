@@ -42,6 +42,31 @@ it("filters candidates by expected entity type", async () => {
   await expect(grounder().ground({ reference: "John", expectedEntityType: "BENEFICIARY" })).resolves.toMatchObject({ status: "RESOLVED", entityId: "ben_john", resolutionMethod: "ALIAS" });
 });
 
+it("resolves a customer-owned currency account from deterministic account evidence", async () => {
+  const accounts: GroundingEntity[] = [
+    { entityType: "ACCOUNT", entityId: "acc-sgd", canonicalName: "DBS Multiplier Account", aliases: ["Multiplier"], account: { currency: "SGD", accountType: "CHECKING", availableMinorUnits: "1733334" } },
+    { entityType: "ACCOUNT", entityId: "acc-usd", canonicalName: "USD Wallet", account: { currency: "USD", accountType: "WALLET", availableMinorUnits: "500000" } },
+  ];
+  await expect(grounder(accounts).ground({ reference: "my SGD account", expectedEntityType: "ACCOUNT" })).resolves.toMatchObject({ status: "RESOLVED", entityId: "acc-sgd" });
+});
+
+it("returns every real matching account when deterministic evidence is ambiguous", async () => {
+  const accounts: GroundingEntity[] = [
+    { entityType: "ACCOUNT", entityId: "acc-sgd-main", canonicalName: "DBS Multiplier Account", account: { currency: "SGD", accountType: "CHECKING", availableMinorUnits: "1733334" } },
+    { entityType: "ACCOUNT", entityId: "acc-sgd-save", canonicalName: "Savings Account", account: { currency: "SGD", accountType: "SAVINGS", availableMinorUnits: "842000" } },
+  ];
+  await expect(grounder(accounts).ground({ reference: "my SGD account", expectedEntityType: "ACCOUNT" })).resolves.toMatchObject({ status: "AMBIGUOUS", candidates: [
+    { entityId: "acc-sgd-main", canonicalName: "DBS Multiplier Account", account: { currency: "SGD", availableMinorUnits: "1733334" } },
+    { entityId: "acc-sgd-save", canonicalName: "Savings Account", account: { currency: "SGD", availableMinorUnits: "842000" } },
+  ] });
+  await expect(grounder(accounts).ground({ reference: "my savings account", expectedEntityType: "ACCOUNT" })).resolves.toMatchObject({ status: "RESOLVED", entityId: "acc-sgd-save" });
+});
+
+it("does not invent an account when deterministic evidence matches none", async () => {
+  const accounts: GroundingEntity[] = [{ entityType: "ACCOUNT", entityId: "acc-sgd", canonicalName: "DBS Multiplier Account", account: { currency: "SGD", accountType: "CHECKING" } }];
+  await expect(grounder(accounts).ground({ reference: "my EUR account", expectedEntityType: "ACCOUNT" })).resolves.toEqual({ status: "NOT_FOUND", reference: "my EUR account", expectedEntityType: "ACCOUNT" });
+});
+
 it("preserves cross-entity ambiguity rather than guessing or using semantic retrieval", async () => {
   const retriever: SemanticEntityRetriever = { retrieve: vi.fn() };
   await expect(grounder(entities, retriever).ground({ reference: "John", semanticSearch: {} })).resolves.toEqual({

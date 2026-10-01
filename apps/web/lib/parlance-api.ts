@@ -4,10 +4,10 @@ import {
 } from "@parlance/contracts";
 
 export type GoalCandidate = Pick<GoalContract, "schemaVersion" | "goal" | "constraints" | "preferences" | "entityBindings">;
-export type ClarificationOption = { entityId: string; entityType: "ACCOUNT" | "BENEFICIARY" | "ASSET" | "BILLER" | "OBLIGATION"; displayName: string };
+export type ClarificationOption = { entityId: string; entityType: "ACCOUNT" | "BENEFICIARY" | "ASSET" | "BILLER" | "OBLIGATION"; displayName: string; currency?: string; availableMinorUnits?: string };
 export type Clarification = { reason: string; field: string; originalReference: string; questionKey: string; options: ClarificationOption[] };
 export type MessageResponse =
-  | { status: "NEEDS_CLARIFICATION"; clarifications: Clarification[] }
+  | { status: "NEEDS_CLARIFICATION"; clarificationId: string; clarifications: Clarification[] }
   | { status: "AWAITING_GOAL_CONFIRMATION"; candidateId: string; goalCandidate: GoalCandidate };
 export type AuthenticationOptionsJSON = {
   challenge: string; timeout?: number; rpId?: string; userVerification?: UserVerificationRequirement;
@@ -63,7 +63,13 @@ export function createParlanceApi(fetcher: typeof fetch = fetch) {
   return {
     async sendMessage(text: string): Promise<MessageResponse> {
       const value = record(await request("messages", "POST", { text }));
-      if (value?.status === "NEEDS_CLARIFICATION" && Array.isArray(value.clarifications)) return { status: value.status, clarifications: value.clarifications as Clarification[] };
+      if (value?.status === "NEEDS_CLARIFICATION" && typeof value.clarificationId === "string" && Array.isArray(value.clarifications)) return { status: value.status, clarificationId: value.clarificationId, clarifications: value.clarifications as Clarification[] };
+      if (value?.status === "AWAITING_GOAL_CONFIRMATION" && typeof value.candidateId === "string") return { status: value.status, candidateId: value.candidateId, goalCandidate: GoalCandidateSchema.parse(value.goalCandidate) };
+      throw new ParlanceApiError("INVALID_API_RESPONSE", 502);
+    },
+    async answerClarification(clarificationId: string, answer: { selectedCandidateId: string } | { answerText: string }): Promise<MessageResponse> {
+      const value = record(await request(`clarifications/${encodeURIComponent(clarificationId)}/answer`, "POST", answer));
+      if (value?.status === "NEEDS_CLARIFICATION" && typeof value.clarificationId === "string" && Array.isArray(value.clarifications)) return { status: value.status, clarificationId: value.clarificationId, clarifications: value.clarifications as Clarification[] };
       if (value?.status === "AWAITING_GOAL_CONFIRMATION" && typeof value.candidateId === "string") return { status: value.status, candidateId: value.candidateId, goalCandidate: GoalCandidateSchema.parse(value.goalCandidate) };
       throw new ParlanceApiError("INVALID_API_RESPONSE", 502);
     },

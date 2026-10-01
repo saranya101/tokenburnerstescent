@@ -1,5 +1,5 @@
 import type { ApprovalV1, BankStateSnapshotV1, CompilerResultV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1, IntentDraftV1 } from "@parlance/contracts";
-import type { GoalContractCandidate } from "@parlance/intent-engine";
+import type { ClarificationItem, EntityGroundingResult, GoalContractCandidate } from "@parlance/intent-engine";
 import type { StoredApprovalEvidence } from "../webauthn/types.js";
 
 export interface StoredGoal { rowId: string; contract: GoalContractV1 }
@@ -16,6 +16,20 @@ export interface StoredGoalCandidate {
   createdAt: string;
   candidate: GoalContractCandidate;
 }
+export interface StoredClarificationRequest {
+  clarificationId: string;
+  goalContractId: string;
+  userId: string;
+  version: number;
+  createdAt: string;
+  originalText: string;
+  intentDraft: IntentDraftV1;
+  groundingResults: readonly EntityGroundingResult[];
+  clarifications: readonly ClarificationItem[];
+}
+export type ClarificationProgress =
+  | { status: "NEEDS_CLARIFICATION"; request: StoredClarificationRequest }
+  | { status: "AWAITING_GOAL_CONFIRMATION"; candidate: StoredGoalCandidate };
 export interface GoalConfirmationMetadata {
   schemaVersion: "1";
   goalContractId: string;
@@ -26,6 +40,9 @@ export interface GoalConfirmationMetadata {
 }
 
 export interface GoalConfirmationRepository {
+  saveClarification(input: StoredClarificationRequest & { traceId: string }): Promise<StoredClarificationRequest>;
+  getClarification(clarificationId: string): Promise<StoredClarificationRequest | null>;
+  advanceClarification(input: { clarificationId: string; answerText: string; groundingResults: readonly EntityGroundingResult[]; clarifications: readonly ClarificationItem[]; candidate?: GoalContractCandidate; traceId: string }): Promise<ClarificationProgress>;
   saveGoalCandidate(input: StoredGoalCandidate & { originalText: string; intentDraft: IntentDraftV1; traceId: string }): Promise<StoredGoalCandidate>;
   getGoalCandidate(candidateId: string): Promise<StoredGoalCandidate | null>;
   confirmGoal(input: { candidateId: string; contract: GoalContractV1; confirmation: GoalConfirmationMetadata; traceId: string }): Promise<StoredGoal>;

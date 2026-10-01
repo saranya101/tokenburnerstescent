@@ -64,4 +64,16 @@ describe("ClarificationCard", () => {
     expect(html).toContain("more than one possible match");
     expect(html).toContain("different financial outcomes");
   });
+
+  it("shows real account balances and keeps typed clarification available", () => {
+    const options = [
+      { entityId: "acc-1", entityType: "ACCOUNT" as const, displayName: "DBS Multiplier Account", currency: "SGD", availableMinorUnits: "1733334" },
+      { entityId: "acc-2", entityType: "ACCOUNT" as const, displayName: "Savings Account", currency: "SGD", availableMinorUnits: "842000" },
+    ];
+    const props = { clarification: { ...base, field: "preferences[0].accountReference", originalReference: "my SGD account", options }, onSelect: vi.fn(), onAnswerText: vi.fn(), onCancel: vi.fn() };
+    const html = renderToStaticMarkup(createElement(ClarificationCard, props));
+    expect(html).toContain("Which SGD account would you like me to use for the shortfall?");
+    expect(html).toContain("DBS Multiplier Account"); expect(html).toContain("SGD 17,333.34"); expect(html).toContain("Savings Account"); expect(html).toContain("SGD 8,420.00");
+    expect(html).toContain("Or type the name you use for it"); expect(html).toContain("Start over");
+  });
 });
