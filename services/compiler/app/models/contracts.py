@@ -304,6 +304,67 @@ class GoalContractV1(ContractModel):
     confirmed_at: datetime | None = None
 
 
+class GoalDependencyV1(ContractModel):
+    before_item_id: str = Field(min_length=1)
+    after_item_id: str = Field(min_length=1)
+    reason: Literal["USER_EXPLICIT_ORDER"]
+
+
+class GoalBundleItemV1(ContractModel):
+    item_id: str = Field(min_length=1)
+    goal: GroundedGoalV1
+    constraints: list[GroundedGoalConstraintV1]
+    preferences: list[GroundedPreferenceV1]
+    bindings: list[EntityBinding]
+
+
+class GoalBundleContractV1(ContractModel):
+    schema_version: Literal["1"]
+    bundle_id: str = Field(min_length=1)
+    bundle_version: int = Field(gt=0)
+    items: list[GoalBundleItemV1] = Field(min_length=1)
+    global_constraints: list[GroundedGoalConstraintV1]
+    explicit_dependencies: list[GoalDependencyV1]
+    contract_hash: str = Field(min_length=16)
+
+    @model_validator(mode="after")
+    def validate_dependency_graph(self) -> Self:
+        item_ids = [item.item_id for item in self.items]
+        if len(item_ids) != len(set(item_ids)):
+            raise ValueError("Bundle item IDs must be unique")
+        known = set(item_ids)
+        edges: set[tuple[str, str]] = set()
+        adjacency = {item_id: [] for item_id in item_ids}
+        for dependency in self.explicit_dependencies:
+            edge = (dependency.before_item_id, dependency.after_item_id)
+            if dependency.before_item_id not in known or dependency.after_item_id not in known:
+                raise ValueError("Dependency endpoint must reference an existing item")
+            if dependency.before_item_id == dependency.after_item_id:
+                raise ValueError("Self-dependencies are not allowed")
+            if edge in edges:
+                raise ValueError("Duplicate dependency edges are not allowed")
+            edges.add(edge)
+            adjacency[dependency.before_item_id].append(dependency.after_item_id)
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(item_id: str) -> None:
+            if item_id in visiting:
+                raise ValueError("Explicit dependency graph must be acyclic")
+            if item_id in visited:
+                return
+            visiting.add(item_id)
+            for successor in adjacency[item_id]:
+                visit(successor)
+            visiting.remove(item_id)
+            visited.add(item_id)
+
+        for item_id in item_ids:
+            visit(item_id)
+        return self
+
+
 class AccountV1(ContractModel):
     id: str
     type: Literal["CHECKING", "SAVINGS", "BROKERAGE", "WALLET"]
@@ -511,6 +572,27 @@ class FinancialPlanV1(ContractModel):
     plan_hash: str
 
 
+class BundleItemCoverageV1(ContractModel):
+    item_id: str = Field(min_length=1)
+    satisfied_by_step_ids: list[str]
+
+
+class BundleSatisfactionProofV1(ContractModel):
+    schema_version: Literal["1"]
+    bundle_id: str = Field(min_length=1)
+    bundle_contract_hash: str = Field(min_length=16)
+    item_coverage: list[BundleItemCoverageV1]
+    all_items_satisfied: bool
+    all_hard_constraints_satisfied: bool
+    all_explicit_dependencies_satisfied: bool
+    all_irreversible_steps_justified: bool
+
+
+class CompileGoalBundleResultV1(ContractModel):
+    financial_plan: FinancialPlanV1
+    satisfaction_proof: BundleSatisfactionProofV1
+
+
 class CompilerReasonV1(ContractModel):
     code: str
     message: str
@@ -592,6 +674,11 @@ class ExecutionResultV1(ContractModel):
 class CompileRequest(ContractModel):
     goal_contract: GoalContractV1
     bank_state_snapshot: BankStateSnapshotV1
+
+
+class CompileGoalBundleRequestV1(ContractModel):
+    goal_bundle: GoalBundleContractV1
+    bank_state: BankStateSnapshotV1
 
 
 class RevalidateRequest(ContractModel):

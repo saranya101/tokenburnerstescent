@@ -25,12 +25,16 @@ export const GroundedGoalConstraintV1 = z.discriminatedUnion("type", [
   z.object({ type: z.literal("MAX_LOCK_IN_DAYS"), days: z.number().int().nonnegative() }).strict(),
 ]);
 export type GroundedGoalConstraintV1 = z.infer<typeof GroundedGoalConstraintV1>;
+export const ConstraintV1 = GroundedGoalConstraintV1;
+export type ConstraintV1 = GroundedGoalConstraintV1;
 
 export const GroundedPreferenceV1 = z.discriminatedUnion("type", [
   z.object({ type: z.literal("MINIMIZE_TOTAL_COST") }).strict(), z.object({ type: z.literal("MINIMIZE_FX") }).strict(),
   z.object({ type: z.literal("FASTEST") }).strict(), z.object({ type: z.literal("PREFER_ACCOUNT"), accountId: Id }).strict(),
 ]);
 export type GroundedPreferenceV1 = z.infer<typeof GroundedPreferenceV1>;
+export const PreferenceV1 = GroundedPreferenceV1;
+export type PreferenceV1 = GroundedPreferenceV1;
 
 export const GoalContractV1 = z.object({
   schemaVersion: SchemaVersionV1, id: Id, userId: Id, version: z.number().int().positive(), sourceIntentDraftId: Id.optional(),

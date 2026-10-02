@@ -6,6 +6,7 @@ export * from "./entities.js";
 export * from "./execution.js";
 export * from "./financial-plan.js";
 export * from "./goal-contract.js";
+export * from "./goal-bundle.js";
 export * from "./hard-rules.js";
 export * from "./intent.js";
 export * from "./operations.js";
