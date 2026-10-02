@@ -26,6 +26,8 @@ export { GoalContractCandidateV1 } from "./goal-contract/types.js";
 export type { GoalContractBuildInput, GoalContractBuilder, GoalContractCandidate, GoalContractValidationIssue } from "./goal-contract/types.js";
 export { DeterministicGoalContractBuilder } from "./goal-contract/builder.js";
 export { GoalContractBuilderError } from "./goal-contract/errors.js";
+export { DeterministicReadOnlyIntentValidator } from "./validation/validator.js";
+export type { IndependentIntentValidationInput, IndependentIntentValidationResult, IndependentIntentValidator, IntentValidationMismatch, IntentValidationMismatchCode } from "./validation/types.js";
 export type { DeterministicExplanationV1, ExplanationInput, ExplanationKind, ExplanationRenderer, ExplanationStatement, ExplanationStatementKind } from "./explanation/types.js";
 export { DeterministicExplanationRenderer, renderExplanationText } from "./explanation/renderer.js";
 export { ExplanationInputError } from "./explanation/errors.js";
