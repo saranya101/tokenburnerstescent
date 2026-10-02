@@ -5,6 +5,11 @@ human references, identifies ambiguity, builds a lifecycle-free `GoalContractCan
 deterministic explanations. It does not create financial-plan steps, approve anything, execute
 bank operations, or write to a bank.
 
+The separate `ModelBackedIntentBundleInterpreter` parses multi-goal language into the frozen
+`IntentBundleDraftV1` contract while the original single-intent API remains unchanged. Bundle item
+IDs are application-owned, plain `and` never creates a dependency, and ambiguity/clarification stays
+isolated per item.
+
 ## Trust boundaries and data flow
 
 ```text
@@ -50,6 +55,11 @@ user text
 Person A should compose through the package root:
 
 - `createTokenHubIntentInterpreter()` for language interpretation;
+- `createTokenHubIntentBundleInterpreter()` for the frozen multi-intent bundle shape;
+- `groundingRequirementsForIntentBundle()` and `DeterministicIntentBundleAmbiguityDetector` for
+  item-scoped grounding and clarification;
+- `replaceClarifiedIntentBundleItem()` for targeted clarification without regenerating siblings;
+- `DeterministicIntentBundleCoverageValidator` for missing/extra goal and explicit-order checks;
 - `createDbGroundingStack()` for user-scoped DB exact/alias and pgvector candidate retrieval;
 - `groundingRequirementsForIntent()` to derive authoritative grounding work;
 - `DeterministicIntentAmbiguityDetector` for the pre-contract clarification gate;
