@@ -1,11 +1,12 @@
 import {
   FinancialPlanV1,
   RiskAssessmentV1,
+  RiskExposureV1,
   RiskPolicyV1,
   RiskVelocityUsageV1,
   type KycStatusV1,
   type RiskAssessmentV1 as RiskAssessment,
-  type RiskExposureV1,
+  type RiskExposureV1 as RiskExposure,
   type RiskPolicyV1 as RiskPolicy,
   type RiskReasonCodeV1,
   type RiskVelocityUsageV1 as RiskVelocityUsage,
@@ -21,56 +22,75 @@ export class RiskExposureUnprovableError extends Error {
 
 export function extractPlanRiskExposures(
   input: FinancialPlanV1,
-): RiskExposureV1[] {
+): RiskExposure[] {
   const plan = FinancialPlanV1.parse(input);
 
-  return plan.steps.map((step): RiskExposureV1 => {
+  if (plan.steps.length === 0) {
+    throw new RiskExposureUnprovableError("EMPTY_PLAN");
+  }
+
+  return plan.steps.map((step): RiskExposure => {
+    let exposure: unknown;
+
     switch (step.action) {
       case "TRANSFER":
-        return {
+        exposure = {
           stepId: step.id,
           action: step.action,
           currency: step.parameters.amount.currency,
           minorUnits: step.parameters.amount.minorUnits,
         };
+        break;
 
       case "FX_CONVERT":
-        return {
+        exposure = {
           stepId: step.id,
           action: step.action,
           currency: step.parameters.sourceMoney.currency,
           minorUnits: step.parameters.sourceMoney.minorUnits,
         };
+        break;
 
       case "MOVE_FUNDS":
-        return {
+        exposure = {
           stepId: step.id,
           action: step.action,
           currency: step.parameters.amount.currency,
           minorUnits: step.parameters.amount.minorUnits,
         };
+        break;
 
       case "PAY_BILL":
-        return {
+        exposure = {
           stepId: step.id,
           action: step.action,
           currency: step.parameters.amount.currency,
           minorUnits: step.parameters.amount.minorUnits,
         };
+        break;
 
       case "BUY_ASSET":
-        return {
+        exposure = {
           stepId: step.id,
           action: step.action,
           currency: step.parameters.settlementCurrency,
           minorUnits: step.parameters.authorizedTotalMinor,
         };
+        break;
 
       case "SELL_ASSET":
         // SELL_ASSET currently has no exact monetary proceeds bound into
         // FinancialPlanStepV1, so Risk V1 deliberately fails closed.
         throw new RiskExposureUnprovableError(step.action);
     }
+
+    const parsed = RiskExposureV1.safeParse(exposure);
+
+    if (!parsed.success) {
+      throw new RiskExposureUnprovableError(step.action);
+    }
+
+    return parsed.data;
   });
 }
 
@@ -99,7 +119,7 @@ function thresholdFor(
   return values.find((item) => item.currency === currency);
 }
 
-function amountByCurrency(exposures: RiskExposureV1[]) {
+function amountByCurrency(exposures: RiskExposure[]) {
   const totals = new Map<string, bigint>();
 
   for (const exposure of exposures) {
@@ -141,12 +161,28 @@ export function evaluateRisk(input: EvaluateRiskInput): RiskAssessment {
   let decision: Severity = "ALLOW";
   const reasons = new Set<RiskReasonCodeV1>();
 
+  const parsedUsage = input.rollingUsage.map((usage) =>
+    RiskVelocityUsageV1.safeParse(usage),
+  );
+  const validUsage = parsedUsage.flatMap((result) =>
+    result.success ? [result.data] : [],
+  );
+  const usageCurrencies = validUsage.map((usage) => usage.currency);
+  const rollingUsageValid =
+    validUsage.length === input.rollingUsage.length &&
+    new Set(usageCurrencies).size === usageCurrencies.length;
+
+  if (!rollingUsageValid) {
+    decision = "BLOCK";
+    reasons.add("POLICY_UNAVAILABLE");
+  }
+
   if (Date.parse(policy.effectiveAt) > now.getTime()) {
     decision = "BLOCK";
     reasons.add("POLICY_UNAVAILABLE");
   }
 
-  let exposures: RiskExposureV1[];
+  let exposures: RiskExposure[];
 
   try {
     exposures = extractPlanRiskExposures(plan);
@@ -168,9 +204,9 @@ export function evaluateRisk(input: EvaluateRiskInput): RiskAssessment {
 
   const totals = amountByCurrency(exposures);
   const usageByCurrency = new Map(
-    input.rollingUsage.map((usage) => [
+    validUsage.map((usage) => [
       usage.currency,
-      RiskVelocityUsageV1.parse(usage),
+      usage,
     ]),
   );
 
@@ -223,28 +259,23 @@ export function evaluateRisk(input: EvaluateRiskInput): RiskAssessment {
       decision = worse(decision, "REVIEW");
       reasons.add("ROLLING_AMOUNT_REVIEW_THRESHOLD");
     }
-  }
 
-  const financialOperationCount = exposures.length;
-  const settledCount = input.rollingUsage.reduce(
-    (sum, usage) => sum + usage.settledTransactionCount,
-    0,
-  );
-  const reservedCount = input.rollingUsage.reduce(
-    (sum, usage) => sum + usage.reservedTransactionCount,
-    0,
-  );
-  const projectedCount =
-    settledCount + reservedCount + financialOperationCount;
+    // One FinancialPlan contributes one transaction for each affected
+    // currency, regardless of how many same-currency steps it contains.
+    const projectedCount =
+      effectiveUsage.settledTransactionCount +
+      effectiveUsage.reservedTransactionCount +
+      1;
 
-  if (projectedCount >= policy.rollingCountThreshold.blockAt) {
-    decision = "BLOCK";
-    reasons.add("ROLLING_COUNT_BLOCK_THRESHOLD");
-  } else if (
-    projectedCount >= policy.rollingCountThreshold.reviewAt
-  ) {
-    decision = worse(decision, "REVIEW");
-    reasons.add("ROLLING_COUNT_REVIEW_THRESHOLD");
+    if (projectedCount >= policy.rollingCountThreshold.blockAt) {
+      decision = "BLOCK";
+      reasons.add("ROLLING_COUNT_BLOCK_THRESHOLD");
+    } else if (
+      projectedCount >= policy.rollingCountThreshold.reviewAt
+    ) {
+      decision = worse(decision, "REVIEW");
+      reasons.add("ROLLING_COUNT_REVIEW_THRESHOLD");
+    }
   }
 
   return RiskAssessmentV1.parse({
@@ -263,7 +294,7 @@ export function evaluateRisk(input: EvaluateRiskInput): RiskAssessment {
     reasonCodes: [...reasons],
 
     exposures,
-    rollingUsage: input.rollingUsage,
+    rollingUsage: rollingUsageValid ? validUsage : [],
 
     assessedAt: now.toISOString(),
     expiresAt: new Date(

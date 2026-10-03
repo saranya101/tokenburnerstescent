@@ -114,6 +114,16 @@ describe("RiskAssessmentV1", () => {
     })).toThrow();
   });
 
+  it("rejects duplicate rolling usage currencies", () => {
+    expect(() => RiskAssessmentV1.parse({
+      ...base,
+      rollingUsage: [
+        ...base.rollingUsage,
+        ...base.rollingUsage,
+      ],
+    })).toThrow();
+  });
+
   it("rejects negative executable exposure", () => {
     expect(() => RiskAssessmentV1.parse({
       ...base,
@@ -147,5 +157,9 @@ describe("RiskReservationV1", () => {
     } as const;
 
     expect(RiskReservationV1.parse(value)).toEqual(value);
+    expect(RiskReservationV1.parse({
+      ...value,
+      status: "EXECUTING",
+    }).status).toBe("EXECUTING");
   });
 });

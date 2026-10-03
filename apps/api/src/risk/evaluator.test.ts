@@ -194,6 +194,56 @@ describe("evaluateRisk", () => {
     expect(result.reasonCodes).toEqual([]);
   });
 
+  it("counts a same-currency multi-step plan once", () => {
+    const result = assess(
+      plan([transfer("30000"), buy("20100")]),
+      {
+        rollingUsage: [
+          usage({ settledTransactionCount: 3 }),
+        ],
+      },
+    );
+
+    expect(result.decision).toBe("ALLOW");
+    expect(result.reasonCodes).not.toContain(
+      "ROLLING_COUNT_REVIEW_THRESHOLD",
+    );
+  });
+
+  it("evaluates rolling count independently for each affected currency", () => {
+    const result = assess(
+      plan([
+        transfer("10000"),
+        {
+          id: "sgd-transfer",
+          sequence: 1,
+          dependsOn: [],
+          reversible: false,
+          action: "TRANSFER",
+          parameters: {
+            sourceAccountId: "acc-sgd",
+            beneficiaryId: "ben-test",
+            amount: { currency: "SGD", minorUnits: "10000" },
+          },
+        },
+      ]),
+      {
+        rollingUsage: [
+          usage({ settledTransactionCount: 2 }),
+          usage({
+            currency: "SGD",
+            settledTransactionCount: 2,
+          }),
+        ],
+      },
+    );
+
+    expect(result.decision).toBe("ALLOW");
+    expect(result.reasonCodes).not.toContain(
+      "ROLLING_COUNT_REVIEW_THRESHOLD",
+    );
+  });
+
   it("reviews an exact-plan USD 3,000 exposure", () => {
     const result = assess(plan([transfer("300000")]));
 
@@ -309,6 +359,40 @@ describe("evaluateRisk", () => {
     expect(result.reasonCodes).toContain(
       "CANNOT_PROVE_EXPOSURE",
     );
+  });
+
+  it("fails closed for an empty financial plan", () => {
+    const result = assess(plan([]));
+
+    expect(result.decision).toBe("BLOCK");
+    expect(result.reasonCodes).toContain("CANNOT_PROVE_EXPOSURE");
+    expect(result.exposures).toEqual([]);
+  });
+
+  it("fails closed cleanly for a negative debit exposure", () => {
+    const result = assess(plan([transfer("-1")]));
+
+    expect(result.decision).toBe("BLOCK");
+    expect(result.reasonCodes).toContain("CANNOT_PROVE_EXPOSURE");
+    expect(result.exposures).toEqual([]);
+  });
+
+  it("fails closed for duplicate rolling usage regardless of row order", () => {
+    const smaller = usage({ settledAmountMinorUnits: "10000" });
+    const larger = usage({ settledAmountMinorUnits: "490000" });
+
+    const forward = assess(plan([transfer("10000")]), {
+      rollingUsage: [smaller, larger],
+    });
+    const reversed = assess(plan([transfer("10000")]), {
+      rollingUsage: [larger, smaller],
+    });
+
+    for (const result of [forward, reversed]) {
+      expect(result.decision).toBe("BLOCK");
+      expect(result.reasonCodes).toContain("POLICY_UNAVAILABLE");
+      expect(result.rollingUsage).toEqual([]);
+    }
   });
 
   it("fails closed when policy lacks the exposure currency", () => {

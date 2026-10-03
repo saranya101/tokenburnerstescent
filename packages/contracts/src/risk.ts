@@ -112,6 +112,27 @@ export const RiskVelocityUsageV1 = z.object({
 }).strict();
 export type RiskVelocityUsageV1 = z.infer<typeof RiskVelocityUsageV1>;
 
+export const RiskVelocityUsageListV1 = z
+  .array(RiskVelocityUsageV1)
+  .superRefine((value, context) => {
+    const seen = new Set<string>();
+
+    for (const [index, usage] of value.entries()) {
+      if (seen.has(usage.currency)) {
+        context.addIssue({
+          code: "custom",
+          path: [index, "currency"],
+          message: "rolling usage currency rows must be unique",
+        });
+      }
+
+      seen.add(usage.currency);
+    }
+  });
+export type RiskVelocityUsageListV1 = z.infer<
+  typeof RiskVelocityUsageListV1
+>;
+
 export const RiskAssessmentV1 = z.object({
   schemaVersion: SchemaVersionV1,
   id: Id,
@@ -128,7 +149,7 @@ export const RiskAssessmentV1 = z.object({
   reasonCodes: z.array(RiskReasonCodeV1),
 
   exposures: z.array(RiskExposureV1),
-  rollingUsage: z.array(RiskVelocityUsageV1),
+  rollingUsage: RiskVelocityUsageListV1,
 
   assessedAt: IsoTimestamp,
   expiresAt: IsoTimestamp,
@@ -161,6 +182,7 @@ export type RiskAssessmentV1 = z.infer<typeof RiskAssessmentV1>;
 
 export const RiskReservationStatusV1 = z.enum([
   "ACTIVE",
+  "EXECUTING",
   "CONSUMED",
   "RELEASED",
   "EXPIRED",
