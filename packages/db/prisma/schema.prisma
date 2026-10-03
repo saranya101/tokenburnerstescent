@@ -50,6 +50,7 @@ enum ExecutionStepStatus {
 
 enum OutboxStatus {
   PENDING
+  PROCESSING
   PUBLISHED
   FAILED
 }
@@ -73,25 +74,84 @@ enum ApprovalMethod {
   EXTERNAL_SIGNATURE
 }
 
+enum WebAuthnChallengePurpose {
+  REGISTRATION
+  APPROVAL
+}
+
+enum WebAuthnChallengeStatus {
+  ISSUED
+  CONSUMED
+  REVOKED
+  EXPIRED
+}
+
 model User {
-  id                 String              @id @default(cuid())
-  externalRef        String?             @unique
-  accounts           Account[]
-  beneficiaries      Beneficiary[]
-  holdings           Holding[]
-  entityAliases      EntityAlias[]
-  hardRules          UserHardRule[]
-  conversations      Conversation[]
-  intentDrafts       IntentDraftRecord[]
-  goalContracts      GoalContract[]
-  bankStateSnapshots BankStateSnapshot[]
-  approvals          Approval[]
-  executionRuns      ExecutionRun[]
-  opportunities      Opportunity[]
-  bankServiceState   BankServiceState?
-  fxQuotes           FxQuote[]
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  id                  String               @id @default(cuid())
+  externalRef         String?              @unique
+  accounts            Account[]
+  beneficiaries       Beneficiary[]
+  holdings            Holding[]
+  entityAliases       EntityAlias[]
+  hardRules           UserHardRule[]
+  conversations       Conversation[]
+  intentDrafts        IntentDraftRecord[]
+  goalContracts       GoalContract[]
+  bankStateSnapshots  BankStateSnapshot[]
+  approvals           Approval[]
+  executionRuns       ExecutionRun[]
+  opportunities       Opportunity[]
+  bankServiceState    BankServiceState?
+  fxQuotes            FxQuote[]
+  webAuthnCredentials WebAuthnCredential[]
+  webAuthnChallenges  WebAuthnChallenge[]
+  approvalEvidences   ApprovalEvidence[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+}
+
+model WebAuthnCredential {
+  id                String             @id @default(cuid())
+  userId            String
+  user              User               @relation(fields: [userId], references: [id])
+  credentialId      String             @unique
+  publicKey         Bytes
+  userHandle        Bytes
+  signCount         BigInt
+  transports        Json?
+  deviceType        String
+  backedUp          Boolean
+  createdAt         DateTime           @default(now())
+  lastUsedAt        DateTime?
+  revokedAt         DateTime?
+  approvalEvidences ApprovalEvidence[]
+
+  @@index([userId, revokedAt])
+}
+
+model WebAuthnChallenge {
+  id                  String                   @id @default(cuid())
+  userId              String
+  user                User                     @relation(fields: [userId], references: [id])
+  purpose             WebAuthnChallengePurpose
+  challenge           String                   @unique
+  userHandle          Bytes?
+  expectedRpId        String
+  expectedOrigin      String
+  status              WebAuthnChallengeStatus  @default(ISSUED)
+  financialPlanId     String?
+  financialPlan       FinancialPlan?           @relation(fields: [financialPlanId], references: [id])
+  approvalPayload     Json?
+  approvalPayloadHash String?
+  expiresAt           DateTime
+  consumedAt          DateTime?
+  revokedAt           DateTime?
+  createdAt           DateTime                 @default(now())
+  approvalEvidence    ApprovalEvidence?
+
+  @@index([userId, purpose, status])
+  @@index([status, expiresAt])
+  @@index([financialPlanId])
 }
 
 model Account {
@@ -304,6 +364,8 @@ model FinancialPlan {
   steps                   FinancialPlanStep[]
   approvals               Approval[]
   executionRuns           ExecutionRun[]
+  webAuthnChallenges      WebAuthnChallenge[]
+  approvalEvidences       ApprovalEvidence[]
   createdAt               DateTime            @default(now())
   updatedAt               DateTime            @updatedAt
 
@@ -315,6 +377,7 @@ model FinancialPlanStep {
   id             String          @id @default(cuid())
   planId         String
   plan           FinancialPlan   @relation(fields: [planId], references: [id])
+  stepKey        String
   sequence       Int
   action         String
   dependsOn      Json
@@ -324,19 +387,20 @@ model FinancialPlanStep {
   createdAt      DateTime        @default(now())
 
   @@unique([planId, sequence])
+  @@unique([planId, stepKey])
 }
 
 model Approval {
-  id                  String         @id @default(cuid())
+  id                  String            @id @default(cuid())
   userId              String
-  user                User           @relation(fields: [userId], references: [id])
+  user                User              @relation(fields: [userId], references: [id])
   goalContractRowId   String
-  goalContract        GoalContract   @relation(fields: [goalContractRowId], references: [id])
+  goalContract        GoalContract      @relation(fields: [goalContractRowId], references: [id])
   goalContractKey     String
   goalContractVersion Int
   goalContractHash    String
   financialPlanId     String
-  financialPlan       FinancialPlan  @relation(fields: [financialPlanId], references: [id])
+  financialPlan       FinancialPlan     @relation(fields: [financialPlanId], references: [id])
   financialPlanHash   String
   bankStateVersion    Int
   method              ApprovalMethod
@@ -346,9 +410,41 @@ model Approval {
   revokedAt           DateTime?
   traceId             String?
   executionRuns       ExecutionRun[]
-  createdAt           DateTime       @default(now())
+  evidence            ApprovalEvidence?
+  createdAt           DateTime          @default(now())
 
   @@index([userId, expiresAt])
+}
+
+model ApprovalEvidence {
+  id                         String             @id
+  approvalId                 String             @unique
+  approval                   Approval           @relation(fields: [approvalId], references: [id])
+  userId                     String
+  user                       User               @relation(fields: [userId], references: [id])
+  financialPlanId            String
+  financialPlan              FinancialPlan      @relation(fields: [financialPlanId], references: [id])
+  goalContractKey            String
+  goalContractVersion        Int
+  goalContractHash           String
+  financialPlanHash          String
+  bankStateVersion           Int
+  webAuthnCredentialId       String
+  webAuthnCredential         WebAuthnCredential @relation(fields: [webAuthnCredentialId], references: [id])
+  challengeId                String             @unique
+  challenge                  WebAuthnChallenge  @relation(fields: [challengeId], references: [id])
+  approvalPayloadHash        String
+  authenticatorCounterBefore BigInt
+  authenticatorCounterAfter  BigInt
+  userVerified               Boolean
+  rpId                       String
+  origin                     String
+  verifiedAt                 DateTime
+  createdAt                  DateTime           @default(now())
+
+  @@index([userId, createdAt])
+  @@index([financialPlanId])
+  @@index([webAuthnCredentialId])
 }
 
 model ExecutionRun {
@@ -381,6 +477,7 @@ model ExecutionStep {
   idempotencyKey String              @unique
   bankReference  String?
   errorCode      String?
+  resultingStateVersion Int?
   traceId        String
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
@@ -418,12 +515,15 @@ model OutboxEvent {
   payload     Json
   status      OutboxStatus @default(PENDING)
   attempts    Int          @default(0)
+  claimToken String?
+  claimedAt  DateTime?
   publishedAt DateTime?
   lastError   String?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
   @@index([status, createdAt])
+  @@index([status, claimedAt])
 }
 
 model Opportunity {

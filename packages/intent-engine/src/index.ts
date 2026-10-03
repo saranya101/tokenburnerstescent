@@ -1,7 +1,32 @@
-import type { BankStateSnapshotV1, CompilerResultV1, EntityBinding, IntentDraftV1 } from "@parlance/contracts";
-export interface FinancialAmbiguityV1 { field: string; reason: string; candidateEntityIds: readonly string[]; }
-export interface IntentInterpreter { interpretUserRequest(input: { text: string; userId: string }): Promise<IntentDraftV1>; }
-export interface EntityGrounder { groundEntities(draft: IntentDraftV1, candidates: readonly EntityBinding[]): Promise<readonly EntityBinding[]>; }
-export interface AmbiguityDetector { detectFinancialAmbiguity(draft: IntentDraftV1, entities: readonly EntityBinding[], state?: BankStateSnapshotV1): Promise<readonly FinancialAmbiguityV1[]>; }
-export interface CompilerExplainer { explainCompilerResult(result: CompilerResultV1): Promise<string>; }
-export { MockIntentInterpreter } from "./interpreter/mock.js";
+export type { IntentInterpreter, IntentModelClient, IntentModelInput, InterpretUserRequestInput, IntentValidationIssue, ModelClientDiagnostic } from "./interpreter/types.js";
+export { IntentInterpreterError } from "./interpreter/errors.js";
+export { ModelBackedIntentInterpreter } from "./interpreter/interpreter.js";
+export { INTENT_PROMPT_VERSION } from "./prompts/intent-v1.js";
+export { createTokenHubIntentInterpreter, loadTokenHubConfig, TokenHubConfigurationError } from "./providers/tokenhub/index.js";
+export type { TokenHubConfig, TokenHubIntentInterpreterOptions, TokenHubThinkingMode } from "./providers/tokenhub/index.js";
+export type { AccountGroundingEvidence, EntityGrounder, EntityGroundingInput, EntityGroundingResult, EntityRepository, GroundableEntityType, GroundingCandidate, GroundingEntity, GroundingResolutionMethod } from "./grounding/types.js";
+export { DeterministicEntityGrounder } from "./grounding/grounder.js";
+export { EntityGroundingError } from "./grounding/errors.js";
+export { InMemoryEntityRepository } from "./grounding/repository.js";
+export { DbEntityRepository } from "./grounding/db-repository.js";
+export type { GroundingRawQueryClient } from "./grounding/db-types.js";
+export { createDbGroundingStack } from "./grounding/db-factory.js";
+export type { DbGroundingStackOptions } from "./grounding/db-factory.js";
+export { normalizeEntityReference } from "./grounding/normalizer.js";
+export { groundingRequirementsForIntent } from "./grounding/requirements.js";
+export type { IntentGroundingRequirement } from "./grounding/requirements.js";
+export { intentReferenceOccurrences } from "./references.js";
+export type { IntentReferenceOccurrence } from "./references.js";
+export type { SemanticEntityCandidate, SemanticEntityRetriever, SemanticEntityRetrievalInput } from "./retrieval/types.js";
+export { cosineDistanceToSimilarity, ENTITY_ALIAS_EMBEDDING_DIMENSIONS, PgVectorSemanticEntityRetriever } from "./retrieval/pgvector.js";
+export type { SemanticReferenceEmbedder } from "./retrieval/pgvector.js";
+export type { AmbiguityAnalysisResult, AmbiguityReasonCode, ClarificationItem, ClarificationOption, IntentAmbiguityAnalysisInput, IntentAmbiguityDetector } from "./ambiguity/types.js";
+export { DeterministicIntentAmbiguityDetector } from "./ambiguity/detector.js";
+export { GoalContractCandidateV1 } from "./goal-contract/types.js";
+export type { GoalContractBuildInput, GoalContractBuilder, GoalContractCandidate, GoalContractValidationIssue } from "./goal-contract/types.js";
+export { DeterministicGoalContractBuilder } from "./goal-contract/builder.js";
+export { GoalContractBuilderError } from "./goal-contract/errors.js";
+export type { DeterministicExplanationV1, ExplanationInput, ExplanationKind, ExplanationRenderer, ExplanationStatement, ExplanationStatementKind } from "./explanation/types.js";
+export { DeterministicExplanationRenderer, renderExplanationText } from "./explanation/renderer.js";
+export { ExplanationInputError } from "./explanation/errors.js";
+export { MockIntentInterpreter, MockIntentModelClient } from "./interpreter/mock.js";

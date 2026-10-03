@@ -23,12 +23,16 @@ export const IntentGoalConstraintV1 = z.discriminatedUnion("type", [
   z.object({ type: z.literal("MAX_LOCK_IN_DAYS"), days: z.number().int().nonnegative() }).strict(),
 ]);
 export type IntentGoalConstraintV1 = z.infer<typeof IntentGoalConstraintV1>;
+export const ConstraintDraftV1 = IntentGoalConstraintV1;
+export type ConstraintDraftV1 = IntentGoalConstraintV1;
 
 export const IntentPreferenceV1 = z.discriminatedUnion("type", [
   z.object({ type: z.literal("MINIMIZE_TOTAL_COST") }).strict(), z.object({ type: z.literal("MINIMIZE_FX") }).strict(),
   z.object({ type: z.literal("FASTEST") }).strict(), z.object({ type: z.literal("PREFER_ACCOUNT"), accountReference: Id }).strict(),
 ]);
 export type IntentPreferenceV1 = z.infer<typeof IntentPreferenceV1>;
+export const PreferenceDraftV1 = IntentPreferenceV1;
+export type PreferenceDraftV1 = IntentPreferenceV1;
 
 export const IntentReferenceV1 = z.object({
   reference: Id, expectedEntityType: z.enum(["ACCOUNT", "BENEFICIARY", "ASSET", "BILLER", "OBLIGATION"]).optional(),

@@ -1,0 +1,7 @@
+.card { display:grid; grid-template-columns:auto minmax(0,1fr); gap:20px; align-items:start; }
+.icon { width:52px; height:52px; display:grid; place-items:center; border-radius:15px; color:var(--green); background:var(--green-soft); }
+.icon svg { width:25px; }
+.content :global(.card-description) { margin-bottom:17px; }
+.requirement { width:fit-content; display:flex; align-items:center; gap:8px; margin-bottom:22px; padding:9px 11px; border-radius:9px; color:#285f48; background:var(--green-soft); font-size:.68rem; font-weight:650; }
+.requirement svg { width:15px; }
+@media (max-width:600px) { .card { grid-template-columns:1fr; }.icon { width:46px; height:46px; } }

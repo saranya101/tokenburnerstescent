@@ -217,6 +217,11 @@ def _step_parameters(operation: InternalOperation) -> dict:
     raise ValueError(f"Compiler cannot construct {operation.action} steps")
 
 
+def step_parameters_for_operation(operation: InternalOperation) -> dict:
+    """Return the canonical V1 step parameters for a verified internal operation."""
+    return _step_parameters(operation)
+
+
 def plan_id_for_inputs(
     goal: GoalContractV1,
     snapshot: BankStateSnapshotV1,

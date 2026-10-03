@@ -10,8 +10,8 @@ The LLM is untrusted. It may propose a validated `IntentDraftV1` containing goal
 
 - Node.js 24 and pnpm 11
 - Python 3.12+
-- Docker (for local Redis)
-- A Neon PostgreSQL URL for persistence work
+- Docker (optional, for local Redis)
+- PostgreSQL with the `vector` extension
 
 Copy `.env.example` to `.env` and fill required values. For local-only database tests, any PostgreSQL instance with the `vector` extension can substitute for Neon; set both `DATABASE_URL` and `DIRECT_URL`. No PostgreSQL container is required by this scaffold.
 
@@ -36,10 +36,45 @@ pnpm compiler:dev                                 # http://localhost:8001
 
 `pnpm dev` runs all workspace development tasks through Turborepo. Root `build`, `lint`, `typecheck`, and `test` commands cover TypeScript; lint/test also cover Python. Each runnable service exposes `/health`; services with dependencies also expose `/ready` and must not claim readiness when configuration is missing.
 
-## Database bootstrap
+## Database configuration and migrations
 
-Run `packages/db/prisma/bootstrap.sql` before Prisma migrations to enable pgvector, then use `pnpm --filter @parlance/db prisma:generate` and `prisma:validate`. Prisma represents the embedding as `Unsupported("vector(1536)")`; advanced vector indexes and similarity queries will require reviewed SQL. Vector matches are retrieval hints only.
+`DATABASE_URL` is the pooled application connection, `DIRECT_URL` is the direct migration connection, and `TEST_DATABASE_URL` must identify a dedicated disposable test database. Integration tests never fall back to `DATABASE_URL` and skip when `TEST_DATABASE_URL` is absent.
+
+The baseline migration enables pgvector and establishes the current schema. Review the destination before applying it; never run reset or development migrations against shared/production data:
+
+```bash
+pnpm --filter @parlance/db prisma:generate
+pnpm --filter @parlance/db prisma:validate
+pnpm --filter @parlance/db prisma:deploy
+```
+
+### Baseline safety
+
+For a fresh or disposable database, applying the baseline with `prisma migrate deploy` is appropriate. If an existing database already contains the baseline schema, do **not** deploy the baseline blindly: verify that its schema matches first, then mark the migration as already applied before deploying later migrations:
+
+```bash
+pnpm --filter @parlance/db exec prisma migrate resolve --applied 20260921000000_baseline
+```
+
+Never use `prisma migrate reset` on shared, production, or otherwise non-disposable databases. Integration tests must use `TEST_DATABASE_URL` only and must never fall back to `DATABASE_URL`.
+
+For a dedicated test database, explicitly point both Prisma URLs at that database, deploy migrations, then run the integration test:
+
+```bash
+DATABASE_URL="$TEST_DATABASE_URL" DIRECT_URL="$TEST_DATABASE_URL" pnpm --filter @parlance/db prisma:deploy
+TEST_DATABASE_URL="$TEST_DATABASE_URL" pnpm --filter @parlance/api exec vitest run src/repositories/prisma.integration.test.ts
+```
+
+The restart test disconnects its first Prisma client, creates a new client/repository, and reconstructs the approval, execution, steps, audit, and outbox records. Redis and process memory are not used for reconstruction.
+
+Outbox delivery uses expiring database leases (`claimedAt` plus `claimToken`). Only the current token can publish or release a row, and an expired `PROCESSING` lease can be reclaimed. Reconciliation classifies persisted steps only from bank-verifiable evidence; it does not retry financial writes.
+
+## Demo passkey enrollment (Phase 1)
+
+WebAuthn registration scaffolding is deliberately disabled by default because this prototype does not yet have a trusted banking session bootstrap. For local hackathon enrollment only, configure `PARLANCE_WEBAUTHN_RP_ID=localhost`, `PARLANCE_WEBAUTHN_ORIGIN=http://localhost:3000`, set `PARLANCE_DEMO_USER_ID` to an existing seeded user, and explicitly enable `PARLANCE_DEMO_WEBAUTHN_ENROLLMENT=true`. The registration endpoints never accept a caller-selected user ID. Do not use `127.0.0.1` interchangeably with `localhost`; WebAuthn origin and RP ID checks are exact.
+
+Phase 1 persists credentials and one-time registration/approval challenges. It does not create an `ApprovalV1`, execute a plan, or enforce passkey evidence at the Execution Gateway; those remain Phase 2 work.
 
 ## Current scope
 
-Routes, contracts, state transitions, an idempotent mock bank, a deliberately narrow deterministic compiler example, queue definitions, UI placeholders, tests and documentation are present. Persistent orchestration, real authorization, bank integrations, robust planning, policy and reconciliation are TODOs—not simulated as complete.
+Persistent orchestration, restart reconstruction, leased outbox processing, an idempotent mock bank, and reconciliation classification are present. Cryptographic authorization, real bank integrations, automatic recovery decisions, outbox transport, robust replanning, and production policy remain intentionally mocked or deferred.
