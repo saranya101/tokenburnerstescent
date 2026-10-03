@@ -1,8 +1,9 @@
-import { BankStateSnapshotV1 } from "@parlance/contracts";
+import { BankStateSnapshotV1, CustomerActivityV1 } from "@parlance/contracts";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { formatMinorUnits } from "../../lib/banking-state";
+import { AccountsView } from "./accounts-view";
 import { BankingHomeView } from "./banking-home";
 import { customerDesktopNavigation } from "./banking-nav";
 import { InvestmentView } from "./investment-view";
@@ -24,6 +25,10 @@ const bankState = BankStateSnapshotV1.parse({
   fxQuotes: [],
   assetQuotes: [{ quoteId: "asset-quote-aapl-usd-v1", assetId: "asset-aapl", settlementCurrency: "USD", unitPriceMinor: "20000", feeMinor: "100", expiresAt: "2099-01-01T00:00:00.000Z" }],
 });
+const activity = CustomerActivityV1.parse({ items: [
+  { occurredAt: "2026-10-03T10:00:00.000Z", description: "Transfer to John Tan", accountLabel: "USD Account", amount: { currency: "USD", minorUnits: "30000" }, direction: "DEBIT", status: "COMPLETED" },
+  { occurredAt: "2026-10-03T10:01:00.000Z", description: "Buy 1 AAPL", accountLabel: "USD Account", amount: { currency: "USD", minorUnits: "20100" }, direction: "DEBIT", status: "COMPLETED" },
+] });
 
 describe("authoritative customer banking presentation", () => {
   it("formats integer minor units without floating-point arithmetic", () => {
@@ -33,25 +38,39 @@ describe("authoritative customer banking presentation", () => {
   it("shows the authoritative AAPL holding and quote-derived estimated value", () => {
     const html = renderToStaticMarkup(createElement(InvestmentView, { state: bankState, loading: false }));
     expect(html).toContain("Apple Inc.");
-    expect(html).toContain("1 AAPL");
+    expect(html).toContain("1 share");
     expect(html).toContain("US$200.00");
+    expect(html).toContain("not live market prices");
   });
 
   it("keeps the holding visible when no quote is available", () => {
     const state = BankStateSnapshotV1.parse({ ...bankState, assetQuotes: [] });
     const html = renderToStaticMarkup(createElement(InvestmentView, { state, loading: false }));
     expect(html).toContain("Apple Inc.");
-    expect(html).toContain("1 AAPL");
+    expect(html).toContain("1 share");
     expect(html).toContain("No current demo bank quote is available");
   });
 
   it("renders live account and investment summaries on Home", () => {
-    const html = renderToStaticMarkup(createElement(BankingHomeView, { state: bankState, loading: false }));
+    const html = renderToStaticMarkup(createElement(BankingHomeView, { state: bankState, activity, loading: false }));
     expect(html).toContain("S$20,000.00");
     expect(html).toContain("US$4,499.00");
-    expect(html).toContain("1 AAPL");
-    expect(html).not.toMatch(/24,830\.40|4,750\.00/u);
-    expect(html).toContain("Trend, cashflow, and recent activity remain illustrative");
+    expect(html).toContain("AAPL"); expect(html).toContain("1 share"); expect(html).toContain("US$200.00");
+    expect(html).toContain("Transfer to John Tan"); expect(html).toContain("−US$300.00"); expect(html).toContain("−US$201.00");
+    expect(html).not.toMatch(/24,830\.40|4,750\.00|S\$24,499\.00|Total balance|Monthly cashflow|Illustrative/u);
+  });
+
+  it("renders Accounts from live state with separate balances and account details", () => {
+    const html = renderToStaticMarkup(createElement(AccountsView, { state: bankState, loading: false }));
+    expect(html).toContain("SGD Account"); expect(html).toContain("S$20,000.00");
+    expect(html).toContain("USD Account"); expect(html).toContain("US$4,499.00");
+    expect(html).toContain("Ledger balance"); expect(html).not.toMatch(/••••|24,830\.40/u);
+  });
+
+  it("renders a clean empty investment state", () => {
+    const state = BankStateSnapshotV1.parse({ ...bankState, holdings: [] });
+    const html = renderToStaticMarkup(createElement(InvestmentView, { state, loading: false }));
+    expect(html).toContain("No investments yet");
   });
 
   it("links authoritative sections to dedicated customer pages", () => {

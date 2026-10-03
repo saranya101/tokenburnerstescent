@@ -19,10 +19,14 @@ export function accountLabel(account: BankStateSnapshotV1["accounts"][number]): 
 
 export function capabilityLabel(capability: string): string {
   const labels: Readonly<Record<string, string>> = {
-    SEND_TRANSFER: "Send transfers", RECEIVE_TRANSFER: "Receive transfers", CONVERT_FX: "Convert currency",
-    PAY_BILL: "Pay bills", TRADE_ASSET: "Trade investments",
+    SEND_TRANSFER: "Transfers", RECEIVE_TRANSFER: "Transfers", CONVERT_FX: "FX",
+    PAY_BILL: "Payments", TRADE_ASSET: "Investments",
   };
   return labels[capability] ?? capability.toLocaleLowerCase().replaceAll("_", " ");
+}
+
+export function formatQuantity(quantity: string): string {
+  return `${quantity} ${quantity === "1" ? "share" : "shares"}`;
 }
 
 export function estimatedHoldingValueMinorUnits(quantity: string, unitPriceMinor: string): bigint {

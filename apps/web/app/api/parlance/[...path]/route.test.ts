@@ -47,6 +47,13 @@ it("allows only the explicitly whitelisted customer state GET", async () => {
   expect(blocked.status).toBe(404); expect(upstream).toHaveBeenCalledOnce();
 });
 
+it("allows only the bounded customer activity GET", async () => {
+  process.env.API_URL = "http://api.internal:4001";
+  const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200, headers: { "content-type": "application/json" } })); vi.stubGlobal("fetch", upstream);
+  const response = await GET(new NextRequest("http://localhost/api/parlance/customer/activity?userId=ignored"), { params: Promise.resolve({ path: ["customer", "activity"] }) });
+  expect(response.status).toBe(200); expect(upstream).toHaveBeenCalledWith("http://api.internal:4001/v1/customer/activity", expect.objectContaining({ method: "GET", cache: "no-store" }));
+});
+
 it("proxies a clarification answer without adding authoritative fields", async () => {
   process.env.API_URL = "http://api.internal:4001";
   const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: {} }), { status: 200, headers: { "content-type": "application/json" } }));

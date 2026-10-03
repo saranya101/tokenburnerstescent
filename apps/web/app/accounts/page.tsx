@@ -6,5 +6,5 @@ import { useBankingState } from "../../hooks/use-banking-state";
 
 export default function AccountsPage() {
   const banking = useBankingState();
-  return <BankingShell active="accounts"><div className="banking-page"><header className="page-heading"><p>Accounts</p><h1>Your accounts</h1><span>Balances shown directly from the demo bank.</span></header><AccountsView {...banking} /></div></BankingShell>;
+  return <BankingShell active="accounts"><div className="banking-page"><header className="page-heading"><p>Accounts</p><h1>Your accounts</h1><span>Your available balances and account details.</span></header><AccountsView {...banking} /></div></BankingShell>;
 }

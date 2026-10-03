@@ -95,3 +95,10 @@ it("loads and validates the authoritative customer bank state", async () => {
   const invalid = createParlanceApi(vi.fn().mockResolvedValue(json({ ...state, accounts: [{ ...state.accounts[0], availableMinorUnits: 449900 }] })) as typeof fetch);
   await expect(invalid.customerState()).rejects.toThrow();
 });
+
+it("loads and validates customer-safe authoritative activity", async () => {
+  const activity = { items: [{ occurredAt: "2026-10-03T10:00:00.000Z", description: "Transfer to John Tan", accountLabel: "USD Account", amount: { currency: "USD", minorUnits: "30000" }, direction: "DEBIT", status: "COMPLETED" }] };
+  const fetcher = vi.fn().mockResolvedValue(json(activity)); const api = createParlanceApi(fetcher as typeof fetch);
+  await expect(api.customerActivity()).resolves.toEqual(activity);
+  expect(fetcher).toHaveBeenCalledWith("/api/parlance/customer/activity", expect.objectContaining({ method: "GET", cache: "no-store" }));
+});

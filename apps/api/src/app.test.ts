@@ -37,6 +37,14 @@ describe("API status handling", () => {
     expect(getState).not.toHaveBeenCalled(); await app.close();
   });
 
+  it("returns bounded customer-safe activity only for the configured identity", async () => {
+    vi.stubEnv("PARLANCE_CUSTOMER_USER_ID", "configured-user"); const list = vi.fn().mockResolvedValue({ items: [] });
+    const injected = services(); injected.customerActivity = { list };
+    const app = buildApp(injected); const response = await app.inject({ method: "GET", url: "/v1/customer/activity?userId=attacker-selected" });
+    expect(response.statusCode).toBe(200); expect(response.json()).toEqual({ items: [] });
+    expect(list).toHaveBeenCalledWith("configured-user"); expect(list).not.toHaveBeenCalledWith("attacker-selected"); await app.close();
+  });
+
   it("exposes health and trace ID", async () => { const app = buildApp(services()); const response = await app.inject({ method: "GET", url: "/health" }); expect(response.statusCode).toBe(200); expect(response.headers["x-trace-id"]).toBeTruthy(); await app.close(); });
 
   it.each(["COMPILER_UNAVAILABLE", "MOCK_BANK_UNAVAILABLE"])("returns 503 without changing the %s error code", async (code) => {

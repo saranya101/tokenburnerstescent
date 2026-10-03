@@ -1,6 +1,6 @@
 import {
-  BankStateSnapshotV1, CompileGoalBundleResultV1, CompilerResultV1, ExecutionResultV1, GoalBundleContractV1, GoalContractV1,
-  type BankStateSnapshotV1 as BankStateSnapshot,
+  BankStateSnapshotV1, CompileGoalBundleResultV1, CompilerResultV1, CustomerActivityV1, ExecutionResultV1, GoalBundleContractV1, GoalContractV1,
+  type BankStateSnapshotV1 as BankStateSnapshot, type CustomerActivityV1 as CustomerActivity,
   type ExecutionResultV1 as ExecutionResult, type GoalBundleContractV1 as GoalBundleContract, type GoalContractV1 as GoalContract,
 } from "@parlance/contracts";
 
@@ -78,6 +78,9 @@ export function createParlanceApi(fetcher: typeof fetch = fetch) {
   return {
     async customerState(): Promise<BankStateSnapshot> {
       return BankStateSnapshotV1.parse(await request("customer/state", "GET"));
+    },
+    async customerActivity(): Promise<CustomerActivity> {
+      return CustomerActivityV1.parse(await request("customer/activity", "GET"));
     },
     async sendMessage(text: string, input: MessageInputProvenance = { inputMode: "TYPED" }): Promise<MessageResponse> {
       const value = record(await request("messages", "POST", input.inputMode === "VOICE" ? { text, inputMode: "VOICE", voice: input.voice } : { text }));

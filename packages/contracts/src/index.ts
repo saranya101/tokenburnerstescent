@@ -1,6 +1,7 @@
 export * from "./approval.js";
 export * from "./bank-state.js";
 export * from "./common.js";
+export * from "./customer-activity.js";
 export * from "./compiler-result.js";
 export * from "./entities.js";
 export * from "./execution.js";
