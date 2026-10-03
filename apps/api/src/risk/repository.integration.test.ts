@@ -386,6 +386,169 @@ describe.skipIf(!testDatabaseUrl)(
     );
 
     it(
+      "revalidates KYC immediately before execution",
+      async () => {
+        const userId = await createUser();
+
+        const plan = await createPlan(
+          userId,
+          "10000",
+          "2",
+        );
+
+        const repository =
+          new PrismaRiskRepository(db);
+
+        const approvalTime = new Date(
+          "2026-10-03T12:00:00.000Z",
+        );
+
+        const reserved = await repository.reserve({
+          userId,
+          financialPlanId: plan.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now: approvalTime,
+        });
+
+        expect(reserved.assessment.decision).toBe("ALLOW");
+
+        await db.userRiskProfile.update({
+          where: { userId },
+          data: {
+            kycStatus: "BLOCKED",
+            version: { increment: 1 },
+          },
+        });
+
+        await expect(
+          repository.validateStepForExecution({
+            userId,
+            financialPlanId: plan.id,
+            financialPlanHash: plan.planHash,
+            policy,
+            stepId: plan.steps[0]!.id,
+            now: new Date(
+              "2026-10-03T12:01:00.000Z",
+            ),
+          }),
+        ).rejects.toThrow("RISK_KYC_BLOCKED");
+      },
+      15_000,
+    );
+
+    it(
+      "extends an active reservation when a bank write is about to begin",
+      async () => {
+        const userId = await createUser();
+
+        const plan = await createPlan(
+          userId,
+          "10000",
+          "3",
+        );
+
+        const repository =
+          new PrismaRiskRepository(db);
+
+        const approvalTime = new Date(
+          "2026-10-03T12:00:00.000Z",
+        );
+
+        const reserved = await repository.reserve({
+          userId,
+          financialPlanId: plan.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now: approvalTime,
+        });
+
+        const originalExpiry = new Date(
+          reserved.reservation!.expiresAt,
+        );
+
+        const executionTime = new Date(
+          "2026-10-03T12:01:00.000Z",
+        );
+
+        const validated =
+          await repository.validateStepForExecution({
+            userId,
+            financialPlanId: plan.id,
+            financialPlanHash: plan.planHash,
+            policy,
+            stepId: plan.steps[0]!.id,
+            now: executionTime,
+          });
+
+        const expectedMinimum = new Date(
+          executionTime.getTime() +
+            policy.rollingWindowSeconds * 1000,
+        );
+
+        expect(
+          new Date(validated.expiresAt).getTime(),
+        ).toBeGreaterThanOrEqual(
+          expectedMinimum.getTime(),
+        );
+
+        expect(
+          new Date(validated.expiresAt).getTime(),
+        ).toBeGreaterThan(
+          originalExpiry.getTime(),
+        );
+      },
+      15_000,
+    );
+
+    it(
+      "rejects execution when the active risk policy version changes",
+      async () => {
+        const userId = await createUser();
+
+        const plan = await createPlan(
+          userId,
+          "10000",
+          "4",
+        );
+
+        const repository =
+          new PrismaRiskRepository(db);
+
+        const now = new Date(
+          "2026-10-03T12:00:00.000Z",
+        );
+
+        await repository.reserve({
+          userId,
+          financialPlanId: plan.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now,
+        });
+
+        const changedPolicy = RiskPolicyV1.parse({
+          ...policy,
+          policyVersion: "it-risk-v2",
+        });
+
+        await expect(
+          repository.validateStepForExecution({
+            userId,
+            financialPlanId: plan.id,
+            financialPlanHash: plan.planHash,
+            policy: changedPolicy,
+            stepId: plan.steps[0]!.id,
+            now: new Date(
+              "2026-10-03T12:01:00.000Z",
+            ),
+          }),
+        ).rejects.toThrow("RISK_POLICY_CHANGED");
+      },
+      15_000,
+    );
+
+    it(
       "settles an executed step and consumes the completed reservation",
       async () => {
         const userId = await createUser();

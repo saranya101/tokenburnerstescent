@@ -514,6 +514,164 @@ export class PrismaRiskRepository {
     return row ? mapReservation(row) : null;
   }
 
+  async validateStepForExecution(input: {
+    userId: string;
+    financialPlanId: string;
+    financialPlanHash: string;
+    policy: RiskPolicy;
+    stepId: string;
+    now?: Date;
+  }): Promise<RiskReservation> {
+    const policy = RiskPolicyV1.parse(input.policy);
+    const now = input.now ?? new Date();
+
+    if (Date.parse(policy.effectiveAt) > now.getTime()) {
+      throw new Error("RISK_POLICY_UNAVAILABLE");
+    }
+
+    return this.db.$transaction(
+      async (tx) => {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id"
+          FROM "User"
+          WHERE "id" = ${input.userId}
+          FOR UPDATE
+        `;
+
+        if (locked.length !== 1) {
+          throw new Error("RISK_USER_NOT_FOUND");
+        }
+
+        const profile = await tx.userRiskProfile.findUnique({
+          where: { userId: input.userId },
+        });
+
+        if (!profile) {
+          throw new Error("RISK_PROFILE_UNAVAILABLE");
+        }
+
+        if (profile.kycStatus === "BLOCKED") {
+          throw new Error("RISK_KYC_BLOCKED");
+        }
+
+        if (profile.kycStatus === "REVIEW_REQUIRED") {
+          throw new Error("RISK_KYC_REVIEW_REQUIRED");
+        }
+
+        const reservation =
+          await tx.riskReservation.findFirst({
+            where: {
+              userId: input.userId,
+              financialPlanId: input.financialPlanId,
+              financialPlanHash: input.financialPlanHash,
+              status: "ACTIVE",
+              expiresAt: { gt: now },
+            },
+            include: {
+              assessment: true,
+              entries: true,
+            },
+          });
+
+        if (!reservation) {
+          throw new Error("RISK_RESERVATION_NOT_ACTIVE");
+        }
+
+        if (reservation.policyVersion !== policy.policyVersion) {
+          throw new Error("RISK_POLICY_CHANGED");
+        }
+
+        if (
+          reservation.assessment.decision !== "ALLOW" ||
+          reservation.assessment.financialPlanId !==
+            input.financialPlanId ||
+          reservation.assessment.financialPlanHash !==
+            input.financialPlanHash ||
+          reservation.assessment.policyVersion !==
+            policy.policyVersion
+        ) {
+          throw new Error("RISK_RESERVATION_BINDING_INVALID");
+        }
+
+        const entry = reservation.entries.find(
+          (item) => item.stepId === input.stepId,
+        );
+
+        if (!entry || entry.status !== "RESERVED") {
+          throw new Error("RISK_STEP_NOT_RESERVED");
+        }
+
+        // Once execution is about to dispatch a bank operation,
+        // keep the reservation alive for the full rolling window.
+        //
+        // This is intentionally fail-safe: an unknown bank response must
+        // not allow reserved exposure to disappear while reconciliation
+        // is still possible.
+        const holdUntil = new Date(
+          now.getTime() +
+            policy.rollingWindowSeconds * 1000,
+        );
+
+        if (reservation.expiresAt < holdUntil) {
+          await tx.riskReservation.update({
+            where: { id: reservation.id },
+            data: { expiresAt: holdUntil },
+          });
+        }
+
+        const updated =
+          await tx.riskReservation.findUniqueOrThrow({
+            where: { id: reservation.id },
+            include: {
+              assessment: true,
+              entries: true,
+            },
+          });
+
+        return mapReservation(updated);
+      },
+      {
+        isolationLevel:
+          Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+  }
+
+  async releaseActiveForPlan(input: {
+    userId: string;
+    financialPlanId: string;
+    financialPlanHash: string;
+    policyVersion: string;
+    now?: Date;
+  }): Promise<boolean> {
+    const now = input.now ?? new Date();
+
+    const reservation =
+      await this.db.riskReservation.findFirst({
+        where: {
+          userId: input.userId,
+          financialPlanId: input.financialPlanId,
+          financialPlanHash: input.financialPlanHash,
+          policyVersion: input.policyVersion,
+          status: "ACTIVE",
+        },
+        select: { id: true },
+      });
+
+    if (!reservation) {
+      return false;
+    }
+
+    return this.release({
+      reservationId: reservation.id,
+      userId: input.userId,
+      financialPlanId: input.financialPlanId,
+      financialPlanHash: input.financialPlanHash,
+      policyVersion: input.policyVersion,
+      now,
+    });
+  }
+
   async settleStep(input: {
     reservationId: string;
     userId: string;
