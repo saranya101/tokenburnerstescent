@@ -52,12 +52,46 @@ describe("multi-intent bundle interpretation", () => {
     expect(JSON.stringify(vi.mocked(client.generateIntentBundle).mock.calls[0]?.[0])).not.toContain("private-user");
   });
 
+  it.each([
+    {
+      name: "reversed items and endpoints",
+      items: [acceptanceBundle().items[1], acceptanceBundle().items[0]],
+      explicitDependencies: [{ beforeItemId: "item-1", afterItemId: "item-2", reason: "USER_EXPLICIT_ORDER" as const }],
+    },
+    {
+      name: "correct items with a reversed edge",
+      items: acceptanceBundle().items,
+      explicitDependencies: [{ beforeItemId: "item-2", afterItemId: "item-1", reason: "USER_EXPLICIT_ORDER" as const }],
+    },
+  ])("source-aligns live TokenHub-style $name before assigning IDs", async ({ items, explicitDependencies }) => {
+    const parsed = await new ModelBackedIntentBundleInterpreter(modelClient({
+      ...acceptanceBundle(), items, explicitDependencies,
+    })).interpretUserRequest({ text: acceptanceText, userId: "user" });
+
+    expect(parsed).toEqual(acceptanceBundle());
+    expect(new DeterministicIntentBundleCoverageValidator().validate({ sourceText: acceptanceText, bundle: parsed }))
+      .toEqual({ status: "PASS", mismatches: [] });
+  });
+
+  it("recovers an omitted explicit trailing global minimum balance from source evidence", async () => {
+    const parsed = await new ModelBackedIntentBundleInterpreter(modelClient({
+      ...acceptanceBundle(), globalConstraints: [],
+    })).interpretUserRequest({ text: acceptanceText, userId: "user" });
+
+    expect(parsed.globalConstraints).toEqual([
+      { type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" } },
+    ]);
+    expect(new DeterministicIntentBundleCoverageValidator().validate({ sourceText: acceptanceText, bundle: parsed }))
+      .toEqual({ status: "PASS", mismatches: [] });
+  });
+
   it("keeps a plain conjunction as two intents with no ordering edge", async () => {
     const text = "Send John USD 300 and buy Apple";
     const value = acceptanceBundle(false);
     const parsed = await new ModelBackedIntentBundleInterpreter(modelClient({
       ...value,
       globalConstraints: [],
+      explicitDependencies: [{ beforeItemId: "item-1", afterItemId: "item-2", reason: "USER_EXPLICIT_ORDER" }],
     })).interpretUserRequest({ text, userId: "user" });
 
     expect(parsed.items).toHaveLength(2);

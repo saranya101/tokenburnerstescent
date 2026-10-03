@@ -11,15 +11,15 @@ const strict = (required: readonly string[], properties: Record<string, unknown>
 });
 
 const bundleItem = () => strict(["itemId", "goal", "constraints", "preferences"], {
-  itemId: { type: "string", pattern: "^item-[1-9]\\d*$" },
+  itemId: { type: "string", pattern: "^item-[1-9]\\d*$", description: "Sequential temporary ID based only on textual action order: item-1 is the first requested goal, item-2 the second." },
   goal: INTENT_CANDIDATE_SCHEMA.properties.goal,
   constraints: INTENT_CANDIDATE_SCHEMA.properties.constraints,
   preferences: INTENT_CANDIDATE_SCHEMA.properties.preferences,
 });
 
 const dependency = () => strict(["beforeItemId", "afterItemId", "reason"], {
-  beforeItemId: { type: "string", pattern: "^item-[1-9]\\d*$" },
-  afterItemId: { type: "string", pattern: "^item-[1-9]\\d*$" },
+  beforeItemId: { type: "string", pattern: "^item-[1-9]\\d*$", description: "ID of the action that the user explicitly said happens first. For 'A and then B', use A's itemId." },
+  afterItemId: { type: "string", pattern: "^item-[1-9]\\d*$", description: "ID of the action that the user explicitly said happens later. For 'A and then B', use B's itemId." },
   reason: { const: "USER_EXPLICIT_ORDER" },
 });
 
@@ -28,7 +28,7 @@ export const INTENT_BUNDLE_CANDIDATE_SCHEMA = strict(
   ["schemaVersion", "items", "globalConstraints", "explicitDependencies"],
   {
     schemaVersion: { const: "1" },
-    items: { type: "array", minItems: 1, items: bundleItem() },
+    items: { type: "array", minItems: 1, description: "Goals in the exact order their actions appear in the user text. Never reorder for execution or importance.", items: bundleItem() },
     globalConstraints: INTENT_CANDIDATE_SCHEMA.properties.constraints,
     explicitDependencies: { type: "array", items: dependency() },
   },
@@ -105,7 +105,7 @@ export function projectTokenHubBundleTransportCandidate(value: unknown, original
   if (Object.hasOwn(value, "globalConstraints")) {
     const global = projectTokenHubTransportCandidate({
       schemaVersion: "1",
-      constraints: value.globalConstraints,
+      constraints: completeConstraintSlots(value.globalConstraints),
       references: [],
     }, originalText);
     projected.globalConstraints = isRecord(global) ? global.constraints : value.globalConstraints;
@@ -117,9 +117,9 @@ function projectItem(value: unknown, originalText: string): unknown {
   if (!isRecord(value)) return stripNullFields(value);
   const item = projectTokenHubTransportCandidate({
     schemaVersion: "1",
-    goal: value.goal,
-    constraints: value.constraints,
-    preferences: value.preferences,
+    goal: completeGoalSlots(value.goal),
+    constraints: completeConstraintSlots(value.constraints),
+    preferences: completePreferenceSlots(value.preferences),
     references: [],
   }, originalText);
   if (!isRecord(item)) return stripNullFields(value);
@@ -128,6 +128,47 @@ function projectItem(value: unknown, originalText: string): unknown {
     goal: item.goal,
     constraints: item.constraints,
     preferences: item.preferences,
+  };
+}
+
+/** TokenHub occasionally omits inactive null/empty slots despite the strict response schema. */
+function completeGoalSlots(value: unknown): unknown {
+  if (!isRecord(value) || typeof value.selectedGoalType !== "string" || !isRecord(value.goalSlots)) return value;
+  const selectedSlot = {
+    DELIVER_MONEY: "deliverMoney",
+    ACQUIRE_ASSET: "acquireAsset",
+    PAY_BILL: "payBill",
+    MOVE_FUNDS: "moveFunds",
+  }[value.selectedGoalType];
+  if (selectedSlot === undefined) return value;
+  return {
+    ...value,
+    goalSlots: {
+      deliverMoney: selectedSlot === "deliverMoney" ? value.goalSlots.deliverMoney ?? null : null,
+      acquireAsset: selectedSlot === "acquireAsset" ? value.goalSlots.acquireAsset ?? null : null,
+      payBill: selectedSlot === "payBill" ? value.goalSlots.payBill ?? null : null,
+      moveFunds: selectedSlot === "moveFunds" ? value.goalSlots.moveFunds ?? null : null,
+    },
+  };
+}
+
+function completeConstraintSlots(value: unknown): unknown {
+  if (!isRecord(value) || Object.hasOwn(value, "type")) return value;
+  return {
+    maxTotalCost: value.maxTotalCost ?? null,
+    minimumAvailableBalances: Array.isArray(value.minimumAvailableBalances) ? value.minimumAvailableBalances : [],
+    excludedAccounts: Array.isArray(value.excludedAccounts) ? value.excludedAccounts : [],
+    maxLockInDays: value.maxLockInDays ?? null,
+  };
+}
+
+function completePreferenceSlots(value: unknown): unknown {
+  if (!isRecord(value) || Object.hasOwn(value, "type")) return value;
+  return {
+    minimizeTotalCost: typeof value.minimizeTotalCost === "boolean" ? value.minimizeTotalCost : false,
+    minimizeFx: typeof value.minimizeFx === "boolean" ? value.minimizeFx : false,
+    fastest: typeof value.fastest === "boolean" ? value.fastest : false,
+    preferredAccounts: Array.isArray(value.preferredAccounts) ? value.preferredAccounts : [],
   };
 }
 

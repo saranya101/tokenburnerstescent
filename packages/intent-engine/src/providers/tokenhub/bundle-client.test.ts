@@ -1,11 +1,9 @@
 import { expect, it, vi } from "vitest";
 import { ModelBackedIntentBundleInterpreter } from "../../bundle/interpreter.js";
+import { INTENT_BUNDLE_V1_SYSTEM_PROMPT } from "../../prompts/intent-bundle-v1.js";
 import { INTENT_BUNDLE_CANDIDATE_SCHEMA, TokenHubIntentBundleModelClient, type TokenHubBundleTransport } from "./bundle-client.js";
 
 const sourceText = "Send John USD 300 and then buy one Apple share, but keep at least S$1,000 available.";
-const emptyConstraints = { maxTotalCost: null, minimumAvailableBalances: [], excludedAccounts: [], maxLockInDays: null };
-const emptyPreferences = { minimizeTotalCost: false, minimizeFx: false, fastest: false, preferredAccounts: [] };
-
 const transportCandidate = {
   schemaVersion: "1",
   items: [
@@ -15,34 +13,37 @@ const transportCandidate = {
         selectedGoalType: "DELIVER_MONEY",
         goalSlots: {
           deliverMoney: { amount: { currency: "USD", minorUnits: "30000" }, recipientReference: "John" },
-          acquireAsset: null, payBill: null, moveFunds: null,
+          acquireAsset: { assetReference: "invented inactive slot", budget: null, quantity: "99" },
         },
       },
-      constraints: emptyConstraints,
-      preferences: emptyPreferences,
+      constraints: { minimumAvailableBalances: [], excludedAccounts: [] },
+      preferences: {},
     },
     {
       itemId: "item-2",
       goal: {
         selectedGoalType: "ACQUIRE_ASSET",
         goalSlots: {
-          deliverMoney: null,
           acquireAsset: { assetReference: "Apple", budget: null, quantity: "1" },
-          payBill: null, moveFunds: null,
         },
       },
-      constraints: emptyConstraints,
-      preferences: emptyPreferences,
+      constraints: { minimumAvailableBalances: [], excludedAccounts: [] },
+      preferences: {},
     },
   ],
   globalConstraints: {
-    ...emptyConstraints,
     minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: "100000" }, accountReference: null }],
   },
   explicitDependencies: [{ beforeItemId: "item-1", afterItemId: "item-2", reason: "USER_EXPLICIT_ORDER" }],
 };
 
-it("projects the TokenHub bundle DTO into the frozen shared contract", async () => {
+it("defines the headline ordering direction and minor-unit conversion explicitly", () => {
+  expect(INTENT_BUNDLE_V1_SYSTEM_PROMPT).toContain("beforeItemId item-1, afterItemId item-2");
+  expect(INTENT_BUNDLE_V1_SYSTEM_PROMPT).toContain('USD 300 is currency USD with minorUnits "30000"');
+  expect(INTENT_BUNDLE_V1_SYSTEM_PROMPT).toContain('S$1,000 is currency SGD with minorUnits\n"100000"');
+});
+
+it("projects a sparse TokenHub bundle DTO into the frozen shared contract", async () => {
   const createCompletion = vi.fn().mockResolvedValue({ content: JSON.stringify(transportCandidate) });
   const transport: TokenHubBundleTransport = { createCompletion };
   const client = new TokenHubIntentBundleModelClient({

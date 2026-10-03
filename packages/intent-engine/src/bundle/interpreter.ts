@@ -7,6 +7,7 @@ import { z } from "zod";
 import { IntentInterpreterError } from "../interpreter/errors.js";
 import type { IntentValidationIssue, ModelClientDiagnostic, ModelClientDiagnosticError } from "../interpreter/types.js";
 import { INTENT_BUNDLE_PROMPT_VERSION, INTENT_BUNDLE_V1_SYSTEM_PROMPT } from "../prompts/intent-bundle-v1.js";
+import { sourceMinimumBalanceMoneyAfter } from "../validation/evidence.js";
 import type {
   ClarifiedIntentBundleItem,
   IntentBundleInterpreter,
@@ -14,6 +15,7 @@ import type {
   IntentBundleModelClient,
   InterpretIntentBundleInput,
 } from "./types.js";
+import { bundleActionSignals, explicitBundleOrderSignals } from "./source-semantics.js";
 
 const ClarifiedIntentBundleItemV1 = IntentBundleItemDraftV1.omit({ itemId: true }).strict();
 
@@ -38,15 +40,24 @@ export class ModelBackedIntentBundleInterpreter implements IntentBundleInterpret
       throw new IntentInterpreterError("MODEL_ERROR", "The intent model could not generate an intent bundle.", undefined, modelDiagnostic(error));
     }
 
-    const parsed = IntentBundleDraftV1.safeParse(assignStableItemIds(candidate, this.itemIdFactory));
-    if (!parsed.success) {
+    const modelBundle = IntentBundleDraftV1.safeParse(candidate);
+    if (!modelBundle.success) {
       throw new IntentInterpreterError(
         "INVALID_MODEL_OUTPUT",
         "The intent model returned an invalid intent bundle.",
-        validationIssues(parsed.error),
+        validationIssues(modelBundle.error),
       );
     }
-    return parsed.data;
+    const sourceAligned = alignBundleToSource(modelBundle.data, input.text);
+    const stableBundle = IntentBundleDraftV1.safeParse(assignStableItemIds(sourceAligned, this.itemIdFactory));
+    if (!stableBundle.success) {
+      throw new IntentInterpreterError(
+        "INVALID_MODEL_OUTPUT",
+        "The intent model returned an intent bundle that could not be assigned stable item IDs.",
+        validationIssues(stableBundle.error),
+      );
+    }
+    return stableBundle.data;
   }
 }
 
@@ -92,6 +103,45 @@ function assignStableItemIds(value: unknown, itemIdFactory: IntentBundleItemIdFa
       } : dependency),
     } : {}),
   };
+}
+
+/**
+ * Treats model order and dependency endpoints as untrusted. When source action types map exactly to
+ * bundle items, source order becomes canonical and only explicit source-language edges are retained.
+ * If the item set cannot be matched safely, the original bundle is left intact for validation to fail.
+ */
+function alignBundleToSource(bundle: IntentBundleDraft, sourceText: string): IntentBundleDraft {
+  const signals = bundleActionSignals(sourceText);
+  const lastAction = signals.at(-1);
+  const explicitTrailingMinimums = lastAction === undefined ? [] : sourceMinimumBalanceMoneyAfter(sourceText, lastAction.end);
+  const globalConstraints = [...bundle.globalConstraints];
+  for (const money of explicitTrailingMinimums) {
+    const alreadyPresent = globalConstraints.some((constraint) =>
+      constraint.type === "MIN_AVAILABLE_BALANCE"
+      && constraint.money.currency === money.currency
+      && constraint.money.minorUnits === money.minorUnits
+    );
+    if (!alreadyPresent) globalConstraints.push({ type: "MIN_AVAILABLE_BALANCE", money });
+  }
+  const sourceBackedBundle = IntentBundleDraftV1.parse({ ...bundle, globalConstraints });
+  if (signals.length !== bundle.items.length) return sourceBackedBundle;
+
+  const remaining = [...sourceBackedBundle.items];
+  const items: IntentBundleDraft["items"][number][] = [];
+  for (const signal of signals) {
+    const matchingIndex = remaining.findIndex((item) => item.goal.type === signal.type);
+    if (matchingIndex < 0) return sourceBackedBundle;
+    const [matchingItem] = remaining.splice(matchingIndex, 1);
+    if (matchingItem === undefined) return sourceBackedBundle;
+    items.push(matchingItem);
+  }
+
+  const explicitDependencies = explicitBundleOrderSignals(sourceText, signals).map(({ beforeIndex, afterIndex }) => ({
+    beforeItemId: items[beforeIndex]!.itemId,
+    afterItemId: items[afterIndex]!.itemId,
+    reason: "USER_EXPLICIT_ORDER" as const,
+  }));
+  return IntentBundleDraftV1.parse({ ...sourceBackedBundle, items, explicitDependencies });
 }
 
 function validationIssues(error: z.ZodError): readonly IntentValidationIssue[] {

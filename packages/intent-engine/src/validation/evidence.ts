@@ -40,6 +40,14 @@ export function sourceSignalsMinimumBalance(sourceText: string): boolean {
   return moneyEvidence(sourceText).some((evidence) => moneyHasMinimumBalanceContext(sourceText, evidence));
 }
 
+/** Returns explicit currency-qualified minimum balances after a source offset. */
+export function sourceMinimumBalanceMoneyAfter(sourceText: string, offset: number): readonly MoneyV1[] {
+  return moneyEvidence(sourceText)
+    .flatMap((evidence) => evidence.start > offset && evidence.currency !== undefined && moneyHasMinimumBalanceContext(sourceText, evidence)
+      ? [{ currency: evidence.currency, minorUnits: evidence.minorUnits }]
+      : []);
+}
+
 export function sourceSupportsExcludedReference(sourceText: string, reference: string): boolean {
   const source = normalizeForEvidence(sourceText);
   const target = normalizeForEvidence(reference);
