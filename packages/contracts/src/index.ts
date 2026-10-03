@@ -11,4 +11,5 @@ export * from "./goal-bundle.js";
 export * from "./hard-rules.js";
 export * from "./intent.js";
 export * from "./operations.js";
+export * from "./risk.js";
 export * from "./state-machine.js";
