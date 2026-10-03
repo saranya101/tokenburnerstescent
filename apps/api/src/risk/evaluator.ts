@@ -141,6 +141,11 @@ export function evaluateRisk(input: EvaluateRiskInput): RiskAssessment {
   let decision: Severity = "ALLOW";
   const reasons = new Set<RiskReasonCodeV1>();
 
+  if (Date.parse(policy.effectiveAt) > now.getTime()) {
+    decision = "BLOCK";
+    reasons.add("POLICY_UNAVAILABLE");
+  }
+
   let exposures: RiskExposureV1[];
 
   try {

@@ -336,6 +336,21 @@ describe("evaluateRisk", () => {
     expect(result.reasonCodes).toContain("POLICY_UNAVAILABLE");
   });
 
+  it("fails closed when the configured policy is not effective yet", () => {
+    const futurePolicy = RiskPolicyV1.parse({
+      ...policy,
+      effectiveAt: "2026-10-04T00:00:00.000Z",
+    });
+
+    const result = assess(
+      plan([transfer("30000")]),
+      { policy: futurePolicy },
+    );
+
+    expect(result.decision).toBe("BLOCK");
+    expect(result.reasonCodes).toContain("POLICY_UNAVAILABLE");
+  });
+
   it("binds the result to exact plan hash, state and policy", () => {
     const result = assess(plan([transfer("30000")]));
 
