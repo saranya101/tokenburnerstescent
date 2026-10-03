@@ -66,7 +66,7 @@ const applePlan = (stateVersion = 7): FinancialPlanV1 => {
     compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test",
     steps: [
       { id: "fx-for-aapl", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", sourceMoney: { currency: "SGD", minorUnits: "200000" }, targetCurrency: "USD", quoteId: "quote-sgd-usd-1" } },
-      { id: "buy-aapl", sequence: 1, action: "BUY_ASSET", dependsOn: ["fx-for-aapl"], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "150000" } } },
+      { id: "buy-aapl", sequence: 1, action: "BUY_ASSET", dependsOn: ["fx-for-aapl"], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "150000" }, quoteId: "asset-quote-aapl-usd-v1", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } },
     ], validity: { requiredQuoteIds: ["quote-sgd-usd-1"] }, projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [{ accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "800000" } }], warnings: [] }, planHash: "0".repeat(64) });
   return { ...raw, planHash: hashFinancialPlan(raw) };
 };
