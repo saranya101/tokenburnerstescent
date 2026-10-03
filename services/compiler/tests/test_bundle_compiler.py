@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 from app.main import app
 from app.models.contracts import (
     AccountV1,
+    AssetQuoteV1,
     AssetV1,
     BankStateSnapshotV1,
     BundleSatisfactionProofV1,
@@ -93,6 +94,30 @@ def add_move_destination(state):
             }
         )
     )
+
+
+def add_aapl_quote(state):
+    state.assets.append(
+        AssetV1(
+            id="asset-aapl",
+            symbol="AAPL",
+            name="Apple Inc.",
+            assetType="EQUITY",
+            tradable=True,
+            settlementCurrency="USD",
+        )
+    )
+    state.asset_quotes.append(
+        AssetQuoteV1(
+            quoteId="asset-quote-aapl-usd-v1",
+            assetId="asset-aapl",
+            settlementCurrency="USD",
+            unitPriceMinor="20000",
+            feeMinor="100",
+            expiresAt="2099-01-01T00:00:00Z",
+        )
+    )
+    state.accounts[1].capabilities.append("TRADE_ASSET")
 
 
 def constraint(payload):
@@ -187,6 +212,56 @@ def test_acquire_asset_fails_closed_without_authoritative_price(asset_id, budget
     result = compile_goal_bundle(bundle([item("buy", parsed)]), state)
     assert result.status == "UNSAT"
     assert result.reason.code == "ASSET_PRICE_UNAVAILABLE"
+
+
+def test_headline_transfer_then_buy_binds_authoritative_quote_and_dependency():
+    goal, state = fixture()
+    state.accounts[1].available_minor_units = "100000"
+    state.accounts[1].ledger_minor_units = "100000"
+    add_aapl_quote(state)
+    transfer = TypeAdapter(GroundedGoalV1).validate_python(
+        {
+            "type": "DELIVER_MONEY",
+            "amount": {"currency": "USD", "minorUnits": "30000"},
+            "recipientId": goal.goal.recipient_id,
+        }
+    )
+    acquire = TypeAdapter(GroundedGoalV1).validate_python(
+        {"type": "ACQUIRE_ASSET", "assetId": "asset-aapl", "quantity": "1"}
+    )
+    contract = bundle(
+        [item("item-1", transfer), item("item-2", acquire)],
+        dependencies=[
+            {
+                "beforeItemId": "item-1",
+                "afterItemId": "item-2",
+                "reason": "USER_EXPLICIT_ORDER",
+            }
+        ],
+        global_constraints=[
+            {
+                "type": "MIN_AVAILABLE_BALANCE",
+                "money": {"currency": "SGD", "minorUnits": "100000"},
+            }
+        ],
+    )
+    result = assert_success(compile_goal_bundle(contract, state))
+    assert [step.action for step in result.financial_plan.steps] == ["TRANSFER", "BUY_ASSET"]
+    transfer_step, buy_step = result.financial_plan.steps
+    assert buy_step.depends_on == [transfer_step.id]
+    assert buy_step.parameters.model_dump(mode="json", by_alias=True) == {
+        "sourceAccountId": "acc-usd",
+        "assetId": "asset-aapl",
+        "quantity": "1",
+        "maximumSpend": {"currency": "USD", "minorUnits": "20100"},
+        "quoteId": "asset-quote-aapl-usd-v1",
+        "settlementCurrency": "USD",
+        "quotedUnitPriceMinor": "20000",
+        "quotedFeeMinor": "100",
+        "authorizedTotalMinor": "20100",
+    }
+    assert result.financial_plan.validity.required_quote_ids == ["asset-quote-aapl-usd-v1"]
+    assert validate_bundle_plan(contract, result.financial_plan, result.satisfaction_proof, state)
 
 
 def test_acquire_unknown_asset_fails_closed():
@@ -408,6 +483,11 @@ def test_unrelated_buy_asset_is_rejected():
                 "assetId": "unrelated-asset",
                 "quantity": "1",
                 "maximumSpend": {"currency": "USD", "minorUnits": "1"},
+                "quoteId": "unrelated-quote",
+                "settlementCurrency": "USD",
+                "quotedUnitPriceMinor": "1",
+                "quotedFeeMinor": "0",
+                "authorizedTotalMinor": "1",
             },
         }
     )

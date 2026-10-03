@@ -44,6 +44,11 @@ function multiplyMinorUnits(amount: string, rate: string): bigint {
   return doubled > denominator || (doubled === denominator && quotient % 2n !== 0n) ? quotient + 1n : quotient;
 }
 
+function exactQuantityPrice(quantity: string, unitPriceMinor: string): bigint | null {
+  const parsed = decimalParts(quantity); const denominator = 10n ** BigInt(parsed.scale); const product = parsed.numerator * BigInt(unitPriceMinor);
+  return product % denominator === 0n ? product / denominator : null;
+}
+
 function decimalEqual(left: string, right: string): boolean {
   const a = decimalParts(left); const b = decimalParts(right); const scale = Math.max(a.scale, b.scale);
   return a.numerator * 10n ** BigInt(scale - a.scale) === b.numerator * 10n ** BigInt(scale - b.scale);
@@ -119,8 +124,16 @@ export function simulateFinancialStep(snapshot: BankStateSnapshotV1, step: Finan
     const asset = snapshot.assets.find((item) => item.id === step.parameters.assetId);
     if (!asset?.tradable) return blocked("ASSET_UNAVAILABLE", "The approved asset is no longer available for trading.");
     const account = snapshot.accounts.find((item) => item.id === step.parameters.sourceAccountId);
-    if (!account || asset.settlementCurrency !== account.currency || account.currency !== step.parameters.maximumSpend.currency || !account.capabilities.includes("TRADE_ASSET")) return blocked("INVESTMENT_ACCOUNT_INELIGIBLE", "The approved investment account or settlement currency is no longer eligible for this purchase.");
-    const debited = updateBalance(snapshot, step.parameters.sourceAccountId, -BigInt(step.parameters.maximumSpend.minorUnits));
+    if (!account || asset.settlementCurrency !== account.currency || account.currency !== step.parameters.settlementCurrency || account.currency !== step.parameters.maximumSpend.currency || !account.capabilities.includes("TRADE_ASSET")) return blocked("INVESTMENT_ACCOUNT_INELIGIBLE", "The approved investment account or settlement currency is no longer eligible for this purchase.");
+    const quote = snapshot.assetQuotes.find((item) => item.quoteId === step.parameters.quoteId);
+    const quotedPrice = exactQuantityPrice(step.parameters.quantity, step.parameters.quotedUnitPriceMinor);
+    const authorizedTotal = BigInt(step.parameters.authorizedTotalMinor);
+    if (!quote || quote.assetId !== step.parameters.assetId || quote.settlementCurrency !== step.parameters.settlementCurrency
+      || quote.unitPriceMinor !== step.parameters.quotedUnitPriceMinor || quote.feeMinor !== step.parameters.quotedFeeMinor
+      || Date.parse(quote.expiresAt) <= Date.parse(snapshot.capturedAt) || quotedPrice === null
+      || quotedPrice + BigInt(step.parameters.quotedFeeMinor) !== authorizedTotal
+      || authorizedTotal > BigInt(step.parameters.maximumSpend.minorUnits)) return blocked("ASSET_QUOTE_INVALID", "The exact approved asset quote is no longer valid; a new plan and approval are required.");
+    const debited = updateBalance(snapshot, step.parameters.sourceAccountId, -authorizedTotal);
     if (!debited) return blocked("INSUFFICIENT_AVAILABLE_BALANCE", "The approved account no longer has enough available funds for this purchase.");
     const previous = debited.holdings.find((item) => item.assetId === step.parameters.assetId);
     const quantity = addDecimals(previous?.quantity ?? "0", step.parameters.quantity);

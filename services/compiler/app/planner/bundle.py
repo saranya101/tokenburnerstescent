@@ -8,7 +8,7 @@ the deterministic tie-breaker between otherwise independent items.
 import hashlib
 import json
 from collections import deque
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from app.constraints.evaluator import evaluate_constraints
 from app.models.contracts import (
@@ -32,7 +32,7 @@ from app.models.contracts import (
     ProjectedOutcomeV1,
 )
 from app.operations.library import operation_sort_key
-from app.operations.models import FxConvert, InternalOperation, Money, MoveFunds, Transfer
+from app.operations.models import BuyAsset, FxConvert, InternalOperation, Money, MoveFunds, Transfer
 from app.planner.candidates import enumerate_candidates
 from app.planner.compiler import (
     COMPILER_VERSION,
@@ -140,12 +140,26 @@ def _operation_from_step(step) -> InternalOperation:
             parameters.target_currency,
             parameters.quote_id,
         )
+    if step.action == "BUY_ASSET":
+        return BuyAsset(
+            parameters.source_account_id,
+            parameters.asset_id,
+            Decimal(parameters.quantity),
+            parameters.quote_id,
+            int(parameters.quoted_unit_price_minor),
+            Money(
+                parameters.settlement_currency,
+                int(parameters.authorized_total_minor) - int(parameters.quoted_fee_minor),
+            ),
+            Money(parameters.settlement_currency, int(parameters.quoted_fee_minor)),
+            Money(parameters.maximum_spend.currency, int(parameters.maximum_spend.minor_units)),
+        )
     raise ValueError(f"Bundle compiler cannot compose {step.action} steps")
 
 
-def _acquire_failure(
+def _compile_acquire(
     item: GoalBundleItemV1, snapshot: BankStateSnapshotV1, policy: PolicyEngine
-) -> CompilerUnsatV1 | CompilerPolicyBlockedV1:
+) -> BuyAsset | CompilerUnsatV1 | CompilerPolicyBlockedV1:
     goal = item.goal
     assert isinstance(goal, AcquireAssetGroundedGoalV1)
     if goal.quantity is not None and Decimal(goal.quantity) <= 0:
@@ -182,10 +196,87 @@ def _acquire_failure(
             assetId=goal.asset_id,
             settlementCurrency=asset.settlement_currency,
         )
-    # BankStateSnapshotV1 contains asset identity and settlement currency, but no
-    # authoritative price/market quote. BUY_ASSET requires an explicit total
-    # price, so deriving quantity or cost here would invent financial data.
-    return _unsat("ASSET_PRICE_UNAVAILABLE", itemId=item.item_id, assetId=goal.asset_id)
+    quotes = sorted(
+        (
+            quote
+            for quote in snapshot.asset_quotes
+            if quote.asset_id == asset.id
+            and quote.settlement_currency == asset.settlement_currency
+            and quote.expires_at > snapshot.captured_at
+        ),
+        key=lambda quote: (quote.expires_at, quote.quote_id),
+    )
+    if not quotes:
+        return _unsat("ASSET_PRICE_UNAVAILABLE", itemId=item.item_id, assetId=goal.asset_id)
+    quote = quotes[0]
+    unit_price = int(quote.unit_price_minor)
+    fee = int(quote.fee_minor)
+    if unit_price <= 0:
+        return _unsat("ASSET_PRICE_INVALID", itemId=item.item_id, quoteId=quote.quote_id)
+    budget = int(goal.budget.minor_units) if goal.budget is not None else None
+    if goal.budget is not None and goal.budget.currency != quote.settlement_currency:
+        return _unsat(
+            "CURRENCY_MISMATCH",
+            itemId=item.item_id,
+            expected=quote.settlement_currency,
+            actual=goal.budget.currency,
+        )
+    try:
+        quantity = (
+            Decimal(goal.quantity)
+            if goal.quantity is not None
+            else Decimal((budget - fee) // unit_price)
+        )
+        quoted_price = quantity * Decimal(unit_price)
+    except (InvalidOperation, TypeError):
+        return _unsat("INVALID_QUANTITY", itemId=item.item_id, quantity=goal.quantity)
+    if quantity <= 0 or not quantity.is_finite():
+        return _unsat("BUDGET_BELOW_MINIMUM_PURCHASE", itemId=item.item_id)
+    if quoted_price != quoted_price.to_integral_value():
+        return _unsat(
+            "ASSET_QUOTE_NOT_MINOR_UNIT_EXACT", itemId=item.item_id, quoteId=quote.quote_id
+        )
+    authorized_total = int(quoted_price) + fee
+    if budget is not None and authorized_total > budget:
+        return _unsat(
+            "MAXIMUM_SPEND_EXCEEDED",
+            itemId=item.item_id,
+            requiredMinorUnits=authorized_total,
+            maximumMinorUnits=budget,
+        )
+    preferred = [
+        preference.account_id
+        for preference in item.preferences
+        if preference.type == "PREFER_ACCOUNT"
+    ]
+    eligible_accounts.sort(key=lambda account: (account.id not in preferred, account.id))
+    account = next(
+        (
+            candidate
+            for candidate in eligible_accounts
+            if int(candidate.available_minor_units) >= authorized_total
+            and int(candidate.ledger_minor_units) >= authorized_total
+        ),
+        None,
+    )
+    if account is None:
+        return _unsat(
+            "INSUFFICIENT_FUNDS",
+            itemId=item.item_id,
+            requiredMinorUnits=authorized_total,
+            currency=quote.settlement_currency,
+        )
+    maximum_spend = budget if budget is not None else authorized_total
+    return BuyAsset(
+        source_account_id=account.id,
+        asset_id=asset.id,
+        quantity=quantity,
+        quote_id=quote.quote_id,
+        unit_price_minor=unit_price,
+        price=Money(quote.settlement_currency, int(quoted_price)),
+        fee=Money(quote.settlement_currency, fee),
+        maximum_spend=Money(quote.settlement_currency, maximum_spend),
+    )
 
 
 def _global_constraint_result(
@@ -269,9 +360,16 @@ def _build_bundle_plan(
             )
 
     quote_ids = sorted(
-        {operation.quote_id for operation in operations if isinstance(operation, FxConvert)}
+        {
+            operation.quote_id
+            for operation in operations
+            if isinstance(operation, (FxConvert, BuyAsset))
+        }
     )
     expiries = [quote.expires_at for quote in snapshot.fx_quotes if quote.id in quote_ids]
+    expiries.extend(
+        quote.expires_at for quote in snapshot.asset_quotes if quote.quote_id in quote_ids
+    )
     final = projected.to_snapshot()
     delivered_items = [
         item for item in bundle.items if isinstance(item.goal, DeliverMoneyGroundedGoalV1)
@@ -279,7 +377,11 @@ def _build_bundle_plan(
     outcome = ProjectedOutcomeV1(
         goalSatisfied=True,
         deliveredMoney=delivered_items[0].goal.amount if len(delivered_items) == 1 else None,
-        acquiredAssets=[],
+        acquiredAssets=[
+            {"assetId": operation.asset_id, "quantity": format(operation.quantity.normalize(), "f")}
+            for operation in operations
+            if isinstance(operation, BuyAsset)
+        ],
         paidObligationIds=[],
         projectedAvailableBalances=[
             {
@@ -352,7 +454,13 @@ def _step_satisfies_item(item: GoalBundleItemV1, step) -> bool:
             step.action == "BUY_ASSET"
             and parameters.asset_id == goal.asset_id
             and (goal.quantity is None or parameters.quantity == goal.quantity)
-            and (goal.budget is None or parameters.maximum_spend == goal.budget)
+            and (
+                goal.budget is None
+                or (
+                    parameters.maximum_spend.currency == goal.budget.currency
+                    and int(parameters.maximum_spend.minor_units) <= int(goal.budget.minor_units)
+                )
+            )
         )
     if isinstance(goal, PayBillGroundedGoalV1):
         # V1 PAY_BILL identifies a biller, while PAY_BILL execution identifies an
@@ -464,14 +572,20 @@ def validate_bundle_plan(
                 if item.item_id not in completed_items
                 and item_predecessors[item.item_id] <= completed_items
             ]
-            if not any(
-                operation
-                in enumerate_candidates(
+            supported = False
+            for item in active_items:
+                if isinstance(item.goal, AcquireAssetGroundedGoalV1):
+                    candidate = _compile_acquire(item, simulated.to_snapshot(), PolicyEngine())
+                    if isinstance(candidate, BuyAsset) and candidate == operation:
+                        supported = True
+                        break
+                elif operation in enumerate_candidates(
                     _goal_contract(bundle, item, simulated.to_snapshot()),
                     simulated.to_snapshot(),
-                )
-                for item in active_items
-            ):
+                ):
+                    supported = True
+                    break
+            if not supported:
                 return False
             result = apply_operation(simulated, operation)
             if not result.success:
@@ -498,7 +612,21 @@ def compile_goal_bundle(
     item_ranges: dict[str, tuple[int, int]] = {}
     for item in _ordered_items(bundle):
         if isinstance(item.goal, AcquireAssetGroundedGoalV1):
-            return _acquire_failure(item, state.to_snapshot(), policy)
+            operation = _compile_acquire(item, state.to_snapshot(), policy)
+            if not isinstance(operation, BuyAsset):
+                return operation
+            start = len(operations)
+            applied = apply_operation(state, operation)
+            if not applied.success:
+                return _unsat(
+                    "COMPOSITE_SIMULATION_FAILED",
+                    itemId=item.item_id,
+                    violations=[violation.code for violation in applied.violations],
+                )
+            state = applied.state
+            operations.append(operation)
+            item_ranges[item.item_id] = (start, start)
+            continue
         if isinstance(item.goal, PayBillGroundedGoalV1):
             return _unsat("UNSUPPORTED_GOAL", itemId=item.item_id, goalType=item.goal.type)
         result = compile_goal(

@@ -194,7 +194,15 @@ def test_projected_simulated_state_is_used():
 
 def test_lock_in_metadata_and_unknown_buy_duration():
     state = snapshot("02-apple-investment")
-    buy = BuyAsset("acc-brokerage", "asset-aapl", Decimal("1"), Money("USD", 100))
+    buy = BuyAsset(
+        "acc-brokerage",
+        "asset-aapl",
+        Decimal("1"),
+        "asset-quote-aapl-usd-v1",
+        20000,
+        Money("USD", 20000),
+        Money("USD", 100),
+    )
     contract = goal({"type": "MAX_LOCK_IN_DAYS", "days": 30})
     assert codes(evaluate_constraints(contract, state, state, (buy,))) == [
         "LOCK_IN_DURATION_UNKNOWN"

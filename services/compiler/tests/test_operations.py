@@ -195,13 +195,15 @@ def test_buy_asset_effect_and_failures():
         "acc-brokerage",
         "asset-aapl",
         Decimal("1.25"),
-        Money("USD", 12000),
-        Money("USD", 50),
-        Money("USD", 13000),
+        "asset-quote-aapl-usd-v1",
+        20000,
+        Money("USD", 25000),
+        Money("USD", 100),
+        Money("USD", 26000),
     )
     result = apply_operation(state, operation)
     assert result.success
-    assert account(result.state, "acc-brokerage").available_minor_units == "487950"
+    assert account(result.state, "acc-brokerage").available_minor_units == "474900"
     assert result.state.to_snapshot().holdings[0].quantity == "3.5"
     state.service_availability.investments = False
     assert "SERVICE_UNAVAILABLE" in codes(apply_operation(state, operation))
@@ -218,8 +220,11 @@ def test_buy_asset_effect_and_failures():
                 "acc-brokerage",
                 "asset-aapl",
                 Decimal("1"),
+                "asset-quote-aapl-usd-v1",
+                20000,
+                Money("USD", 20000),
                 Money("USD", 100),
-                maximum_spend=Money("USD", 99),
+                maximum_spend=Money("USD", 20099),
             ),
         )
     )

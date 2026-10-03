@@ -136,8 +136,8 @@ function compositePlan(stateVersion = 7) {
     compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test", planHash: "0".repeat(64),
     steps: [
       { id: "transfer", sequence: 0, action: "TRANSFER", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-usd", beneficiaryId: "ben-john-tan", amount: { currency: "USD", minorUnits: "30000" } } },
-      { id: "buy", sequence: 1, action: "BUY_ASSET", dependsOn: ["transfer"], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "20000" } } },
-    ], validity: { requiredQuoteIds: [] }, projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] },
+      { id: "buy", sequence: 1, action: "BUY_ASSET", dependsOn: ["transfer"], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "25000" }, quoteId: "asset-quote-aapl-usd-v1", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } },
+    ], validity: { requiredQuoteIds: ["asset-quote-aapl-usd-v1"] }, projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] },
   });
   return { ...raw, planHash: hashFinancialPlan(raw) };
 }
@@ -164,7 +164,7 @@ describe("bundle compiler trust boundary", () => {
   });
 
   it("uses only the persisted confirmed bundle plus fresh authoritative bank state", async () => {
-    const bundle = confirmedBundle(); const state = BankStateSnapshotV1.parse({ ...(fixture("bank-state.json") as object), userId: "user-1", stateVersion: 19 });
+    const bundle = confirmedBundle(); const state = BankStateSnapshotV1.parse({ ...(fixture("bank-state.json") as object), userId: "user-1", stateVersion: 19, assetQuotes: [{ quoteId: "asset-quote-aapl-usd-v1", assetId: "asset-aapl", settlementCurrency: "USD", unitPriceMinor: "20000", feeMinor: "100", expiresAt: "2099-01-01T00:00:00Z" }] });
     let saved: { plan: FinancialPlanV1; proof: BundleSatisfactionProofV1 } | undefined; let request: CompileGoalBundleRequestV1 | undefined;
     const repository = {
       async getConfirmedGoalBundle() { return { rowId: "bundle-row", userId: "user-1", contract: bundle }; }, async saveSnapshot() {},
@@ -174,6 +174,7 @@ describe("bundle compiler trust boundary", () => {
     const compiler = { compile: vi.fn(), compileBundle: vi.fn().mockImplementation(async (value: CompileGoalBundleRequestV1) => { request = value; return { financialPlan: compositePlan(value.bankState.stateVersion), satisfactionProof: proof() }; }) };
     const result = await new BundleCompilationService(repository, bank as never, compiler).compile(bundle.bundleId, "trace-compile");
     expect(request).toEqual({ goalBundle: bundle, bankState: state }); expect(JSON.stringify(request)).not.toContain("originalText");
+    expect(request?.bankState.assetQuotes).toEqual(state.assetQuotes);
     expect(saved?.plan.planHash).toBe(hashFinancialPlan(saved!.plan)); expect("financialPlan" in result).toBe(true);
   });
 

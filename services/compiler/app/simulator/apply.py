@@ -322,6 +322,35 @@ def apply_operation(
         )
         if buying:
             debit = operation.price.minor_units + fee_units
+            quote = next(
+                (item for item in snapshot.asset_quotes if item.quote_id == operation.quote_id),
+                None,
+            )
+            if quote is None:
+                errors.append(_violation("QUOTE_NOT_FOUND", quoteId=operation.quote_id))
+            else:
+                if quote.expires_at <= snapshot.captured_at:
+                    errors.append(
+                        _violation(
+                            "QUOTE_EXPIRED",
+                            quoteId=quote.quote_id,
+                            expiresAt=quote.expires_at.isoformat(),
+                            asOf=snapshot.captured_at.isoformat(),
+                        )
+                    )
+                if (
+                    quote.asset_id != operation.asset_id
+                    or quote.settlement_currency != operation.price.currency
+                    or int(quote.unit_price_minor) != operation.unit_price_minor
+                    or int(quote.fee_minor) != fee_units
+                ):
+                    errors.append(_violation("QUOTE_CHANGED", quoteId=quote.quote_id))
+                quoted_price = operation.quantity * Decimal(operation.unit_price_minor)
+                if (
+                    quoted_price != quoted_price.to_integral_value()
+                    or int(quoted_price) != operation.price.minor_units
+                ):
+                    errors.append(_violation("QUOTE_TOTAL_MISMATCH", quoteId=quote.quote_id))
             _funds(account, debit, errors)
             if operation.maximum_spend is not None:
                 _currency(

@@ -16,6 +16,8 @@ describe.skipIf(!testDatabaseUrl)("WebAuthn PostgreSQL challenge authority", () 
     await db.approvalEvidence.deleteMany({ where: { userId } }); await db.approval.deleteMany({ where: { userId } });
     await db.webAuthnCredential.deleteMany({ where: { userId } });
     await db.webAuthnChallenge.deleteMany({ where: { userId } });
+    await db.auditEvent.deleteMany({ where: { OR: [{ traceId: { startsWith: "it-wa-" } }, { aggregateId: { startsWith: "it-wa-" } }] } });
+    await db.outboxEvent.deleteMany({ where: { OR: [{ traceId: { startsWith: "it-wa-" } }, { aggregateId: { startsWith: "it-wa-" } }] } });
     await db.financialPlanStep.deleteMany({ where: { plan: { goalContract: { userId } } } }); await db.financialPlan.deleteMany({ where: { goalContract: { userId } } });
     const goalIds = (await db.goalContract.findMany({ where: { userId }, select: { id: true } })).map((row) => row.id); await db.goalEntityBinding.deleteMany({ where: { goalContractId: { in: goalIds } } }); await db.goalConstraint.deleteMany({ where: { goalContractId: { in: goalIds } } }); await db.goalContract.deleteMany({ where: { userId } });
     await db.user.deleteMany({ where: { id: userId } });
@@ -27,6 +29,8 @@ describe.skipIf(!testDatabaseUrl)("WebAuthn PostgreSQL challenge authority", () 
     await db.approvalEvidence.deleteMany({ where: { userId } }); await db.approval.deleteMany({ where: { userId } });
     await db.webAuthnCredential.deleteMany({ where: { userId } });
     await db.webAuthnChallenge.deleteMany({ where: { userId } });
+    await db.auditEvent.deleteMany({ where: { OR: [{ traceId: { startsWith: "it-wa-" } }, { aggregateId: { startsWith: "it-wa-" } }] } });
+    await db.outboxEvent.deleteMany({ where: { OR: [{ traceId: { startsWith: "it-wa-" } }, { aggregateId: { startsWith: "it-wa-" } }] } });
     await db.financialPlanStep.deleteMany({ where: { plan: { goalContract: { userId } } } }); await db.financialPlan.deleteMany({ where: { goalContract: { userId } } });
     const goalIds = (await db.goalContract.findMany({ where: { userId }, select: { id: true } })).map((row) => row.id); await db.goalEntityBinding.deleteMany({ where: { goalContractId: { in: goalIds } } }); await db.goalConstraint.deleteMany({ where: { goalContractId: { in: goalIds } } }); await db.goalContract.deleteMany({ where: { userId } });
     await db.user.deleteMany({ where: { id: userId } });

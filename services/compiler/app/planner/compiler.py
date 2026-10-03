@@ -22,7 +22,7 @@ from app.models.contracts import (
     ProjectedOutcomeV1,
 )
 from app.operations.library import operation_sort_key
-from app.operations.models import FxConvert, InternalOperation, MoveFunds, Transfer
+from app.operations.models import BuyAsset, FxConvert, InternalOperation, MoveFunds, Transfer
 from app.planner.search import SearchDiagnostics, SearchNode, search_routes
 from app.policy.engine import PolicyEngine
 
@@ -213,6 +213,19 @@ def _step_parameters(operation: InternalOperation) -> dict:
             "sourceMoney": _money(operation.from_amount),
             "targetCurrency": operation.to_currency,
             "quoteId": operation.quote_id,
+        }
+    if isinstance(operation, BuyAsset):
+        fee_minor = operation.fee.minor_units if operation.fee is not None else 0
+        return {
+            "sourceAccountId": operation.source_account_id,
+            "assetId": operation.asset_id,
+            "quantity": format(operation.quantity.normalize(), "f"),
+            "maximumSpend": _money(operation.maximum_spend or operation.price),
+            "quoteId": operation.quote_id,
+            "settlementCurrency": operation.price.currency,
+            "quotedUnitPriceMinor": str(operation.unit_price_minor),
+            "quotedFeeMinor": str(fee_minor),
+            "authorizedTotalMinor": str(operation.price.minor_units + fee_minor),
         }
     raise ValueError(f"Compiler cannot construct {operation.action} steps")
 

@@ -110,13 +110,23 @@ OPERATION_LIBRARY = {
     ),
     "BUY_ASSET": _definition(
         "BUY_ASSET",
-        ["source_account_id", "asset_id", "quantity", "price", "fee", "maximum_spend"],
+        [
+            "source_account_id",
+            "asset_id",
+            "quantity",
+            "quote_id",
+            "unit_price_minor",
+            "price",
+            "fee",
+            "maximum_spend",
+        ],
         [
             "active_source",
             "TRADE_ASSET",
             "tradable_asset",
             "settlement_currency",
             "positive_quantity",
+            "valid_authoritative_quote",
             "positive_price",
             "sufficient_available",
             "investments_available",
@@ -124,7 +134,7 @@ OPERATION_LIBRARY = {
         ["debit_source_price_and_fee", "increase_holding"],
         "investments",
         False,
-        "explicit total price and fee; no market lookup",
+        "authoritative quoted unit price and fee bound to the operation",
     ),
     "SELL_ASSET": _definition(
         "SELL_ASSET",

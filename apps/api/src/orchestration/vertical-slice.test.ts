@@ -98,8 +98,8 @@ const applePlan = (stateVersion = 7): FinancialPlanV1 => {
     compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test",
     steps: [
       { id: "fx-for-aapl", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", sourceMoney: { currency: "SGD", minorUnits: "200000" }, targetCurrency: "USD", quoteId: "quote-sgd-usd-1" } },
-      { id: "buy-aapl", sequence: 1, action: "BUY_ASSET", dependsOn: ["fx-for-aapl"], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "150000" } } },
-    ], validity: { requiredQuoteIds: ["quote-sgd-usd-1"] }, projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [{ accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "800000" } }], warnings: [] }, planHash: "0".repeat(64) });
+      { id: "buy-aapl", sequence: 1, action: "BUY_ASSET", dependsOn: ["fx-for-aapl"], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "150000" }, quoteId: "asset-quote-aapl-usd-v1", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } },
+    ], validity: { requiredQuoteIds: ["quote-sgd-usd-1", "asset-quote-aapl-usd-v1"] }, projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [{ accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "800000" } }], warnings: [] }, planHash: "0".repeat(64) });
   return { ...raw, planHash: hashFinancialPlan(raw) };
 };
 
@@ -110,7 +110,9 @@ const planWithExpiry = (plan: FinancialPlanV1, validUntil: Date): FinancialPlanV
 
 const appleState = (investments: boolean, stateVersion = 7): BankStateSnapshotV1 => BankStateSnapshotV1.parse({ ...(fixture("bank-state.json") as object), stateVersion,
   accounts: BankStateSnapshotV1.parse(fixture("bank-state.json")).accounts.map((account) => account.id === "acc-usd" ? { ...account, type: "BROKERAGE", capabilities: [...account.capabilities, "TRADE_ASSET"] } : account),
-  assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: investments, settlementCurrency: "USD" }], serviceAvailability: { transfers: true, fx: true, billPayments: true, investments } });
+  assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: investments, settlementCurrency: "USD" }],
+  assetQuotes: [{ quoteId: "asset-quote-aapl-usd-v1", assetId: "asset-aapl", settlementCurrency: "USD", unitPriceMinor: "20000", feeMinor: "100", expiresAt: "2099-01-01T00:00:00.000Z" }],
+  serviceAvailability: { transfers: true, fx: true, billPayments: true, investments } });
 
 async function authorize(repository: MemoryRepository, plan: FinancialPlanV1) {
   repository.plan = { goalRowId: repository.goal.rowId, status: "READY", plan };
@@ -137,9 +139,9 @@ function executableBundle() {
     ],
   });
   const bundle = GoalBundleContractV1.parse({ ...unhashed, contractHash: hashGoalBundleContract(unhashed) });
-  const rawPlan = FinancialPlanV1.parse({ schemaVersion: "1", id: "plan-bundle-execution", goalContractId: bundle.bundleId, goalContractVersion: bundle.bundleVersion, bankStateVersion: 7, compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test", planHash: "0".repeat(64), validity: { requiredQuoteIds: [] }, projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] }, steps: [
+  const rawPlan = FinancialPlanV1.parse({ schemaVersion: "1", id: "plan-bundle-execution", goalContractId: bundle.bundleId, goalContractVersion: bundle.bundleVersion, bankStateVersion: 7, compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test", planHash: "0".repeat(64), validity: { requiredQuoteIds: ["asset-quote-aapl-usd-v1"] }, projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] }, steps: [
     { id: "transfer-john", sequence: 0, action: "TRANSFER", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-usd", beneficiaryId: "ben-john", amount: { currency: "USD", minorUnits: "30000" } } },
-    { id: "buy-apple", sequence: 1, action: "BUY_ASSET", dependsOn: ["transfer-john"], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "150000" } } },
+    { id: "buy-apple", sequence: 1, action: "BUY_ASSET", dependsOn: ["transfer-john"], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "150000" }, quoteId: "asset-quote-aapl-usd-v1", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } },
   ] });
   const plan = FinancialPlanV1.parse({ ...rawPlan, planHash: hashFinancialPlan(rawPlan) });
   const proof: BundleSatisfactionProofV1 = { schemaVersion: "1", bundleId: bundle.bundleId, bundleContractHash: bundle.contractHash, itemCoverage: [{ itemId: "item-transfer", satisfiedByStepIds: ["transfer-john"] }, { itemId: "item-buy", satisfiedByStepIds: ["buy-apple"] }], allItemsSatisfied: true, allHardConstraintsSatisfied: true, allExplicitDependenciesSatisfied: true, allIrreversibleStepsJustified: true };
@@ -154,6 +156,20 @@ describe("NTU transfer vertical slice", () => {
     const result = await new ExecutionService(repository, bank, { compile: async () => { throw new Error("single compiler must not run"); } }).run(execution.executionId, "trace-bundle-execution");
     expect(result, JSON.stringify(result)).toMatchObject({ status: "COMPLETED", goalOutcome: { achieved: true } }); expect(result.steps).toHaveLength(2);
     expect(bank.writes).toBe(2); expect(repository.plan).toMatchObject({ ownerType: "BUNDLE", status: "READY" });
+    expect(bank.lastOperation).toMatchObject({ path: "buy", payload: {
+      userId: "user-1", sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1",
+      maximumSpend: { currency: "USD", minorUnits: "150000" }, quoteId: "asset-quote-aapl-usd-v1",
+      settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100",
+    } });
+  });
+
+  it("stops the bundle before any write when the approved asset quote has changed", async () => {
+    const values = executableBundle(); const repository = new MemoryRepository(appleGoal()); repository.bundle = { rowId: "bundle-row", userId: "user-1", contract: values.bundle };
+    const baseState = appleState(true); const bank = new ControlledBank(BankStateSnapshotV1.parse({ ...baseState, accounts: baseState.accounts.map((account) => account.id === "acc-usd" ? { ...account, ledgerMinorUnits: "1000000", availableMinorUnits: "1000000" } : account), beneficiaries: [...baseState.beneficiaries, { id: "ben-john", name: "John Tan", supportedCurrencies: ["USD"], status: "ACTIVE" }], assetQuotes: baseState.assetQuotes.map((quote) => ({ ...quote, unitPriceMinor: "20001" })) }));
+    const execution = await authorizeBundle(repository, values.plan, values.proof);
+    const result = await new ExecutionService(repository, bank, { compile: async () => { throw new Error("single compiler must not run"); } }).run(execution.executionId, "trace-changed-asset-quote");
+    expect(result).toMatchObject({ status: "UNKNOWN", steps: [{ errorCode: "BUNDLE_REMAINDER_SIMULATION_FAILED" }] });
+    expect(repository.execution?.executionState).toBe("PAUSED"); expect(bank.writes).toBe(0);
   });
 
   it("compiles, binds approval, executes exactly once, and records audit transitions", async () => {
