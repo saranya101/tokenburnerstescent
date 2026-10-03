@@ -1,6 +1,7 @@
 "use client";
 
 import type { CustomerFlowState } from "../../lib/customer-flow";
+import Link from "next/link";
 import { presentBundle, presentBundlePlan, presentGoal, presentPlan, type PlanPresentation } from "../../lib/customer-presentation";
 import { customerExecutionMessage } from "../../lib/customer-safety-copy";
 import { useCustomerFlow } from "../../hooks/use-customer-flow";
@@ -61,7 +62,7 @@ export function ChatExperience() {
         {planPresentation && state.phase === "PASSKEY_CANCELLED" && <><FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => void flow.authorizeAndExecute()} /><InlineNotice title="Passkey confirmation was cancelled" detail="Nothing was authorized or executed. You can try again when ready." /></>}
         {planPresentation && state.phase === "APPROVAL_FAILED" && <><FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => void flow.authorizeAndExecute()} /><InlineNotice title="Approval could not be verified" detail="Nothing was executed. Review the plan and try passkey confirmation again." /></>}
         {planPresentation && state.phase === "EXECUTING" && <ExecutionTimeline items={executionTimeline(planPresentation, state)} steps={planPresentation.steps} scenario={planPresentation} />}
-        {planPresentation && state.phase === "COMPLETED" && <><ExecutionTimeline items={executionTimeline(planPresentation, state)} steps={planPresentation.steps} scenario={planPresentation} /><div className="completion-action"><button type="button" className="button bank-primary" onClick={flow.reset}>Done</button></div></>}
+        {planPresentation && state.phase === "COMPLETED" && <><ExecutionTimeline items={executionTimeline(planPresentation, state)} steps={planPresentation.steps} scenario={planPresentation} /><div className="completion-action"><Link className="button bank-primary" href="/">Done</Link></div></>}
         {planPresentation && state.phase === "PAUSED" && <SafeStopCard scenario={planPresentation} result={state.result} onDone={flow.reset} onStartOver={flow.reset} />}
         {planPresentation && state.phase === "REAPPROVAL_REQUIRED" && <ReapprovalCard scenario={planPresentation} onCancel={flow.reset} onStartOver={flow.reset} />}
         {state.phase === "EXECUTION_ERROR" && <OutcomeCard title="Execution error" detail="Your request did not complete. No further action will be attempted without a new review." onDone={flow.reset} />}

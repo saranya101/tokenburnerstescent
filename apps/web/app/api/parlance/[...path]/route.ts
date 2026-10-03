@@ -15,7 +15,7 @@ const postRoutes = [
   /^plans\/[^/]+\/approval-verify$/u,
   /^executions\/[^/]+\/run$/u,
 ];
-const getRoutes = [/^executions\/[^/]+\/detail$/u, /^webauthn\/registration\/status$/u];
+const getRoutes = [/^customer\/state$/u, /^executions\/[^/]+\/detail$/u, /^webauthn\/registration\/status$/u];
 
 function customerUserId(): string | undefined {
   const value = process.env.PARLANCE_CUSTOMER_USER_ID?.trim();

@@ -26,6 +26,11 @@ const ApprovalVerificationInput = z.object({
 }).strict();
 const trace = (headers: Record<string, unknown>): string => String(headers["x-trace-id"]);
 export async function registerRoutes(app: FastifyInstance, services: ApiServices) {
+  app.get("/v1/customer/state", async (request, reply) => {
+    const userId = process.env.PARLANCE_CUSTOMER_USER_ID?.trim();
+    if (!userId) return reply.code(503).send({ code: "CUSTOMER_IDENTITY_NOT_CONFIGURED" });
+    return services.dependencies.bank.getState(userId, trace(request.headers));
+  });
   app.post("/v1/messages", async (request) => {
     const body = ConversationalMessageInput.parse(request.body);
     return services.bundles?.handles(body.text) ? services.bundles.receive(body, trace(request.headers)) : services.messages.receive(body, trace(request.headers));

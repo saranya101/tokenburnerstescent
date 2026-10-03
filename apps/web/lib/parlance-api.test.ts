@@ -82,3 +82,16 @@ it("adds voice provenance to the same messages endpoint and no compiler or bank 
   expect(fetcher).toHaveBeenCalledWith("/api/parlance/messages", expect.objectContaining({ body: JSON.stringify({ text: "Send John USD 3000", ...voice }) }));
   expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual(["/api/parlance/messages"]);
 });
+
+it("loads and validates the authoritative customer bank state", async () => {
+  const state = {
+    schemaVersion: "1", userId: "configured-user", stateVersion: 9, capturedAt: "2026-10-03T00:00:00Z",
+    accounts: [{ id: "acc-usd", type: "CHECKING", currency: "USD", ledgerMinorUnits: "449900", availableMinorUnits: "449900", status: "ACTIVE", capabilities: ["SEND_TRANSFER"] }],
+    beneficiaries: [], assets: [], holdings: [], obligations: [], serviceAvailability: { transfers: true, fx: true, billPayments: true, investments: true }, fxQuotes: [], assetQuotes: [],
+  };
+  const fetcher = vi.fn().mockResolvedValue(json(state)); const api = createParlanceApi(fetcher as typeof fetch);
+  await expect(api.customerState()).resolves.toEqual(state);
+  expect(fetcher).toHaveBeenCalledWith("/api/parlance/customer/state", expect.objectContaining({ method: "GET", cache: "no-store" }));
+  const invalid = createParlanceApi(vi.fn().mockResolvedValue(json({ ...state, accounts: [{ ...state.accounts[0], availableMinorUnits: 449900 }] })) as typeof fetch);
+  await expect(invalid.customerState()).rejects.toThrow();
+});

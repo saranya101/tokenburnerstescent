@@ -1,5 +1,6 @@
 import {
-  CompileGoalBundleResultV1, CompilerResultV1, ExecutionResultV1, GoalBundleContractV1, GoalContractV1,
+  BankStateSnapshotV1, CompileGoalBundleResultV1, CompilerResultV1, ExecutionResultV1, GoalBundleContractV1, GoalContractV1,
+  type BankStateSnapshotV1 as BankStateSnapshot,
   type ExecutionResultV1 as ExecutionResult, type GoalBundleContractV1 as GoalBundleContract, type GoalContractV1 as GoalContract,
 } from "@parlance/contracts";
 
@@ -75,6 +76,9 @@ export function createParlanceApi(fetcher: typeof fetch = fetch) {
     method, cache: "no-store", ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
   }));
   return {
+    async customerState(): Promise<BankStateSnapshot> {
+      return BankStateSnapshotV1.parse(await request("customer/state", "GET"));
+    },
     async sendMessage(text: string, input: MessageInputProvenance = { inputMode: "TYPED" }): Promise<MessageResponse> {
       const value = record(await request("messages", "POST", input.inputMode === "VOICE" ? { text, inputMode: "VOICE", voice: input.voice } : { text }));
       if (value?.status === "SEMANTIC_VALIDATION_FAILED" && typeof value.message === "string") return { status: value.status, message: value.message };

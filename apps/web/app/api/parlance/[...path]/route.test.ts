@@ -36,6 +36,17 @@ it("allows the read-only customer passkey status route", async () => {
   expect(response.status).toBe(200); expect(upstream).toHaveBeenCalledWith("http://api.internal:4001/v1/webauthn/registration/status", expect.objectContaining({ method: "GET", cache: "no-store" }));
 });
 
+it("allows only the explicitly whitelisted customer state GET", async () => {
+  process.env.API_URL = "http://api.internal:4001";
+  const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ schemaVersion: "1", userId: "configured-user" }), { status: 200, headers: { "content-type": "application/json" } }));
+  vi.stubGlobal("fetch", upstream);
+  const allowed = await GET(new NextRequest("http://localhost/api/parlance/customer/state?userId=ignored"), { params: Promise.resolve({ path: ["customer", "state"] }) });
+  expect(allowed.status).toBe(200);
+  expect(upstream).toHaveBeenCalledWith("http://api.internal:4001/v1/customer/state", expect.objectContaining({ method: "GET", cache: "no-store" }));
+  const blocked = await GET(new NextRequest("http://localhost/api/parlance/customer/anything-else"), { params: Promise.resolve({ path: ["customer", "anything-else"] }) });
+  expect(blocked.status).toBe(404); expect(upstream).toHaveBeenCalledOnce();
+});
+
 it("proxies a clarification answer without adding authoritative fields", async () => {
   process.env.API_URL = "http://api.internal:4001";
   const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: {} }), { status: 200, headers: { "content-type": "application/json" } }));

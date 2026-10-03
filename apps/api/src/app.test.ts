@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BankStateSnapshotV1 } from "@parlance/contracts";
 import { buildApp, type ApiServices } from "./app.js";
 
 function services(input: { databaseReady?: boolean; compilerReady?: boolean; mockBankReady?: boolean; compileError?: string } = {}): ApiServices {
@@ -13,6 +14,29 @@ function services(input: { databaseReady?: boolean; compilerReady?: boolean; moc
 afterEach(() => vi.unstubAllEnvs());
 
 describe("API status handling", () => {
+  it("returns authoritative customer state only for the configured identity", async () => {
+    vi.stubEnv("PARLANCE_CUSTOMER_USER_ID", "configured-user");
+    const getState = vi.fn().mockResolvedValue(BankStateSnapshotV1.parse({
+      schemaVersion: "1", userId: "configured-user", stateVersion: 7, capturedAt: "2026-10-03T00:00:00Z",
+      accounts: [], beneficiaries: [], assets: [], holdings: [], obligations: [],
+      serviceAvailability: { transfers: true, fx: true, billPayments: true, investments: true }, fxQuotes: [], assetQuotes: [],
+    }));
+    const injected = services(); injected.dependencies.bank = { ...injected.dependencies.bank, getState } as unknown as ApiServices["dependencies"]["bank"];
+    const app = buildApp(injected);
+    const response = await app.inject({ method: "GET", url: "/v1/customer/state?userId=attacker-selected" });
+    expect(response.statusCode).toBe(200); expect(response.json().userId).toBe("configured-user");
+    expect(getState).toHaveBeenCalledWith("configured-user", expect.any(String));
+    expect(getState).not.toHaveBeenCalledWith("attacker-selected", expect.anything()); await app.close();
+  });
+
+  it("fails closed when the customer identity is not configured", async () => {
+    vi.stubEnv("PARLANCE_CUSTOMER_USER_ID", ""); const injected = services(); const getState = vi.fn();
+    injected.dependencies.bank = { ...injected.dependencies.bank, getState } as unknown as ApiServices["dependencies"]["bank"];
+    const app = buildApp(injected); const response = await app.inject({ method: "GET", url: "/v1/customer/state" });
+    expect(response.statusCode).toBe(503); expect(response.json()).toEqual({ code: "CUSTOMER_IDENTITY_NOT_CONFIGURED" });
+    expect(getState).not.toHaveBeenCalled(); await app.close();
+  });
+
   it("exposes health and trace ID", async () => { const app = buildApp(services()); const response = await app.inject({ method: "GET", url: "/health" }); expect(response.statusCode).toBe(200); expect(response.headers["x-trace-id"]).toBeTruthy(); await app.close(); });
 
   it.each(["COMPILER_UNAVAILABLE", "MOCK_BANK_UNAVAILABLE"])("returns 503 without changing the %s error code", async (code) => {
