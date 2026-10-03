@@ -17,6 +17,7 @@ import { BankOutcomeUnknownError, type BankPort, type BankWriteResult, type Comp
 import type { BundlePlanRepository } from "./ports.js";
 import { verifyBundleCompilerResult } from "./bundle-compilation.js";
 import { ConversationalMessageInput, inputProvenance, type ConversationalInputProvenance } from "./input-provenance.js";
+import type { ExecutionRiskGate } from "../risk/execution-gate.js";
 
 const ClarificationAnswerInput = z.union([
   z.object({ selectedCandidateId: z.string().min(1) }).strict(),
@@ -200,7 +201,13 @@ function bankWriteResult(value: unknown): BankWriteResult {
 }
 
 export class ExecutionService {
-  constructor(private readonly repository: ParlanceRepository, private readonly bank: BankPort, private readonly compiler: CompilerPort, private readonly now: () => Date = () => new Date()) {}
+  constructor(
+    private readonly repository: ParlanceRepository,
+    private readonly bank: BankPort,
+    private readonly compiler: CompilerPort,
+    private readonly now: () => Date = () => new Date(),
+    private readonly riskGate?: ExecutionRiskGate,
+  ) {}
   async run(executionId: string, traceId: string) {
     const execution = await this.repository.getExecution(executionId); if (!execution) throw new Error("EXECUTION_NOT_FOUND");
     const recoveryErrors = new Set(["BANK_RESPONSE_OUTCOME_UNKNOWN", "BANK_LOOKUP_UNAVAILABLE"]);
@@ -220,10 +227,94 @@ export class ExecutionService {
       ? { status: "CONFIRMED" as const, userId, id: storedGoal.contract.id, version: storedGoal.contract.version, contractHash: storedGoal.contract.contractHash }
       : { status: "CONFIRMED" as const, userId, id: storedBundle!.contract.bundleId, version: storedBundle!.contract.bundleVersion, contractHash: storedBundle!.contract.contractHash };
     const audit = (eventType: string, payload: Record<string, unknown>) => this.repository.recordExecutionAudit({ executionId, eventType, traceId, payload: { timestamp: this.now().toISOString(), traceId, executionId, ...payload } });
+
+    const riskInput = (stepId: string) => ({
+      userId,
+      financialPlanId: storedPlan.plan.id,
+      financialPlanHash: storedPlan.plan.planHash,
+      stepId,
+      traceId,
+      now: this.now(),
+    });
+
+    const validateRiskBeforeBankWrite = async (stepId: string) => {
+      if (!this.riskGate) return;
+
+      await this.riskGate.validateBeforeBankWrite(
+        riskInput(stepId),
+      );
+
+      await audit("EXECUTION_RISK_REVALIDATED", {
+        category: "RISK",
+        outcome: "ALLOW",
+        stepKey: stepId,
+        financialPlanHash: storedPlan.plan.planHash,
+      });
+    };
+
+    const settleRiskAfterBankConfirmation = async (
+      stepId: string,
+    ) => {
+      if (!this.riskGate) return;
+
+      try {
+        await this.riskGate.settleAfterBankConfirmation(
+          riskInput(stepId),
+        );
+
+        await audit("EXECUTION_RISK_EXPOSURE_SETTLED", {
+          category: "RISK",
+          outcome: "SETTLED",
+          stepKey: stepId,
+        });
+      } catch (error) {
+        // The bank effect is already authoritative at this point.
+        // Never retry or misreport that bank operation because internal
+        // velocity bookkeeping could not immediately transition.
+        //
+        // Keeping the exposure RESERVED is conservative: it counts
+        // against velocity rather than disappearing.
+        await audit("EXECUTION_RISK_SETTLEMENT_PENDING", {
+          category: "RISK",
+          outcome: "PENDING_RECONCILIATION",
+          stepKey: stepId,
+          reason:
+            error instanceof Error
+              ? error.message
+              : "RISK_SETTLEMENT_FAILED",
+        });
+      }
+    };
+
+    const releaseRiskRemaining = async () => {
+      if (!this.riskGate) return;
+
+      try {
+        await this.riskGate.releaseRemaining({
+          userId,
+          financialPlanId: storedPlan.plan.id,
+          financialPlanHash: storedPlan.plan.planHash,
+          traceId,
+          now: this.now(),
+        });
+      } catch (error) {
+        // Failure to release only over-reserves velocity, which is
+        // fail-safe. Never turn this into a bank retry.
+        await audit("EXECUTION_RISK_RELEASE_PENDING", {
+          category: "RISK",
+          outcome: "PENDING_RECONCILIATION",
+          reason:
+            error instanceof Error
+              ? error.message
+              : "RISK_RELEASE_FAILED",
+        });
+      }
+    };
     if (storedPlan.status !== "READY") {
       const explanation = "The approved plan is no longer active and must be reviewed and approved again.";
       const result = ExecutionResultV1.parse({ schemaVersion: "1", executionId, planId: storedPlan.plan.id, status: "UNKNOWN", startedStateVersion: execution.result.startedStateVersion, steps: execution.result.steps, goalOutcome: { achieved: false, summary: explanation } });
       await audit("EXECUTION_BANK_OPERATION_PREVENTED", { category: "AUTHORIZATION", outcome: "REPLAN_REQUIRED", reason: "FINANCIAL_PLAN_NOT_READY", planStatus: storedPlan.status, explanation });
+      await releaseRiskRemaining();
       await this.repository.blockExecution({ executionId, state: "REAPPROVAL_REQUIRED", reason: "FINANCIAL_PLAN_NOT_READY", explanation, result, traceId });
       return result;
     }
@@ -231,6 +322,7 @@ export class ExecutionService {
       const explanation = "The approved plan expired before execution and must be refreshed and approved again.";
       const result = ExecutionResultV1.parse({ schemaVersion: "1", executionId, planId: storedPlan.plan.id, status: "UNKNOWN", startedStateVersion: execution.result.startedStateVersion, steps: execution.result.steps, goalOutcome: { achieved: false, summary: explanation } });
       await audit("EXECUTION_BANK_OPERATION_PREVENTED", { category: "EXECUTION", outcome: "REPLAN_REQUIRED", reason: "FINANCIAL_PLAN_EXPIRED", explanation });
+      await releaseRiskRemaining();
       await this.repository.blockExecution({ executionId, state: "REAPPROVAL_REQUIRED", reason: "FINANCIAL_PLAN_EXPIRED", explanation, result, traceId });
       return result;
     }
@@ -253,6 +345,7 @@ export class ExecutionService {
       const blockedStep = { stepId: step.id, status: "UNKNOWN" as const, idempotencyKey, errorCode: reason };
       await this.repository.recordStep({ executionId, planStepId: step.id, stepId: `${executionId}:${step.id}`, idempotencyKey, status: "UNKNOWN", errorCode: reason, traceId });
       await audit("EXECUTION_BANK_OPERATION_PREVENTED", { category: "EXECUTION", outcome, stepKey: step.id, reason, explanation });
+      await releaseRiskRemaining();
       const result = ExecutionResultV1.parse({ schemaVersion: "1", executionId, planId: storedPlan.plan.id, status: "UNKNOWN", startedStateVersion: execution.result.startedStateVersion, finalStateVersion: snapshot.stateVersion, steps: [...stepResults, blockedStep], goalOutcome: { achieved: false, summary: explanation } });
       await this.repository.blockExecution({ executionId, state, reason, explanation, result, traceId }); return result;
     };
@@ -287,6 +380,7 @@ export class ExecutionService {
             await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "ACCEPTED", bankReference: found.bankReference, resultingStateVersion: found.stateVersion, traceId });
             await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "SETTLED", bankReference: found.bankReference, resultingStateVersion: found.stateVersion, traceId });
             stepResults.push({ stepId: step.id, status: "SETTLED", idempotencyKey, bankReference: found.bankReference }); expectedStateVersion = found.stateVersion;
+            await settleRiskAfterBankConfirmation(step.id);
             await audit("RECONCILIATION_MATCHED", { category: "RECONCILIATION", outcome: "MATCHED", stepKey: step.id, idempotencyKey, bankReference: found.bankReference, resultingStateVersion: found.stateVersion });
             await audit("EXECUTION_RESUMED", { category: "RECONCILIATION", outcome: "RESUMED", stepKey: step.id, idempotencyKey });
             continue;
@@ -363,6 +457,7 @@ export class ExecutionService {
           const found = await lookup();
           if (found) return found;
           await audit("BANK_WRITE_REQUESTED", { category: "EXECUTION", outcome: "RETRY_AFTER_AUTHORITATIVE_NOT_FOUND", stepKey: step.id, idempotencyKey });
+          await validateRiskBeforeBankWrite(step.id);
           try { return await executionGateway.execute(authorization, traceId); }
           catch (error) {
             if (!(error instanceof BankOutcomeUnknownError)) throw error;
@@ -376,6 +471,7 @@ export class ExecutionService {
         else if (claim.status === "REPLAY") result = await retryAfterUnknown();
         else {
           await audit("BANK_WRITE_REQUESTED", { category: "EXECUTION", outcome: "REQUESTED", stepKey: step.id, idempotencyKey });
+          await validateRiskBeforeBankWrite(step.id);
           try { result = await executionGateway.execute(authorization, traceId); }
           catch (error) {
             if (!(error instanceof BankOutcomeUnknownError)) throw error;
@@ -392,14 +488,29 @@ export class ExecutionService {
         await this.repository.saveSnapshot(snapshot, traceId); await audit("EXECUTION_STATE_REFRESHED", { category: "STATE_CHECK", outcome: "REFRESHED", stepKey: step.id, observedStateVersion: snapshot.stateVersion });
         await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "SETTLED", bankReference: result.bankReference, resultingStateVersion: result.stateVersion, traceId });
         stepResults.push({ stepId: step.id, status: "SETTLED", idempotencyKey, bankReference: result.bankReference });
+        await settleRiskAfterBankConfirmation(step.id);
         expectedStateVersion = result.stateVersion; await audit("EXECUTION_RECONCILIATION_RESULT", { category: "RECONCILIATION", outcome: "MATCHED", stepKey: step.id, bankReference: result.bankReference, expectedStateVersion: result.stateVersion, observedStateVersion: snapshot.stateVersion });
       } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message.startsWith("RISK_")
+        ) {
+          return stop(
+            index,
+            "POLICY_BLOCKED",
+            "PAUSED",
+            error.message,
+            "Risk controls no longer permit this transaction. No additional bank operation was sent.",
+          );
+        }
+
         const recoveryReason = error instanceof Error && error.message === "RECONCILIATION_CONFLICT" ? "RECONCILIATION_CONFLICT" as const
           : error instanceof Error && error.message === "BANK_LOOKUP_UNAVAILABLE" ? "BANK_LOOKUP_UNAVAILABLE" as const
           : undefined;
         if (recoveryReason) return await pauseForReconciliation(step, idempotencyKey, recoveryReason);
         const errorCode = error instanceof Error && /^[A-Z][A-Z0-9_]*$/.test(error.message) ? error.message : "BANK_WRITE_FAILED";
         await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "FAILED", errorCode, traceId });
+        await releaseRiskRemaining();
         const failed = ExecutionResultV1.parse({ schemaVersion: "1", executionId, planId: storedPlan.plan.id, status: "FAILED", startedStateVersion: execution.result.startedStateVersion, finalStateVersion: snapshot.stateVersion, steps: [...stepResults, { stepId: step.id, status: "FAILED", idempotencyKey, errorCode }], goalOutcome: { achieved: false, summary: `Execution failed at step ${step.id}.` } });
         await this.repository.finishExecution({ executionId, result: failed, traceId }); return failed;
       }

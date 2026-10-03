@@ -604,6 +604,72 @@ describe.skipIf(!testDatabaseUrl)(
     );
 
     it(
+      "settles the same confirmed financial effect idempotently during reconciliation",
+      async () => {
+        const userId = await createUser();
+
+        const plan = await createPlan(
+          userId,
+          "10000",
+          "5",
+        );
+
+        const repository =
+          new PrismaRiskRepository(db);
+
+        const now = new Date(
+          "2026-10-03T12:00:00.000Z",
+        );
+
+        await repository.reserve({
+          userId,
+          financialPlanId: plan.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now,
+        });
+
+        const first =
+          await repository.settleStepForPlan({
+            userId,
+            financialPlanId: plan.id,
+            financialPlanHash: plan.planHash,
+            policyVersion: policy.policyVersion,
+            stepId: plan.steps[0]!.id,
+            now: new Date(
+              "2026-10-03T12:01:00.000Z",
+            ),
+          });
+
+        const second =
+          await repository.settleStepForPlan({
+            userId,
+            financialPlanId: plan.id,
+            financialPlanHash: plan.planHash,
+            policyVersion: policy.policyVersion,
+            stepId: plan.steps[0]!.id,
+            now: new Date(
+              "2026-10-03T12:02:00.000Z",
+            ),
+          });
+
+        expect(first.status).toBe("CONSUMED");
+        expect(second.status).toBe("CONSUMED");
+
+        expect(
+          await db.riskVelocityEntry.count({
+            where: {
+              reservation: { userId },
+              stepId: plan.steps[0]!.id,
+              status: "SETTLED",
+            },
+          }),
+        ).toBe(1);
+      },
+      15_000,
+    );
+
+    it(
       "releases unused reserved exposure so it does not count against later velocity",
       async () => {
         const userId = await createUser();

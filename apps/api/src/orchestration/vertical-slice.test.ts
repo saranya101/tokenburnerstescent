@@ -10,6 +10,7 @@ import { CompilationService, ExecutionService } from "./services.js";
 import type { StoredApprovalEvidence } from "../webauthn/types.js";
 import { canonicalHash, hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
 import { ExecutionGateway, verifyExecutionApproval } from "../execution/gateway.js";
+import type { ExecutionRiskGate } from "../risk/execution-gate.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(join(process.cwd(), "../../packages/contracts/fixtures/01-ntu-transfer", name), "utf8"));
 
@@ -147,6 +148,213 @@ function executableBundle() {
   const proof: BundleSatisfactionProofV1 = { schemaVersion: "1", bundleId: bundle.bundleId, bundleContractHash: bundle.contractHash, itemCoverage: [{ itemId: "item-transfer", satisfiedByStepIds: ["transfer-john"] }, { itemId: "item-buy", satisfiedByStepIds: ["buy-apple"] }], allItemsSatisfied: true, allHardConstraintsSatisfied: true, allExplicitDependenciesSatisfied: true, allIrreversibleStepsJustified: true };
   return { bundle, plan, proof };
 }
+
+describe("execution-time deterministic risk", () => {
+  it("blocks before the bank write when KYC or policy no longer permits execution", async () => {
+    const goal = appleGoal();
+    const plan = applePlan();
+    const repository = new MemoryRepository(goal);
+    const bank = new RecoveringBank(appleState(true));
+    const approved = await authorize(repository, plan);
+
+    let validations = 0;
+    let releases = 0;
+
+    const riskGate: ExecutionRiskGate = {
+      async validateBeforeBankWrite() {
+        validations += 1;
+        throw new Error("RISK_KYC_BLOCKED");
+      },
+      async settleAfterBankConfirmation() {
+        throw new Error("unexpected settlement");
+      },
+      async releaseRemaining() {
+        releases += 1;
+        return true;
+      },
+    };
+
+    const compiler = {
+      async compile(
+        _goal: GoalContractV1,
+        state: BankStateSnapshotV1,
+      ) {
+        return CompilerResultV1.parse({
+          schemaVersion: "1",
+          status: "SAT",
+          plan: applePlan(state.stateVersion),
+        });
+      },
+    };
+
+    const result = await new ExecutionService(
+      repository,
+      bank,
+      compiler,
+      undefined,
+      riskGate,
+    ).run(
+      approved.execution.executionId,
+      "trace-risk-execution-block",
+    );
+
+    expect(result.status).toBe("UNKNOWN");
+    expect(result.steps[0]).toMatchObject({
+      errorCode: "RISK_KYC_BLOCKED",
+    });
+    expect(bank.writes).toBe(0);
+    expect(validations).toBe(1);
+    expect(releases).toBe(1);
+  });
+
+  it("settles risk exposure only after each bank-confirmed effect", async () => {
+    const values = executableBundle();
+    const repository = new MemoryRepository(appleGoal());
+
+    repository.bundle = {
+      rowId: "bundle-row",
+      userId: "user-1",
+      contract: values.bundle,
+    };
+
+    const baseState = appleState(true);
+
+    const bank = new ControlledBank(
+      BankStateSnapshotV1.parse({
+        ...baseState,
+        accounts: baseState.accounts.map((account) =>
+          account.id === "acc-usd"
+            ? {
+                ...account,
+                ledgerMinorUnits: "1000000",
+                availableMinorUnits: "1000000",
+              }
+            : account,
+        ),
+        beneficiaries: [
+          ...baseState.beneficiaries,
+          {
+            id: "ben-john",
+            name: "John Tan",
+            supportedCurrencies: ["USD"],
+            status: "ACTIVE",
+          },
+        ],
+      }),
+    );
+
+    const execution = await authorizeBundle(
+      repository,
+      values.plan,
+      values.proof,
+    );
+
+    const validated: string[] = [];
+    const settled: string[] = [];
+    let releases = 0;
+
+    const riskGate: ExecutionRiskGate = {
+      async validateBeforeBankWrite(input) {
+        validated.push(input.stepId);
+        return {} as never;
+      },
+      async settleAfterBankConfirmation(input) {
+        settled.push(input.stepId);
+        return {} as never;
+      },
+      async releaseRemaining() {
+        releases += 1;
+        return true;
+      },
+    };
+
+    const result = await new ExecutionService(
+      repository,
+      bank,
+      {
+        compile: async () => {
+          throw new Error("single compiler must not run");
+        },
+      },
+      undefined,
+      riskGate,
+    ).run(
+      execution.executionId,
+      "trace-risk-settlement",
+    );
+
+    expect(result.status).toBe("COMPLETED");
+    expect(validated).toEqual(
+      values.plan.steps.map((step) => step.id),
+    );
+    expect(settled).toEqual(
+      values.plan.steps.map((step) => step.id),
+    );
+    expect(releases).toBe(0);
+    expect(bank.writes).toBe(values.plan.steps.length);
+  });
+
+  it("retains reserved risk exposure while a bank outcome is unknown", async () => {
+    const goal = appleGoal();
+    const plan = applePlan();
+    const repository = new MemoryRepository(goal);
+    const bank = new RecoveringBank(appleState(true));
+
+    bank.loseAfterMutation = 1;
+    bank.lookupUnavailable = true;
+
+    const approved = await authorize(repository, plan);
+
+    let validations = 0;
+    let settlements = 0;
+    let releases = 0;
+
+    const riskGate: ExecutionRiskGate = {
+      async validateBeforeBankWrite() {
+        validations += 1;
+        return {} as never;
+      },
+      async settleAfterBankConfirmation() {
+        settlements += 1;
+        return {} as never;
+      },
+      async releaseRemaining() {
+        releases += 1;
+        return true;
+      },
+    };
+
+    const compiler = {
+      async compile(
+        _goal: GoalContractV1,
+        state: BankStateSnapshotV1,
+      ) {
+        return CompilerResultV1.parse({
+          schemaVersion: "1",
+          status: "SAT",
+          plan: applePlan(state.stateVersion),
+        });
+      },
+    };
+
+    const result = await new ExecutionService(
+      repository,
+      bank,
+      compiler,
+      undefined,
+      riskGate,
+    ).run(
+      approved.execution.executionId,
+      "trace-risk-unknown",
+    );
+
+    expect(result.status).toBe("UNKNOWN");
+    expect(validations).toBe(1);
+    expect(settlements).toBe(0);
+    expect(releases).toBe(0);
+    expect(bank.writes).toBe(1);
+  });
+});
 
 describe("NTU transfer vertical slice", () => {
   it("executes a bundle-owned plan through the existing gateway and reconciliation stack", async () => {

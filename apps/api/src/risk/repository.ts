@@ -637,6 +637,74 @@ export class PrismaRiskRepository {
     );
   }
 
+  async settleStepForPlan(input: {
+    userId: string;
+    financialPlanId: string;
+    financialPlanHash: string;
+    policyVersion: string;
+    stepId: string;
+    now?: Date;
+  }): Promise<RiskReservation> {
+    const now = input.now ?? new Date();
+
+    const reservation = await this.db.riskReservation.findFirst({
+      where: {
+        userId: input.userId,
+        financialPlanId: input.financialPlanId,
+        financialPlanHash: input.financialPlanHash,
+        policyVersion: input.policyVersion,
+        status: { in: ["ACTIVE", "CONSUMED"] },
+        entries: {
+          some: {
+            stepId: input.stepId,
+            status: { in: ["RESERVED", "SETTLED"] },
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      include: {
+        assessment: true,
+        entries: true,
+      },
+    });
+
+    if (!reservation) {
+      throw new Error("RISK_RESERVATION_NOT_FOUND");
+    }
+
+    const entry = reservation.entries.find(
+      (item) => item.stepId === input.stepId,
+    );
+
+    if (!entry) {
+      throw new Error("RISK_STEP_NOT_RESERVED");
+    }
+
+    // Reconciliation/restart safety:
+    // if this exact financial effect was already accounted as SETTLED,
+    // return the same authoritative reservation instead of double counting it.
+    if (entry.status === "SETTLED") {
+      return mapReservation(reservation);
+    }
+
+    if (
+      reservation.status !== "ACTIVE" ||
+      entry.status !== "RESERVED"
+    ) {
+      throw new Error("RISK_RESERVATION_NOT_ACTIVE");
+    }
+
+    return this.settleStep({
+      reservationId: reservation.id,
+      userId: input.userId,
+      financialPlanId: input.financialPlanId,
+      financialPlanHash: input.financialPlanHash,
+      policyVersion: input.policyVersion,
+      stepId: input.stepId,
+      now,
+    });
+  }
+
   async releaseActiveForPlan(input: {
     userId: string;
     financialPlanId: string;
