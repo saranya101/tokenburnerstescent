@@ -43,6 +43,7 @@ export class DeterministicExecutionRiskGate
       financialPlanHash: input.financialPlanHash,
       policy: DEMO_RISK_POLICY_V1,
       stepId: input.stepId,
+      traceId: input.traceId,
       now: input.now,
     });
   }
@@ -54,6 +55,7 @@ export class DeterministicExecutionRiskGate
       financialPlanHash: input.financialPlanHash,
       policyVersion: DEMO_RISK_POLICY_V1.policyVersion,
       stepId: input.stepId,
+      traceId: input.traceId,
       now: input.now,
     });
   }
@@ -70,6 +72,7 @@ export class DeterministicExecutionRiskGate
       financialPlanId: input.financialPlanId,
       financialPlanHash: input.financialPlanHash,
       policyVersion: DEMO_RISK_POLICY_V1.policyVersion,
+      traceId: input.traceId,
       now: input.now,
     });
   }

@@ -11,7 +11,11 @@ import {
   type RiskVelocityUsageV1 as RiskVelocityUsage,
 } from "@parlance/contracts";
 import { Prisma, type PrismaClient } from "@parlance/db";
-import { evaluateRisk } from "./evaluator.js";
+import { hashFinancialPlan } from "../security/canonical-hash.js";
+import {
+  evaluateRisk,
+  extractPlanRiskExposures,
+} from "./evaluator.js";
 
 export type RiskReserveResult = {
   assessment: RiskAssessment;
@@ -124,8 +128,35 @@ function mapReservation(row: ReservationRow): RiskReservation {
   });
 }
 
+function normalizedExposures(
+  exposures: Array<{
+    stepId: string;
+    action: string;
+    currency: string;
+    minorUnits: string;
+  }>,
+) {
+  return exposures
+    .map((exposure) => ({ ...exposure }))
+    .sort((a, b) =>
+      a.stepId.localeCompare(b.stepId) ||
+      a.action.localeCompare(b.action) ||
+      a.currency.localeCompare(b.currency) ||
+      a.minorUnits.localeCompare(b.minorUnits),
+    );
+}
+
+function exposuresEqual(
+  left: Parameters<typeof normalizedExposures>[0],
+  right: Parameters<typeof normalizedExposures>[0],
+) {
+  return JSON.stringify(normalizedExposures(left)) ===
+    JSON.stringify(normalizedExposures(right));
+}
+
 function velocityUsage(
   rows: Array<{
+    reservationId: string;
     currency: string;
     minorUnits: bigint;
     status: "RESERVED" | "SETTLED" | "RELEASED" | "EXPIRED";
@@ -142,6 +173,10 @@ function velocityUsage(
       reservedCount: number;
     }
   >();
+  const reservationCurrencies = new Map<
+    string,
+    { currency: string; hasReserved: boolean; hasSettled: boolean }
+  >();
 
   for (const row of rows) {
     const current = values.get(row.currency) ?? {
@@ -153,15 +188,34 @@ function velocityUsage(
 
     if (row.status === "SETTLED") {
       current.settledAmount += row.minorUnits;
-      current.settledCount += 1;
     }
 
     if (row.status === "RESERVED") {
       current.reservedAmount += row.minorUnits;
-      current.reservedCount += 1;
     }
 
     values.set(row.currency, current);
+
+    const key = `${row.reservationId}\0${row.currency}`;
+    const classification = reservationCurrencies.get(key) ?? {
+      currency: row.currency,
+      hasReserved: false,
+      hasSettled: false,
+    };
+
+    if (row.status === "RESERVED") classification.hasReserved = true;
+    if (row.status === "SETTLED") classification.hasSettled = true;
+    reservationCurrencies.set(key, classification);
+  }
+
+  for (const classification of reservationCurrencies.values()) {
+    const current = values.get(classification.currency)!;
+
+    if (classification.hasReserved) {
+      current.reservedCount += 1;
+    } else if (classification.hasSettled) {
+      current.settledCount += 1;
+    }
   }
 
   const windowEnd = now;
@@ -243,6 +297,10 @@ export class PrismaRiskRepository {
 
             const plan = mapPlan(planRow);
 
+            if (hashFinancialPlan(plan) !== plan.planHash) {
+              throw new Error("RISK_PLAN_BINDING_INVALID");
+            }
+
             // Expire stale reservations before calculating current velocity.
             const stale = await tx.riskReservation.findMany({
               where: {
@@ -277,6 +335,19 @@ export class PrismaRiskRepository {
                   releasedAt: now,
                 },
               });
+
+              await tx.auditEvent.createMany({
+                data: staleIds.map((reservationId) => ({
+                  eventType: "RISK_RESERVATION_EXPIRED",
+                  aggregateType: "RiskReservation",
+                  aggregateId: reservationId,
+                  traceId: input.traceId,
+                  payload: json({
+                    reservationId,
+                    expiredAt: now.toISOString(),
+                  }),
+                })),
+              });
             }
 
             // Idempotent within an already active reservation:
@@ -285,10 +356,11 @@ export class PrismaRiskRepository {
               where: {
                 userId: input.userId,
                 financialPlanId: plan.id,
-                financialPlanHash: plan.planHash,
-                policyVersion: policy.policyVersion,
-                status: "ACTIVE",
-                expiresAt: { gt: now },
+                status: { in: ["ACTIVE", "EXECUTING"] },
+                OR: [
+                  { status: "EXECUTING" },
+                  { status: "ACTIVE", expiresAt: { gt: now } },
+                ],
               },
               include: {
                 assessment: true,
@@ -297,6 +369,13 @@ export class PrismaRiskRepository {
             });
 
             if (existing) {
+              if (
+                existing.financialPlanHash !== plan.planHash ||
+                existing.policyVersion !== policy.policyVersion
+              ) {
+                throw new Error("RISK_LIVE_RESERVATION_CONFLICT");
+              }
+
               return {
                 assessment: mapAssessment(existing.assessment),
                 reservation: mapReservation(existing),
@@ -333,14 +412,20 @@ export class PrismaRiskRepository {
                   {
                     status: "RESERVED",
                     reservation: {
-                      status: "ACTIVE",
-                      expiresAt: { gt: now },
+                      OR: [
+                        { status: "EXECUTING" },
+                        {
+                          status: "ACTIVE",
+                          expiresAt: { gt: now },
+                        },
+                      ],
                     },
                   },
                 ],
               },
 
               select: {
+                reservationId: true,
                 currency: true,
                 minorUnits: true,
                 status: true,
@@ -502,8 +587,10 @@ export class PrismaRiskRepository {
         financialPlanId: input.financialPlanId,
         financialPlanHash: input.financialPlanHash,
         policyVersion: input.policyVersion,
-        status: "ACTIVE",
-        expiresAt: { gt: now },
+        OR: [
+          { status: "EXECUTING" },
+          { status: "ACTIVE", expiresAt: { gt: now } },
+        ],
       },
       include: {
         assessment: true,
@@ -520,6 +607,7 @@ export class PrismaRiskRepository {
     financialPlanHash: string;
     policy: RiskPolicy;
     stepId: string;
+    traceId: string;
     now?: Date;
   }): Promise<RiskReservation> {
     const policy = RiskPolicyV1.parse(input.policy);
@@ -558,14 +646,57 @@ export class PrismaRiskRepository {
           throw new Error("RISK_KYC_REVIEW_REQUIRED");
         }
 
+        const planRow = await tx.financialPlan.findUnique({
+          where: { id: input.financialPlanId },
+          include: {
+            steps: true,
+            goalContract: { select: { userId: true } },
+            goalBundle: { select: { userId: true } },
+          },
+        });
+
+        if (!planRow || planRow.status !== "READY") {
+          throw new Error("RISK_FINANCIAL_PLAN_NOT_READY");
+        }
+
+        const ownerUserId =
+          planRow.goalContract?.userId ?? planRow.goalBundle?.userId;
+        const exactlyOneOwner =
+          (planRow.goalContract !== null) !==
+          (planRow.goalBundle !== null);
+
+        if (!exactlyOneOwner || ownerUserId !== input.userId) {
+          throw new Error("RISK_PLAN_BINDING_INVALID");
+        }
+
+        const plan = mapPlan(planRow);
+
+        if (
+          plan.id !== input.financialPlanId ||
+          plan.planHash !== input.financialPlanHash ||
+          hashFinancialPlan(plan) !== plan.planHash
+        ) {
+          throw new Error("RISK_PLAN_BINDING_INVALID");
+        }
+
+        let expectedExposures;
+
+        try {
+          expectedExposures = extractPlanRiskExposures(plan);
+        } catch {
+          throw new Error("RISK_EXPOSURE_UNPROVABLE");
+        }
+
         const reservation =
           await tx.riskReservation.findFirst({
             where: {
               userId: input.userId,
               financialPlanId: input.financialPlanId,
               financialPlanHash: input.financialPlanHash,
-              status: "ACTIVE",
-              expiresAt: { gt: now },
+              OR: [
+                { status: "EXECUTING" },
+                { status: "ACTIVE", expiresAt: { gt: now } },
+              ],
             },
             include: {
               assessment: true,
@@ -582,13 +713,32 @@ export class PrismaRiskRepository {
         }
 
         if (
+          reservation.userId !== input.userId ||
           reservation.assessment.decision !== "ALLOW" ||
+          reservation.assessment.userId !== input.userId ||
           reservation.assessment.financialPlanId !==
             input.financialPlanId ||
           reservation.assessment.financialPlanHash !==
             input.financialPlanHash ||
           reservation.assessment.policyVersion !==
-            policy.policyVersion
+            policy.policyVersion ||
+          reservation.assessment.bankStateVersion !==
+            plan.bankStateVersion
+        ) {
+          throw new Error("RISK_RESERVATION_BINDING_INVALID");
+        }
+
+        const persistedExposures = reservation.entries.map((item) => ({
+          stepId: item.stepId,
+          action: item.action,
+          currency: item.currency,
+          minorUnits: item.minorUnits.toString(),
+        }));
+        const assessment = mapAssessment(reservation.assessment);
+
+        if (
+          !exposuresEqual(expectedExposures, persistedExposures) ||
+          !exposuresEqual(expectedExposures, assessment.exposures)
         ) {
           throw new Error("RISK_RESERVATION_BINDING_INVALID");
         }
@@ -596,26 +746,45 @@ export class PrismaRiskRepository {
         const entry = reservation.entries.find(
           (item) => item.stepId === input.stepId,
         );
+        const expectedEntry = expectedExposures.find(
+          (item) => item.stepId === input.stepId,
+        );
 
-        if (!entry || entry.status !== "RESERVED") {
+        if (
+          !entry ||
+          !expectedEntry ||
+          entry.status !== "RESERVED" ||
+          entry.action !== expectedEntry.action ||
+          entry.currency !== expectedEntry.currency ||
+          entry.minorUnits.toString() !== expectedEntry.minorUnits
+        ) {
           throw new Error("RISK_STEP_NOT_RESERVED");
         }
 
-        // Once execution is about to dispatch a bank operation,
-        // keep the reservation alive for the full rolling window.
-        //
-        // This is intentionally fail-safe: an unknown bank response must
-        // not allow reserved exposure to disappear while reconciliation
-        // is still possible.
-        const holdUntil = new Date(
-          now.getTime() +
-            policy.rollingWindowSeconds * 1000,
-        );
+        if (reservation.status === "ACTIVE") {
+          const claimed = await tx.riskReservation.updateMany({
+            where: { id: reservation.id, status: "ACTIVE" },
+            data: { status: "EXECUTING" },
+          });
 
-        if (reservation.expiresAt < holdUntil) {
-          await tx.riskReservation.update({
-            where: { id: reservation.id },
-            data: { expiresAt: holdUntil },
+          if (claimed.count !== 1) {
+            throw new Error("RISK_RESERVATION_CLAIM_FAILED");
+          }
+
+          await tx.auditEvent.create({
+            data: {
+              eventType: "RISK_RESERVATION_EXECUTION_CLAIMED",
+              aggregateType: "RiskReservation",
+              aggregateId: reservation.id,
+              traceId: input.traceId,
+              payload: json({
+                reservationId: reservation.id,
+                financialPlanId: plan.id,
+                financialPlanHash: plan.planHash,
+                policyVersion: policy.policyVersion,
+                claimedAt: now.toISOString(),
+              }),
+            },
           });
         }
 
@@ -643,6 +812,7 @@ export class PrismaRiskRepository {
     financialPlanHash: string;
     policyVersion: string;
     stepId: string;
+    traceId: string;
     now?: Date;
   }): Promise<RiskReservation> {
     const now = input.now ?? new Date();
@@ -653,7 +823,7 @@ export class PrismaRiskRepository {
         financialPlanId: input.financialPlanId,
         financialPlanHash: input.financialPlanHash,
         policyVersion: input.policyVersion,
-        status: { in: ["ACTIVE", "CONSUMED"] },
+        status: { in: ["EXECUTING", "CONSUMED"] },
         entries: {
           some: {
             stepId: input.stepId,
@@ -687,13 +857,6 @@ export class PrismaRiskRepository {
       return mapReservation(reservation);
     }
 
-    if (
-      reservation.status !== "ACTIVE" ||
-      entry.status !== "RESERVED"
-    ) {
-      throw new Error("RISK_RESERVATION_NOT_ACTIVE");
-    }
-
     return this.settleStep({
       reservationId: reservation.id,
       userId: input.userId,
@@ -701,6 +864,7 @@ export class PrismaRiskRepository {
       financialPlanHash: input.financialPlanHash,
       policyVersion: input.policyVersion,
       stepId: input.stepId,
+      traceId: input.traceId,
       now,
     });
   }
@@ -710,6 +874,7 @@ export class PrismaRiskRepository {
     financialPlanId: string;
     financialPlanHash: string;
     policyVersion: string;
+    traceId: string;
     now?: Date;
   }): Promise<boolean> {
     const now = input.now ?? new Date();
@@ -720,10 +885,9 @@ export class PrismaRiskRepository {
           userId: input.userId,
           financialPlanId: input.financialPlanId,
           financialPlanHash: input.financialPlanHash,
-          policyVersion: input.policyVersion,
-          status: "ACTIVE",
+          status: { in: ["ACTIVE", "EXECUTING"] },
         },
-        select: { id: true },
+        select: { id: true, policyVersion: true },
       });
 
     if (!reservation) {
@@ -735,7 +899,8 @@ export class PrismaRiskRepository {
       userId: input.userId,
       financialPlanId: input.financialPlanId,
       financialPlanHash: input.financialPlanHash,
-      policyVersion: input.policyVersion,
+      policyVersion: reservation.policyVersion,
+      traceId: input.traceId,
       now,
     });
   }
@@ -747,12 +912,15 @@ export class PrismaRiskRepository {
     financialPlanHash: string;
     policyVersion: string;
     stepId: string;
+    traceId: string;
     now?: Date;
   }): Promise<RiskReservation> {
     const now = input.now ?? new Date();
 
-    return this.db.$transaction(
-      async (tx) => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.db.$transaction(
+          async (tx) => {
         const reservation = await tx.riskReservation.findUnique({
           where: { id: input.reservationId },
           include: {
@@ -771,9 +939,17 @@ export class PrismaRiskRepository {
           throw new Error("RISK_RESERVATION_BINDING_INVALID");
         }
 
+        const entry = reservation.entries.find(
+          (item) => item.stepId === input.stepId,
+        );
+
+        if (entry?.status === "SETTLED") {
+          return mapReservation(reservation);
+        }
+
         if (
-          reservation.status !== "ACTIVE" ||
-          reservation.expiresAt.getTime() <= now.getTime()
+          reservation.status !== "EXECUTING" ||
+          entry?.status !== "RESERVED"
         ) {
           throw new Error("RISK_RESERVATION_NOT_ACTIVE");
         }
@@ -794,6 +970,21 @@ export class PrismaRiskRepository {
           throw new Error("RISK_STEP_NOT_RESERVED");
         }
 
+        await tx.auditEvent.create({
+          data: {
+            eventType: "RISK_EXPOSURE_SETTLED",
+            aggregateType: "RiskReservation",
+            aggregateId: input.reservationId,
+            traceId: input.traceId,
+            payload: json({
+              reservationId: input.reservationId,
+              financialPlanId: input.financialPlanId,
+              stepId: input.stepId,
+              settledAt: now.toISOString(),
+            }),
+          },
+        });
+
         const remaining = await tx.riskVelocityEntry.count({
           where: {
             reservationId: input.reservationId,
@@ -809,6 +1000,20 @@ export class PrismaRiskRepository {
               consumedAt: now,
             },
           });
+
+          await tx.auditEvent.create({
+            data: {
+              eventType: "RISK_RESERVATION_CONSUMED",
+              aggregateType: "RiskReservation",
+              aggregateId: input.reservationId,
+              traceId: input.traceId,
+              payload: json({
+                reservationId: input.reservationId,
+                financialPlanId: input.financialPlanId,
+                consumedAt: now.toISOString(),
+              }),
+            },
+          });
         }
 
         const updated = await tx.riskReservation.findUniqueOrThrow({
@@ -820,12 +1025,23 @@ export class PrismaRiskRepository {
         });
 
         return mapReservation(updated);
-      },
-      {
-        isolationLevel:
-          Prisma.TransactionIsolationLevel.Serializable,
-      },
-    );
+          },
+          {
+            isolationLevel:
+              Prisma.TransactionIsolationLevel.Serializable,
+          },
+        );
+      } catch (error) {
+        const retryable =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2034";
+
+        if (retryable && attempt < 2) continue;
+        throw error;
+      }
+    }
+
+    throw new Error("RISK_SETTLEMENT_RETRY_EXHAUSTED");
   }
 
   async release(input: {
@@ -834,6 +1050,7 @@ export class PrismaRiskRepository {
     financialPlanId: string;
     financialPlanHash: string;
     policyVersion: string;
+    traceId: string;
     now?: Date;
   }): Promise<boolean> {
     const now = input.now ?? new Date();
@@ -842,6 +1059,7 @@ export class PrismaRiskRepository {
       async (tx) => {
         const reservation = await tx.riskReservation.findUnique({
           where: { id: input.reservationId },
+          include: { entries: true },
         });
 
         if (!reservation) {
@@ -857,7 +1075,7 @@ export class PrismaRiskRepository {
           throw new Error("RISK_RESERVATION_BINDING_INVALID");
         }
 
-        if (reservation.status !== "ACTIVE") {
+        if (!["ACTIVE", "EXECUTING"].includes(reservation.status)) {
           return false;
         }
 
@@ -872,13 +1090,53 @@ export class PrismaRiskRepository {
           },
         });
 
+        const hasSettledExposure = reservation.entries.some(
+          (entry) => entry.status === "SETTLED",
+        );
+        const finalStatus = hasSettledExposure
+          ? "CONSUMED"
+          : "RELEASED";
+
         await tx.riskReservation.update({
           where: { id: input.reservationId },
           data: {
-            status: "RELEASED",
+            status: finalStatus,
+            ...(hasSettledExposure ? { consumedAt: now } : {}),
             releasedAt: now,
           },
         });
+
+        await tx.auditEvent.create({
+          data: {
+            eventType: "RISK_RESERVATION_RELEASED",
+            aggregateType: "RiskReservation",
+            aggregateId: input.reservationId,
+            traceId: input.traceId,
+            payload: json({
+              reservationId: input.reservationId,
+              financialPlanId: input.financialPlanId,
+              finalStatus,
+              releasedAt: now.toISOString(),
+            }),
+          },
+        });
+
+        if (hasSettledExposure) {
+          await tx.auditEvent.create({
+            data: {
+              eventType: "RISK_RESERVATION_CONSUMED",
+              aggregateType: "RiskReservation",
+              aggregateId: input.reservationId,
+              traceId: input.traceId,
+              payload: json({
+                reservationId: input.reservationId,
+                financialPlanId: input.financialPlanId,
+                consumedAt: now.toISOString(),
+                reason: "PARTIAL_EXECUTION_FINALIZED",
+              }),
+            },
+          });
+        }
 
         return true;
       },

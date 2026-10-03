@@ -13,6 +13,7 @@ import {
   it,
 } from "vitest";
 import { PrismaParlanceRepository } from "../repositories/prisma.js";
+import { hashFinancialPlan } from "../security/canonical-hash.js";
 import { PrismaRiskRepository } from "./repository.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
@@ -42,6 +43,15 @@ const policy = RiskPolicyV1.parse({
   rollingCountThreshold: {
     reviewAt: 100,
     blockAt: 200,
+  },
+});
+
+const countPolicy = RiskPolicyV1.parse({
+  ...policy,
+  policyVersion: "it-risk-count-v1",
+  rollingCountThreshold: {
+    reviewAt: 2,
+    blockAt: 3,
   },
 });
 
@@ -80,8 +90,11 @@ describe.skipIf(!testDatabaseUrl)(
       userId: string,
       amountMinor: string,
       hashCharacter: string,
+      exposures: Array<{ currency: string; minorUnits: string }> = [
+        { currency: "USD", minorUnits: amountMinor },
+      ],
     ): Promise<FinancialPlan> {
-      const suffix = randomUUID();
+      const suffix = `${hashCharacter}-${randomUUID()}`;
       const goalRowId = `it-risk-goal-row-${suffix}`;
       const goalKey = `it-risk-goal-${suffix}`;
       const planId = `it-risk-plan-${suffix}`;
@@ -97,10 +110,7 @@ describe.skipIf(!testDatabaseUrl)(
 
           goalPayload: {
             type: "DELIVER_MONEY",
-            amount: {
-              currency: "USD",
-              minorUnits: amountMinor,
-            },
+            amount: exposures[0],
             recipientId: "ben-test",
           },
 
@@ -112,7 +122,7 @@ describe.skipIf(!testDatabaseUrl)(
         },
       });
 
-      const plan = FinancialPlanV1.parse({
+      const rawPlan = FinancialPlanV1.parse({
         schemaVersion: "1",
         id: planId,
         goalContractId: goalKey,
@@ -122,23 +132,18 @@ describe.skipIf(!testDatabaseUrl)(
         policyVersion: "compiler-policy-v1",
         operationLibraryVersion: "it-risk",
 
-        steps: [
-          {
-            id: `${planId}-step`,
-            sequence: 0,
+        steps: exposures.map((exposure, sequence) => ({
+            id: `${planId}-step-${sequence}`,
+            sequence,
             dependsOn: [],
             reversible: false,
             action: "TRANSFER",
             parameters: {
-              sourceAccountId: "acc-usd",
+              sourceAccountId: `acc-${exposure.currency.toLowerCase()}`,
               beneficiaryId: "ben-test",
-              amount: {
-                currency: "USD",
-                minorUnits: amountMinor,
-              },
+              amount: exposure,
             },
-          },
-        ],
+          })),
 
         validity: {
           requiredQuoteIds: [],
@@ -146,17 +151,18 @@ describe.skipIf(!testDatabaseUrl)(
 
         projectedOutcome: {
           goalSatisfied: true,
-          deliveredMoney: {
-            currency: "USD",
-            minorUnits: amountMinor,
-          },
+          deliveredMoney: exposures[0],
           acquiredAssets: [],
           paidObligationIds: [],
           projectedAvailableBalances: [],
           warnings: [],
         },
 
-        planHash: hashCharacter.repeat(64),
+        planHash: "0".repeat(64),
+      });
+      const plan = FinancialPlanV1.parse({
+        ...rawPlan,
+        planHash: hashFinancialPlan(rawPlan),
       });
 
       const repository =
@@ -244,7 +250,7 @@ describe.skipIf(!testDatabaseUrl)(
       });
 
       await db.$disconnect();
-    });
+    }, 60_000);
 
     it(
       "permits only one concurrent reservation when the second would exceed velocity",
@@ -386,6 +392,236 @@ describe.skipIf(!testDatabaseUrl)(
     );
 
     it(
+      "enforces one live reservation per financial plan in PostgreSQL",
+      async () => {
+        const userId = await createUser();
+        const plan = await createPlan(userId, "10000", "unique-live");
+        const repository = new PrismaRiskRepository(db);
+        const now = new Date("2026-10-03T12:00:00.000Z");
+        await repository.reserve({
+          userId,
+          financialPlanId: plan.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now,
+        });
+
+        const duplicateAssessmentId = `assessment-${randomUUID()}`;
+        await db.riskAssessment.create({
+          data: {
+            id: duplicateAssessmentId,
+            userId,
+            financialPlanId: plan.id,
+            financialPlanHash: plan.planHash,
+            bankStateVersion: plan.bankStateVersion,
+            policyVersion: policy.policyVersion,
+            kycStatus: "VERIFIED",
+            decision: "ALLOW",
+            reasonCodes: [],
+            exposures: [],
+            rollingUsage: [],
+            assessedAt: now,
+            expiresAt: new Date("2026-10-03T12:05:00.000Z"),
+            traceId: `it-risk-${randomUUID()}`,
+          },
+        });
+
+        await expect(
+          db.riskReservation.create({
+            data: {
+              id: `reservation-${randomUUID()}`,
+              userId,
+              assessmentId: duplicateAssessmentId,
+              financialPlanId: plan.id,
+              financialPlanHash: plan.planHash,
+              policyVersion: policy.policyVersion,
+              status: "ACTIVE",
+              traceId: `it-risk-${randomUUID()}`,
+              expiresAt: new Date("2026-10-03T12:05:00.000Z"),
+            },
+          }),
+        ).rejects.toMatchObject({ code: "P2002" });
+      },
+      15_000,
+    );
+
+    it(
+      "counts each reservation once per currency even with multiple same-currency entries",
+      async () => {
+        const userId = await createUser();
+        const firstPlan = await createPlan(
+          userId,
+          "10000",
+          "count-a",
+          [
+            { currency: "USD", minorUnits: "10000" },
+            { currency: "USD", minorUnits: "20000" },
+          ],
+        );
+        const repository = new PrismaRiskRepository(db);
+        const now = new Date("2026-10-03T12:00:00.000Z");
+
+        const first = await repository.reserve({
+          userId,
+          financialPlanId: firstPlan.id,
+          policy: countPolicy,
+          traceId: `it-risk-${randomUUID()}`,
+          now,
+        });
+
+        expect(first.assessment.decision).toBe("ALLOW");
+
+        const secondPlan = await createPlan(
+          userId,
+          "10000",
+          "count-b",
+        );
+        const second = await repository.reserve({
+          userId,
+          financialPlanId: secondPlan.id,
+          policy: countPolicy,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-03T12:01:00.000Z"),
+        });
+
+        expect(second.assessment.decision).toBe("REVIEW");
+        expect(second.assessment.reasonCodes).toContain(
+          "ROLLING_COUNT_REVIEW_THRESHOLD",
+        );
+        expect(second.assessment.reasonCodes).not.toContain(
+          "ROLLING_COUNT_BLOCK_THRESHOLD",
+        );
+        expect(second.assessment.rollingUsage).toMatchObject([
+          {
+            currency: "USD",
+            settledTransactionCount: 0,
+            reservedTransactionCount: 1,
+            reservedAmountMinorUnits: "30000",
+          },
+        ]);
+      },
+      15_000,
+    );
+
+    it(
+      "keeps partial same-currency amount split while counting the plan once",
+      async () => {
+        const userId = await createUser();
+        const firstPlan = await createPlan(
+          userId,
+          "10000",
+          "partial-a",
+          [
+            { currency: "USD", minorUnits: "10000" },
+            { currency: "USD", minorUnits: "20000" },
+          ],
+        );
+        const repository = new PrismaRiskRepository(db);
+        const now = new Date("2026-10-03T12:00:00.000Z");
+        const first = await repository.reserve({
+          userId,
+          financialPlanId: firstPlan.id,
+          policy: countPolicy,
+          traceId: `it-risk-${randomUUID()}`,
+          now,
+        });
+
+        await repository.validateStepForExecution({
+          userId,
+          financialPlanId: firstPlan.id,
+          financialPlanHash: firstPlan.planHash,
+          policy: countPolicy,
+          stepId: firstPlan.steps[0]!.id,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-03T12:00:30.000Z"),
+        });
+        await repository.settleStepForPlan({
+          userId,
+          financialPlanId: firstPlan.id,
+          financialPlanHash: firstPlan.planHash,
+          policyVersion: countPolicy.policyVersion,
+          stepId: firstPlan.steps[0]!.id,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-03T12:00:45.000Z"),
+        });
+        const secondStepValidation =
+          await repository.validateStepForExecution({
+            userId,
+            financialPlanId: firstPlan.id,
+            financialPlanHash: firstPlan.planHash,
+            policy: countPolicy,
+            stepId: firstPlan.steps[1]!.id,
+            traceId: `it-risk-${randomUUID()}`,
+            now: new Date("2026-10-03T12:00:50.000Z"),
+          });
+        expect(secondStepValidation.status).toBe("EXECUTING");
+
+        const secondPlan = await createPlan(
+          userId,
+          "10000",
+          "partial-b",
+        );
+        const second = await repository.reserve({
+          userId,
+          financialPlanId: secondPlan.id,
+          policy: countPolicy,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-03T12:01:00.000Z"),
+        });
+
+        expect(second.assessment.decision).toBe("REVIEW");
+        expect(second.assessment.reasonCodes).not.toContain(
+          "ROLLING_COUNT_BLOCK_THRESHOLD",
+        );
+        expect(second.assessment.rollingUsage).toMatchObject([
+          {
+            currency: "USD",
+            settledAmountMinorUnits: "10000",
+            reservedAmountMinorUnits: "20000",
+            settledTransactionCount: 0,
+            reservedTransactionCount: 1,
+          },
+        ]);
+
+        const releaseTraceId = `it-risk-${randomUUID()}`;
+        await repository.release({
+          reservationId: first.reservation!.id,
+          userId,
+          financialPlanId: firstPlan.id,
+          financialPlanHash: firstPlan.planHash,
+          policyVersion: countPolicy.policyVersion,
+          traceId: releaseTraceId,
+          now: new Date("2026-10-03T12:02:00.000Z"),
+        });
+
+        const finalized = await db.riskReservation.findUniqueOrThrow({
+          where: { id: first.reservation!.id },
+          include: { entries: true },
+        });
+        expect(finalized.status).toBe("CONSUMED");
+        expect(finalized.entries.map((entry) => entry.status).sort()).toEqual([
+          "RELEASED",
+          "SETTLED",
+        ]);
+        expect(
+          await db.auditEvent.count({
+            where: {
+              aggregateId: first.reservation!.id,
+              traceId: releaseTraceId,
+              eventType: {
+                in: [
+                  "RISK_RESERVATION_RELEASED",
+                  "RISK_RESERVATION_CONSUMED",
+                ],
+              },
+            },
+          }),
+        ).toBe(2);
+      },
+      15_000,
+    );
+
+    it(
       "revalidates KYC immediately before execution",
       async () => {
         const userId = await createUser();
@@ -428,6 +664,7 @@ describe.skipIf(!testDatabaseUrl)(
             financialPlanHash: plan.planHash,
             policy,
             stepId: plan.steps[0]!.id,
+            traceId: `it-risk-${randomUUID()}`,
             now: new Date(
               "2026-10-03T12:01:00.000Z",
             ),
@@ -438,7 +675,7 @@ describe.skipIf(!testDatabaseUrl)(
     );
 
     it(
-      "extends an active reservation when a bank write is about to begin",
+      "claims an active reservation as non-expiring execution before a bank write",
       async () => {
         const userId = await createUser();
 
@@ -463,14 +700,11 @@ describe.skipIf(!testDatabaseUrl)(
           now: approvalTime,
         });
 
-        const originalExpiry = new Date(
-          reserved.reservation!.expiresAt,
-        );
-
         const executionTime = new Date(
           "2026-10-03T12:01:00.000Z",
         );
 
+        const claimTraceId = `it-risk-${randomUUID()}`;
         const validated =
           await repository.validateStepForExecution({
             userId,
@@ -478,25 +712,143 @@ describe.skipIf(!testDatabaseUrl)(
             financialPlanHash: plan.planHash,
             policy,
             stepId: plan.steps[0]!.id,
+            traceId: claimTraceId,
             now: executionTime,
           });
 
-        const expectedMinimum = new Date(
-          executionTime.getTime() +
-            policy.rollingWindowSeconds * 1000,
+        expect(validated.status).toBe("EXECUTING");
+        expect(validated.expiresAt).toBe(
+          reserved.reservation!.expiresAt,
         );
-
+        await repository.validateStepForExecution({
+          userId,
+          financialPlanId: plan.id,
+          financialPlanHash: plan.planHash,
+          policy,
+          stepId: plan.steps[0]!.id,
+          traceId: `it-risk-${randomUUID()}`,
+          now: executionTime,
+        });
         expect(
-          new Date(validated.expiresAt).getTime(),
-        ).toBeGreaterThanOrEqual(
-          expectedMinimum.getTime(),
-        );
+          await db.auditEvent.count({
+            where: {
+              eventType: "RISK_RESERVATION_EXECUTION_CLAIMED",
+              aggregateId: reserved.reservation!.id,
+            },
+          }),
+        ).toBe(1);
+      },
+      15_000,
+    );
 
-        expect(
-          new Date(validated.expiresAt).getTime(),
-        ).toBeGreaterThan(
-          originalExpiry.getTime(),
+    it(
+      "never expires an executing reservation and keeps it in later velocity",
+      async () => {
+        const userId = await createUser();
+        const planA = await createPlan(userId, "300000", "executing-a");
+        const repository = new PrismaRiskRepository(db);
+        const reserved = await repository.reserve({
+          userId,
+          financialPlanId: planA.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-03T12:00:00.000Z"),
+        });
+
+        await repository.validateStepForExecution({
+          userId,
+          financialPlanId: planA.id,
+          financialPlanHash: planA.planHash,
+          policy,
+          stepId: planA.steps[0]!.id,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-03T12:01:00.000Z"),
+        });
+        await db.riskReservation.update({
+          where: { id: reserved.reservation!.id },
+          data: { expiresAt: new Date("2026-10-03T12:02:00.000Z") },
+        });
+
+        const planB = await createPlan(userId, "300000", "executing-b");
+        const later = await repository.reserve({
+          userId,
+          financialPlanId: planB.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-04T12:00:00.000Z"),
+        });
+
+        expect(later.assessment.decision).toBe("BLOCK");
+        expect(later.assessment.reasonCodes).toContain(
+          "ROLLING_AMOUNT_BLOCK_THRESHOLD",
         );
+        expect(
+          await db.riskReservation.findUniqueOrThrow({
+            where: { id: reserved.reservation!.id },
+          }),
+        ).toMatchObject({ status: "EXECUTING" });
+      },
+      15_000,
+    );
+
+    it(
+      "fails exact execution binding for bank-state or exposure drift",
+      async () => {
+        const repository = new PrismaRiskRepository(db);
+
+        const stateUser = await createUser();
+        const statePlan = await createPlan(stateUser, "10000", "state-drift");
+        const stateReservation = await repository.reserve({
+          userId: stateUser,
+          financialPlanId: statePlan.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-03T12:00:00.000Z"),
+        });
+        await db.riskAssessment.update({
+          where: { id: stateReservation.assessment.id },
+          data: { bankStateVersion: { increment: 1 } },
+        });
+        await expect(
+          repository.validateStepForExecution({
+            userId: stateUser,
+            financialPlanId: statePlan.id,
+            financialPlanHash: statePlan.planHash,
+            policy,
+            stepId: statePlan.steps[0]!.id,
+            traceId: `it-risk-${randomUUID()}`,
+            now: new Date("2026-10-03T12:01:00.000Z"),
+          }),
+        ).rejects.toThrow("RISK_RESERVATION_BINDING_INVALID");
+
+        const exposureUser = await createUser();
+        const exposurePlan = await createPlan(
+          exposureUser,
+          "10000",
+          "exposure-drift",
+        );
+        const exposureReservation = await repository.reserve({
+          userId: exposureUser,
+          financialPlanId: exposurePlan.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-03T12:00:00.000Z"),
+        });
+        await db.riskVelocityEntry.updateMany({
+          where: { reservationId: exposureReservation.reservation!.id },
+          data: { minorUnits: 9999n },
+        });
+        await expect(
+          repository.validateStepForExecution({
+            userId: exposureUser,
+            financialPlanId: exposurePlan.id,
+            financialPlanHash: exposurePlan.planHash,
+            policy,
+            stepId: exposurePlan.steps[0]!.id,
+            traceId: `it-risk-${randomUUID()}`,
+            now: new Date("2026-10-03T12:01:00.000Z"),
+          }),
+        ).rejects.toThrow("RISK_RESERVATION_BINDING_INVALID");
       },
       15_000,
     );
@@ -539,6 +891,7 @@ describe.skipIf(!testDatabaseUrl)(
             financialPlanHash: plan.planHash,
             policy: changedPolicy,
             stepId: plan.steps[0]!.id,
+            traceId: `it-risk-${randomUUID()}`,
             now: new Date(
               "2026-10-03T12:01:00.000Z",
             ),
@@ -576,6 +929,16 @@ describe.skipIf(!testDatabaseUrl)(
 
         expect(reserved.reservation).toBeDefined();
 
+        await repository.validateStepForExecution({
+          userId,
+          financialPlanId: plan.id,
+          financialPlanHash: plan.planHash,
+          policy,
+          stepId: plan.steps[0]!.id,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-03T12:00:30.000Z"),
+        });
+
         const settled = await repository.settleStep({
           reservationId: reserved.reservation!.id,
           userId,
@@ -583,6 +946,7 @@ describe.skipIf(!testDatabaseUrl)(
           financialPlanHash: plan.planHash,
           policyVersion: policy.policyVersion,
           stepId: plan.steps[0]!.id,
+          traceId: `it-risk-${randomUUID()}`,
           now: new Date(
             "2026-10-03T12:01:00.000Z",
           ),
@@ -629,29 +993,40 @@ describe.skipIf(!testDatabaseUrl)(
           now,
         });
 
-        const first =
-          await repository.settleStepForPlan({
+        await repository.validateStepForExecution({
+          userId,
+          financialPlanId: plan.id,
+          financialPlanHash: plan.planHash,
+          policy,
+          stepId: plan.steps[0]!.id,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-03T12:00:30.000Z"),
+        });
+
+        const [first, second] = await Promise.all([
+          repository.settleStepForPlan({
             userId,
             financialPlanId: plan.id,
             financialPlanHash: plan.planHash,
             policyVersion: policy.policyVersion,
             stepId: plan.steps[0]!.id,
+            traceId: `it-risk-${randomUUID()}`,
             now: new Date(
               "2026-10-03T12:01:00.000Z",
             ),
-          });
-
-        const second =
-          await repository.settleStepForPlan({
+          }),
+          repository.settleStepForPlan({
             userId,
             financialPlanId: plan.id,
             financialPlanHash: plan.planHash,
             policyVersion: policy.policyVersion,
             stepId: plan.steps[0]!.id,
+            traceId: `it-risk-${randomUUID()}`,
             now: new Date(
               "2026-10-03T12:02:00.000Z",
             ),
-          });
+          }),
+        ]);
 
         expect(first.status).toBe("CONSUMED");
         expect(second.status).toBe("CONSUMED");
@@ -662,6 +1037,14 @@ describe.skipIf(!testDatabaseUrl)(
               reservation: { userId },
               stepId: plan.steps[0]!.id,
               status: "SETTLED",
+            },
+          }),
+        ).toBe(1);
+        expect(
+          await db.auditEvent.count({
+            where: {
+              aggregateId: first.id,
+              eventType: "RISK_EXPOSURE_SETTLED",
             },
           }),
         ).toBe(1);
@@ -697,12 +1080,14 @@ describe.skipIf(!testDatabaseUrl)(
 
         expect(first.assessment.decision).toBe("ALLOW");
 
+        const releaseTraceId = `it-risk-${randomUUID()}`;
         await repository.release({
           reservationId: first.reservation!.id,
           userId,
           financialPlanId: firstPlan.id,
           financialPlanHash: firstPlan.planHash,
           policyVersion: policy.policyVersion,
+          traceId: releaseTraceId,
           now: new Date(
             "2026-10-03T12:01:00.000Z",
           ),
@@ -716,6 +1101,15 @@ describe.skipIf(!testDatabaseUrl)(
           });
 
         expect(releasedEntry.status).toBe("RELEASED");
+        expect(
+          await db.auditEvent.count({
+            where: {
+              eventType: "RISK_RESERVATION_RELEASED",
+              aggregateId: first.reservation!.id,
+              traceId: releaseTraceId,
+            },
+          }),
+        ).toBe(1);
 
         const secondPlan = await createPlan(
           userId,
@@ -735,6 +1129,49 @@ describe.skipIf(!testDatabaseUrl)(
 
         expect(second.assessment.decision).toBe("ALLOW");
         expect(second.reservation).toBeDefined();
+      },
+      15_000,
+    );
+
+    it(
+      "expires only inactive approval reservations and records the lifecycle event",
+      async () => {
+        const userId = await createUser();
+        const repository = new PrismaRiskRepository(db);
+        const firstPlan = await createPlan(userId, "10000", "expiry-a");
+        const first = await repository.reserve({
+          userId,
+          financialPlanId: firstPlan.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date("2026-10-03T12:00:00.000Z"),
+        });
+        const secondPlan = await createPlan(userId, "10000", "expiry-b");
+        const expiryTraceId = `it-risk-${randomUUID()}`;
+
+        await repository.reserve({
+          userId,
+          financialPlanId: secondPlan.id,
+          policy,
+          traceId: expiryTraceId,
+          now: new Date("2026-10-03T12:06:00.000Z"),
+        });
+
+        const expired = await db.riskReservation.findUniqueOrThrow({
+          where: { id: first.reservation!.id },
+          include: { entries: true },
+        });
+        expect(expired.status).toBe("EXPIRED");
+        expect(expired.entries).toMatchObject([{ status: "EXPIRED" }]);
+        expect(
+          await db.auditEvent.count({
+            where: {
+              eventType: "RISK_RESERVATION_EXPIRED",
+              aggregateId: first.reservation!.id,
+              traceId: expiryTraceId,
+            },
+          }),
+        ).toBe(1);
       },
       15_000,
     );

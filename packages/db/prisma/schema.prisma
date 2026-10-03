@@ -101,6 +101,7 @@ enum RiskDecision {
 
 enum RiskReservationStatus {
   ACTIVE
+  EXECUTING
   CONSUMED
   RELEASED
   EXPIRED
