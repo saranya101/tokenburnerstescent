@@ -17,6 +17,7 @@ import { ApprovalPayloadV1, buildApprovalPayload } from "./approval-payload.js";
 import { committedApprovalChallenge, newApprovalChallengeNonce } from "./challenge-commitment.js";
 import type { AuthenticationVerifier, RegistrationVerifier, StoredApprovalEvidence, WebAuthnRepository } from "./types.js";
 import type { ApprovalSubject } from "./approval-payload.js";
+import type { ApprovalRiskGate } from "../risk/gate.js";
 
 const CHALLENGE_TTL_MS = 3 * 60_000;
 const APPROVAL_TTL_MS = 10 * 60_000;
@@ -73,6 +74,7 @@ export class WebAuthnService {
     private readonly registrationVerifier: RegistrationVerifier = simpleWebAuthnVerifier,
     private readonly authenticationVerifier: AuthenticationVerifier = simpleAuthenticationVerifier,
     private readonly now: () => Date = () => new Date(),
+    private readonly riskGate?: ApprovalRiskGate,
   ) {}
 
   async registrationStatus() {
@@ -157,8 +159,18 @@ export class WebAuthnService {
     const snapshot = await this.bank.getState(owner.subject.userId, traceId);
     await this.repository.saveSnapshot(snapshot, traceId);
     if (snapshot.stateVersion !== storedPlan.plan.bankStateVersion) throw new Error("APPROVAL_STATE_CHANGED");
+
     const credentials = await this.repository.listActiveWebAuthnCredentials(owner.subject.userId);
     if (credentials.length === 0) throw new Error("PASSKEY_CREDENTIAL_NOT_FOUND");
+
+    if (this.riskGate) {
+      await this.riskGate.reserveForApproval({
+        userId: owner.subject.userId,
+        financialPlanId: storedPlan.plan.id,
+        traceId,
+        now: issuedAt,
+      });
+    }
     const approvalExpiresAt = new Date(issuedAt.getTime() + APPROVAL_TTL_MS);
     const { payload, payloadHash } = buildApprovalPayload({ subject: owner.subject, plan: storedPlan.plan, bankStateVersion: snapshot.stateVersion, approvalExpiresAt });
     const challengeNonce = newApprovalChallengeNonce();

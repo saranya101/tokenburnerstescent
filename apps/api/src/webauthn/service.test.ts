@@ -11,6 +11,7 @@ import { WebAuthnService } from "./service.js";
 import { buildApprovalPayload } from "./approval-payload.js";
 import { committedApprovalChallenge } from "./challenge-commitment.js";
 import type { AuthenticationVerifier, NewWebAuthnChallenge, NewWebAuthnCredential, RegistrationVerifier, StoredApprovalEvidence, StoredWebAuthnChallenge, StoredWebAuthnCredential, VerifiedPasskeyAuthorizationInput, WebAuthnRepository } from "./types.js";
+import type { ApprovalRiskGate } from "../risk/gate.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(join(process.cwd(), "../../packages/contracts/fixtures/01-ntu-transfer", name), "utf8"));
 const fixedNow = new Date("2026-09-23T10:00:00.000Z");
@@ -116,10 +117,10 @@ class TestVerifier implements RegistrationVerifier {
 const response = (challenge: string, id = "browser-credential"): RegistrationResponseJSON => ({ id, rawId: id, type: "public-key", clientExtensionResults: {}, response: { clientDataJSON: challenge, attestationObject: "attestation", transports: ["internal"] } });
 const assertion = (challenge: string, id = "credential-1", signature = "valid"): AuthenticationResponseJSON => ({ id, rawId: id, type: "public-key", clientExtensionResults: {}, response: { clientDataJSON: challenge, authenticatorData: "authenticator-data", signature } });
 
-function setup() {
+function setup(riskGate?: ApprovalRiskGate) {
   const records = authoritativeRecords(); const repository = new MemoryRepository(records.goal, records.plan); const bank = new ControlledBank(records.state); const verifier = new TestVerifier(); const authenticationVerifier = new TestAuthenticationVerifier();
   let currentNow = new Date(fixedNow);
-  const service = new WebAuthnService(repository as unknown as ParlanceRepository & WebAuthnRepository, bank, verifier, authenticationVerifier, () => new Date(currentNow));
+  const service = new WebAuthnService(repository as unknown as ParlanceRepository & WebAuthnRepository, bank, verifier, authenticationVerifier, () => new Date(currentNow), riskGate);
   return { ...records, repository, bank, verifier, authenticationVerifier, service, setNow(value: Date) { currentNow = new Date(value); } };
 }
 
@@ -159,6 +160,96 @@ it("binds the existing passkey ceremony and execution creation to a bundle-owned
   expect(values.repository.authorizationOwnerType).toBe("BUNDLE");
   expect(values.repository.approvalRecord).toMatchObject({ goalContractId: contract.bundleId, goalContractHash: contract.contractHash, financialPlanHash: values.plan.plan.planHash });
   expect(values.repository).toMatchObject({ approvals: 1, executions: 1 }); expect(values.bank.writes).toBe(0);
+});
+
+it("does not reserve risk capacity when no passkey is enrolled", async () => {
+  const reserveForApproval = vi.fn();
+
+  const values = setup({
+    reserveForApproval,
+  });
+
+  await expect(
+    values.service.approvalOptions(
+      values.plan.plan.id,
+      "trace-no-passkey-risk",
+    ),
+  ).rejects.toThrow("PASSKEY_CREDENTIAL_NOT_FOUND");
+
+  expect(reserveForApproval).not.toHaveBeenCalled();
+  expect(values.repository.challenges.size).toBe(0);
+  expect(values.bank.writes).toBe(0);
+});
+
+it("does not issue a passkey challenge when deterministic risk requires review", async () => {
+  const reserveForApproval = vi.fn().mockRejectedValue(
+    new Error("RISK_REVIEW_REQUIRED"),
+  );
+
+  const values = setup({
+    reserveForApproval,
+  });
+
+  await values.repository.saveWebAuthnCredential({
+    id: "credential-row",
+    userId: values.goal.contract.userId,
+    credentialId: "credential-1",
+    publicKey: new Uint8Array([1, 2, 3]),
+    userHandle: new Uint8Array([2]),
+    signCount: 0,
+    transports: ["internal"],
+    deviceType: "multiDevice",
+    backedUp: true,
+  });
+
+  await expect(
+    values.service.approvalOptions(
+      values.plan.plan.id,
+      "trace-risk-review",
+    ),
+  ).rejects.toThrow("RISK_REVIEW_REQUIRED");
+
+  expect(reserveForApproval).toHaveBeenCalledWith({
+    userId: values.goal.contract.userId,
+    financialPlanId: values.plan.plan.id,
+    traceId: "trace-risk-review",
+    now: fixedNow,
+  });
+
+  expect(values.repository.challenges.size).toBe(0);
+  expect(values.bank.writes).toBe(0);
+});
+
+it("does not issue a passkey challenge when deterministic risk blocks the plan", async () => {
+  const reserveForApproval = vi.fn().mockRejectedValue(
+    new Error("RISK_BLOCKED"),
+  );
+
+  const values = setup({
+    reserveForApproval,
+  });
+
+  await values.repository.saveWebAuthnCredential({
+    id: "credential-row",
+    userId: values.goal.contract.userId,
+    credentialId: "credential-1",
+    publicKey: new Uint8Array([1, 2, 3]),
+    userHandle: new Uint8Array([2]),
+    signCount: 0,
+    transports: ["internal"],
+    deviceType: "multiDevice",
+    backedUp: true,
+  });
+
+  await expect(
+    values.service.approvalOptions(
+      values.plan.plan.id,
+      "trace-risk-block",
+    ),
+  ).rejects.toThrow("RISK_BLOCKED");
+
+  expect(values.repository.challenges.size).toBe(0);
+  expect(values.bank.writes).toBe(0);
 });
 
 describe("WebAuthn Phase 1 registration", () => {
