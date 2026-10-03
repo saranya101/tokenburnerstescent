@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { ApiServices } from "../app.js";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
+import { ConversationalMessageInput } from "../orchestration/input-provenance.js";
 const RouteId = z.object({ id: z.string().min(1) });
 const EmptyInput = z.object({}).strict();
 const ClarificationAnswerInput = z.union([z.object({ selectedCandidateId: z.string().min(1) }).strict(), z.object({ answerText: z.string().trim().min(1) }).strict()]);
@@ -25,10 +26,16 @@ const ApprovalVerificationInput = z.object({
 }).strict();
 const trace = (headers: Record<string, unknown>): string => String(headers["x-trace-id"]);
 export async function registerRoutes(app: FastifyInstance, services: ApiServices) {
-  app.post("/v1/messages", async (request) => services.messages.receive(request.body, trace(request.headers)));
+  app.post("/v1/messages", async (request) => {
+    const body = ConversationalMessageInput.parse(request.body);
+    return services.bundles?.handles(body.text) ? services.bundles.receive(body, trace(request.headers)) : services.messages.receive(body, trace(request.headers));
+  });
   app.post("/v1/clarifications/:id/answer", async (request) => services.messages.answerClarification(RouteId.parse(request.params).id, ClarificationAnswerInput.parse(request.body), trace(request.headers)));
+  app.post("/v1/bundle-clarifications/:id/answer", async (request) => services.bundles.answerClarification(RouteId.parse(request.params).id, ClarificationAnswerInput.parse(request.body), trace(request.headers)));
   app.post("/v1/goal-candidates/:id/confirm", async (request) => { EmptyInput.parse(request.body ?? {}); return services.messages.confirm(RouteId.parse(request.params).id, trace(request.headers)); });
+  app.post("/v1/goal-bundle-candidates/:id/confirm", async (request) => { EmptyInput.parse(request.body ?? {}); return services.bundles.confirm(RouteId.parse(request.params).id, trace(request.headers)); });
   app.post("/v1/goals/:id/compile", async (request) => services.compilation.compile(RouteId.parse(request.params).id, trace(request.headers)));
+  app.post("/v1/goal-bundles/:id/compile", async (request) => services.bundleCompilation.compile(RouteId.parse(request.params).id, trace(request.headers)));
   app.get("/v1/webauthn/registration/status", async () => services.webauthn.registrationStatus());
   app.post("/v1/webauthn/registration/options", async (request) => { EmptyInput.parse(request.body ?? {}); return services.webauthn.registrationOptions(); });
   app.post("/v1/webauthn/registration/verify", async (request) => { const body = RegistrationVerificationInput.parse(request.body); return services.webauthn.verifyRegistration(body.challengeId, body.credential as RegistrationResponseJSON); });

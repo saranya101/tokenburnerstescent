@@ -17,6 +17,7 @@ function run(overallState: string, overrides: Partial<OpsRun["stages"]> = {}): O
     stages: {
       request: stage("COMPLETE", "Customer request recorded", { customerText: "Send USD 7,000.00 to NTU" }),
       interpretation: stage("COMPLETE", "Deliver money", { goalType: "DELIVER_MONEY" }),
+      semanticValidation: stage("COMPLETE", "Candidate matched request", { decision: "PASS" }),
       confirmedGoal: stage("COMPLETE", "Goal confirmed", { amount: { currency: "USD", minorUnits: "700000" }, contractHash: "aaaaaaaaaaaa…aaaaaaaa" }),
       plan: stage("COMPLETE", "SAT", { compilerOutcome: "SAT", actions: [{ sequence: 0, action: "TRANSFER" }] }),
       authorization: stage("COMPLETE", "Verified passkey evidence recorded", { method: "PASSKEY", userVerified: true }),

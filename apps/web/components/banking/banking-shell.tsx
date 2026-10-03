@@ -6,7 +6,7 @@ import { customerDesktopNavigation, customerMobileNavigation, type BankingSectio
 export function BankingShell({ active, children }: { active: BankingSection; children: ReactNode }) {
   return <div className="banking-shell">
     <header className="banking-header">
-      <Link className="bank-brand" href="/" aria-label="DBS digibank prototype home"><span className="bank-wordmark"><b>DBS</b><span>digibank</span></span><span className="concept-label">Hackathon concept</span></Link>
+      <Link className="bank-brand" href="/" aria-label="DBS digibank home"><span className="bank-wordmark"><b>DBS</b><span>digibank</span></span></Link>
       <div className="header-actions">
         <button type="button" className="icon-button search-button" aria-label="Search"><Icon name="search" /></button>
         <button type="button" className="icon-button" aria-label="Help"><Icon name="help" /></button>
@@ -16,7 +16,7 @@ export function BankingShell({ active, children }: { active: BankingSection; chi
     </header>
 
     <aside className="banking-sidebar" aria-label="Banking navigation">
-      <nav>{customerDesktopNavigation.map((item) => <Link key={item.id} href={item.href} className={`${active === item.id ? "is-active" : ""} ${item.id === "parlance" ? "is-parlance" : ""}`}><Icon name={item.icon} />{item.label}{item.id === "parlance" && <small>NEW</small>}</Link>)}</nav>
+      <nav>{customerDesktopNavigation.map((item) => <Link key={item.id} href={item.href} className={active === item.id ? "is-active" : ""}><Icon name={item.icon} /><span>{item.label}</span></Link>)}</nav>
       <nav className="sidebar-secondary" aria-label="Support"><Link href="/settings/security" className={active === "settings" ? "is-active" : ""}><Icon name="settings" />Settings</Link><a href="#help"><Icon name="help" />Help & support</a></nav>
     </aside>
 

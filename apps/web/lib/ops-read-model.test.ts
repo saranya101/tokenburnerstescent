@@ -4,7 +4,7 @@ import { parseOpsRuns, redactForDisplay } from "./ops-read-model";
 describe("ops presentation boundary", () => {
   it("sorts audit events chronologically", () => {
     const stage = { state: "NOT_REACHED", summary: "none" };
-    const [run] = parseOpsRuns([{ id: "run", occurredAt: "2026-09-29T00:00:00Z", headline: "request", overallState: "WAITING", stages: { request: { state: "COMPLETE", summary: "recorded" }, interpretation: { state: "COMPLETE", summary: "parsed" }, confirmedGoal: stage, plan: stage, authorization: stage, execution: stage, bankResult: stage }, audit: [
+    const [run] = parseOpsRuns([{ id: "run", occurredAt: "2026-09-29T00:00:00Z", headline: "request", overallState: "WAITING", stages: { request: { state: "COMPLETE", summary: "recorded" }, interpretation: { state: "COMPLETE", summary: "parsed" }, semanticValidation: { state: "COMPLETE", summary: "validated" }, confirmedGoal: stage, plan: stage, authorization: stage, execution: stage, bankResult: stage }, audit: [
       { id: "later", eventType: "LATER", occurredAt: "2026-09-29T00:02:00Z", aggregateType: "Run", aggregateId: "run", traceId: "trace", metadata: {} },
       { id: "earlier", eventType: "EARLIER", occurredAt: "2026-09-29T00:01:00Z", aggregateType: "Run", aggregateId: "run", traceId: "trace", metadata: {} },
     ] }]);

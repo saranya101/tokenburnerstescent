@@ -6,6 +6,7 @@ import styles from "./ops.module.css";
 const stages = [
   ["request", "Request"],
   ["interpretation", "Interpretation"],
+  ["semanticValidation", "Semantic validation"],
   ["confirmedGoal", "Confirmed goal"],
   ["plan", "Plan"],
   ["authorization", "Authorization"],
@@ -58,7 +59,7 @@ function RunCard({ run, open }: { run: OpsRun; open: boolean }) {
       </summary>
       <div className={styles.runBody}>
         <ol className={styles.pipeline} aria-label="Run pipeline">
-          {stages.map(([key, label], index) => <PipelineStage label={label} stage={run.stages[key]} boundary={index === 2} key={key} />)}
+          {stages.map(([key, label], index) => <PipelineStage label={label} stage={run.stages[key]} boundary={index === 3} key={key} />)}
         </ol>
         <div className={styles.detailGrid}>
           <div className={styles.stageDetails}>

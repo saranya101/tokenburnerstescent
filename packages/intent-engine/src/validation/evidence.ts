@@ -107,8 +107,11 @@ function sourceSupportsPreferredReference(sourceText: string, reference: string)
   while (index >= 0) {
     const before = source.slice(Math.max(0, index - 60), index);
     const after = source.slice(index + target.length, index + target.length + 40);
+    const explicitlyUsesReference = /\b(?:use|using)\s+(?:the\s+)?$/iu.test(before)
+      && !/(?:don['’]?t|do\s+not|never)\s+use\s+(?:the\s+)?$/iu.test(before);
     if (
       /\bprefer(?:ably)?\s+(?:using\s+|use\s+)?(?:the\s+)?$/iu.test(before)
+      || explicitlyUsesReference
       || /\buse\s+(?:the\s+)?$/iu.test(before) && /^.{0,20}\bif\s+possible\b/iu.test(after)
     ) return true;
     index = source.indexOf(target, index + target.length);

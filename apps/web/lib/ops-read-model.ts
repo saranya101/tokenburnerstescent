@@ -24,6 +24,7 @@ export interface OpsRun {
   stages: {
     request: OpsStage;
     interpretation: OpsStage;
+    semanticValidation: OpsStage;
     confirmedGoal: OpsStage;
     plan: OpsStage;
     authorization: OpsStage;
@@ -34,7 +35,7 @@ export interface OpsRun {
 }
 
 const stageStates = new Set<OpsStageState>(["COMPLETE", "WAITING", "STOPPED", "FAILED", "NOT_REACHED"]);
-const stageKeys = ["request", "interpretation", "confirmedGoal", "plan", "authorization", "execution", "bankResult"] as const;
+const stageKeys = ["request", "interpretation", "semanticValidation", "confirmedGoal", "plan", "authorization", "execution", "bankResult"] as const;
 
 export function parseOpsRuns(value: unknown): OpsRun[] {
   if (!Array.isArray(value)) return [];

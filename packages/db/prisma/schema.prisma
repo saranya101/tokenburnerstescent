@@ -97,6 +97,7 @@ model User {
   conversations       Conversation[]
   intentDrafts        IntentDraftRecord[]
   goalContracts       GoalContract[]
+  goalBundleContracts GoalBundleContract[]
   bankStateSnapshots  BankStateSnapshot[]
   approvals           Approval[]
   executionRuns       ExecutionRun[]
@@ -135,6 +136,7 @@ model WebAuthnChallenge {
   user                User                     @relation(fields: [userId], references: [id])
   purpose             WebAuthnChallengePurpose
   challenge           String                   @unique
+  challengeNonce      String?
   userHandle          Bytes?
   expectedRpId        String
   expectedOrigin      String
@@ -260,6 +262,8 @@ model Message {
   role           String
   content        String
   traceId        String?
+  inputMode      String       @default("TYPED")
+  inputMetadata  Json?
   createdAt      DateTime     @default(now())
 
   @@index([conversationId, createdAt])
@@ -275,8 +279,31 @@ model IntentDraftRecord {
   payload        Json
   status         String
   goalContracts  GoalContract[]
+  goalBundleContracts GoalBundleContract[]
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
+}
+
+model GoalBundleContract {
+  id                  String             @id @default(cuid())
+  bundleKey           String
+  version             Int
+  userId              String
+  user                User               @relation(fields: [userId], references: [id])
+  sourceIntentDraftId String             @unique
+  sourceIntentDraft   IntentDraftRecord  @relation(fields: [sourceIntentDraftId], references: [id])
+  status              GoalStatus
+  schemaVersion       String
+  payload             Json
+  contractHash        String
+  financialPlans      FinancialPlan[]
+  approvals           Approval[]
+  createdAt           DateTime           @default(now())
+  confirmedAt         DateTime?
+  updatedAt           DateTime           @updatedAt
+
+  @@unique([bundleKey, version])
+  @@index([userId, status])
 }
 
 model GoalContract {
@@ -347,8 +374,10 @@ model BankStateSnapshot {
 
 model FinancialPlan {
   id                      String              @id @default(cuid())
-  goalContractRowId       String
-  goalContract            GoalContract        @relation(fields: [goalContractRowId], references: [id])
+  goalContractRowId       String?
+  goalContract            GoalContract?       @relation(fields: [goalContractRowId], references: [id])
+  goalBundleRowId         String?
+  goalBundle              GoalBundleContract? @relation(fields: [goalBundleRowId], references: [id])
   goalContractKey         String
   status                  PlanStatus          @default(DRAFT)
   schemaVersion           String
@@ -359,6 +388,7 @@ model FinancialPlan {
   operationLibraryVersion String
   validity                Json
   projectedOutcome        Json
+  satisfactionProof       Json?
   planHash                String              @unique
   traceId                 String?
   steps                   FinancialPlanStep[]
@@ -370,6 +400,7 @@ model FinancialPlan {
   updatedAt               DateTime            @updatedAt
 
   @@index([goalContractRowId, status])
+  @@index([goalBundleRowId, status])
   @@index([goalContractKey, goalContractVersion])
 }
 
@@ -394,8 +425,10 @@ model Approval {
   id                  String            @id @default(cuid())
   userId              String
   user                User              @relation(fields: [userId], references: [id])
-  goalContractRowId   String
-  goalContract        GoalContract      @relation(fields: [goalContractRowId], references: [id])
+  goalContractRowId   String?
+  goalContract        GoalContract?      @relation(fields: [goalContractRowId], references: [id])
+  goalBundleRowId     String?
+  goalBundle          GoalBundleContract? @relation(fields: [goalBundleRowId], references: [id])
   goalContractKey     String
   goalContractVersion Int
   goalContractHash    String
@@ -409,7 +442,7 @@ model Approval {
   expiresAt           DateTime
   revokedAt           DateTime?
   traceId             String?
-  executionRuns       ExecutionRun[]
+  executionRun        ExecutionRun?
   evidence            ApprovalEvidence?
   createdAt           DateTime          @default(now())
 
@@ -453,7 +486,7 @@ model ExecutionRun {
   user                User               @relation(fields: [userId], references: [id])
   planId              String
   plan                FinancialPlan      @relation(fields: [planId], references: [id])
-  approvalId          String
+  approvalId          String             @unique
   approval            Approval           @relation(fields: [approvalId], references: [id])
   status              ExecutionRunStatus
   startedStateVersion Int

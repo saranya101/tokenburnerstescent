@@ -3,12 +3,14 @@
   "private": true,
   "packageManager": "pnpm@11.19.0",
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "node --env-file=.env ./node_modules/turbo/bin/turbo dev --env-mode=loose",
+    "db:setup": "node --env-file=.env packages/db/node_modules/prisma/build/index.js migrate deploy --schema packages/db/prisma/schema.prisma && pnpm db:seed",
+    "db:seed": "node --env-file=.env packages/db/prisma/seed.mjs",
     "build": "turbo build",
     "lint": "turbo lint && pnpm compiler:lint",
     "typecheck": "turbo typecheck",
     "test": "turbo test && pnpm compiler:test",
-    "compiler:dev": "cd services/compiler && uvicorn app.main:app --reload --port 8001",
+    "compiler:dev": "set -a; . ./.env; set +a; cd services/compiler && ./.venv/bin/uvicorn app.main:app --reload --port 8001",
     "compiler:lint": "cd services/compiler && ./.venv/bin/ruff check . && ./.venv/bin/ruff format --check .",
     "compiler:test": "cd services/compiler && ./.venv/bin/pytest",
     "eval:intent:live": "pnpm --filter @parlance/intent-engine exec tsx ../../evaluation/intent-live/cli.ts"

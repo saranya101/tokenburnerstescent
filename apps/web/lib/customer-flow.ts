@@ -1,16 +1,21 @@
-import type { ExecutionResultV1, FinancialPlanV1, GoalContractV1 } from "@parlance/contracts";
-import type { Clarification, ClarificationOption, GoalCandidate, MessageResponse, ParlanceApi } from "./parlance-api";
+import type { ExecutionResultV1, FinancialPlanV1, GoalBundleContractV1, GoalContractV1 } from "@parlance/contracts";
+import type { Clarification, ClarificationOption, GoalBundleCandidate, GoalCandidate, MessageInputProvenance, MessageResponse, ParlanceApi } from "./parlance-api";
 import { PasskeyCancelledError, type PasskeyClient } from "./passkey";
 
-type Context = { requestText: string; goal: GoalContractV1; plan: FinancialPlanV1 };
+type Context = { requestText: string; plan: FinancialPlanV1 } & ({ goal: GoalContractV1; bundle?: never } | { bundle: GoalBundleContractV1; goal?: never });
 export type CustomerFlowState =
   | { phase: "COMPOSE" }
   | { phase: "INTERPRETING"; requestText: string }
-  | { phase: "CLARIFICATION"; requestText: string; clarificationId: string; clarifications: Clarification[]; answers: ClarificationAnswer[] }
+  | { phase: "CLARIFICATION"; requestText: string; clarificationId: string; clarifications: Clarification[]; answers: ClarificationAnswer[]; bundle: boolean }
+  | { phase: "SEMANTIC_VALIDATION_FAILED"; requestText: string; message: string }
   | { phase: "GOAL_REVIEW"; requestText: string; candidateId: string; candidate: GoalCandidate; answers: ClarificationAnswer[] }
+  | { phase: "BUNDLE_REVIEW"; requestText: string; candidateId: string; candidate: GoalBundleCandidate; answers: ClarificationAnswer[] }
   | { phase: "CONFIRMING_GOAL"; requestText: string; candidate: GoalCandidate }
+  | { phase: "CONFIRMING_BUNDLE"; requestText: string; candidate: GoalBundleCandidate }
   | { phase: "GOAL_CONFIRMATION_FAILED"; requestText: string; candidateId: string; candidate: GoalCandidate; message: string }
+  | { phase: "BUNDLE_CONFIRMATION_FAILED"; requestText: string; candidateId: string; candidate: GoalBundleCandidate; message: string }
   | { phase: "COMPILING"; requestText: string; goal: GoalContractV1 }
+  | { phase: "COMPILING_BUNDLE"; requestText: string; bundle: GoalBundleContractV1 }
   | ({ phase: "PLAN_REVIEW"; refreshed?: boolean; passkeyReady?: boolean } & Context)
   | ({ phase: "PASSKEY_REQUIRED" } & Context)
   | ({ phase: "AUTHORIZING" } & Context)
@@ -37,13 +42,13 @@ export class CustomerFlowController {
 
   private transition(state: CustomerFlowState): void { this.state = state; this.listener(state); }
 
-  async submitMessage(requestText: string): Promise<void> { await this.interpret(requestText.trim(), requestText.trim()); }
+  async submitMessage(requestText: string, input?: MessageInputProvenance): Promise<void> { await this.interpret(requestText.trim(), requestText.trim(), input); }
 
-  private async interpret(text: string, requestText: string): Promise<void> {
+  private async interpret(text: string, requestText: string, input?: MessageInputProvenance): Promise<void> {
     if (!text) return;
     this.transition({ phase: "INTERPRETING", requestText });
     try {
-      const response = await this.api.sendMessage(text);
+      const response = await this.api.sendMessage(text, input);
       this.applyInterpretation(response, requestText, []);
     } catch (error) { this.transition({ phase: "ERROR", requestText, message: message(error) }); }
   }
@@ -62,41 +67,52 @@ export class CustomerFlowController {
   private async continueClarification(clarification: Clarification, answer: { selectedCandidateId: string } | { answerText: string }, displayAnswer: string): Promise<void> {
     if (this.clarificationInFlight) return;
     if (this.state.phase !== "CLARIFICATION") throw new Error("INVALID_FLOW_STATE");
-    const { requestText, clarificationId, answers } = this.state;
+    const { requestText, clarificationId, answers, bundle } = this.state;
     this.clarificationInFlight = true;
     try {
-      const response = await this.api.answerClarification(clarificationId, answer);
+      const response = bundle ? await this.api.answerBundleClarification(clarificationId, answer) : await this.api.answerClarification(clarificationId, answer);
       this.applyInterpretation(response, requestText, [...answers, { reference: clarification.originalReference, answer: displayAnswer }]);
     } catch (error) { this.transition({ phase: "ERROR", requestText, message: message(error) }); }
     finally { this.clarificationInFlight = false; }
   }
 
   private applyInterpretation(response: MessageResponse, requestText: string, answers: ClarificationAnswer[]): void {
-    if (response.status === "NEEDS_CLARIFICATION") this.transition({ phase: "CLARIFICATION", requestText, clarificationId: response.clarificationId, clarifications: response.clarifications, answers });
+    if (response.status === "NEEDS_CLARIFICATION" || response.status === "NEEDS_BUNDLE_CLARIFICATION") this.transition({ phase: "CLARIFICATION", requestText, clarificationId: response.clarificationId, clarifications: response.clarifications, answers, bundle: response.status === "NEEDS_BUNDLE_CLARIFICATION" });
+    else if (response.status === "SEMANTIC_VALIDATION_FAILED") this.transition({ phase: "SEMANTIC_VALIDATION_FAILED", requestText, message: response.message });
+    else if (response.status === "AWAITING_BUNDLE_CONFIRMATION") this.transition({ phase: "BUNDLE_REVIEW", requestText, candidateId: response.candidateId, candidate: response.goalBundleCandidate, answers });
     else this.transition({ phase: "GOAL_REVIEW", requestText, candidateId: response.candidateId, candidate: response.goalCandidate, answers });
   }
 
   async confirmMeaning(): Promise<void> {
     if (this.meaningConfirmationInFlight) return;
-    if (!(this.state.phase === "GOAL_REVIEW" || this.state.phase === "GOAL_CONFIRMATION_FAILED")) throw new Error("INVALID_FLOW_STATE");
+    if (!(this.state.phase === "GOAL_REVIEW" || this.state.phase === "GOAL_CONFIRMATION_FAILED" || this.state.phase === "BUNDLE_REVIEW" || this.state.phase === "BUNDLE_CONFIRMATION_FAILED")) throw new Error("INVALID_FLOW_STATE");
     const { candidateId, candidate, requestText } = this.state;
+    const bundleFlow = "items" in candidate;
     this.meaningConfirmationInFlight = true;
-    this.transition({ phase: "CONFIRMING_GOAL", requestText, candidate });
+    if (bundleFlow) this.transition({ phase: "CONFIRMING_BUNDLE", requestText, candidate });
+    else this.transition({ phase: "CONFIRMING_GOAL", requestText, candidate });
     try {
-      let goal: GoalContractV1;
-      try {
-        goal = await this.api.confirmGoal(candidateId);
-      } catch (error) {
-        this.transition({ phase: "GOAL_CONFIRMATION_FAILED", requestText, candidateId, candidate, message: message(error) });
-        return;
-      }
-      this.transition({ phase: "COMPILING", requestText, goal });
-      try {
-        const result = await this.api.compileGoal(goal.id);
-        if (result.status === "SAT") this.transition({ phase: "PLAN_REVIEW", requestText, goal, plan: result.plan });
-        else this.transition({ phase: "UNAVAILABLE", requestText, kind: result.status, message: result.reason.message });
-      } catch (error) {
-        this.transition({ phase: "ERROR", requestText, message: message(error) });
+      if (bundleFlow) {
+        let bundle: GoalBundleContractV1;
+        try { bundle = await this.api.confirmGoalBundle(candidateId); }
+        catch (error) { this.transition({ phase: "BUNDLE_CONFIRMATION_FAILED", requestText, candidateId, candidate, message: message(error) }); return; }
+        this.transition({ phase: "COMPILING_BUNDLE", requestText, bundle });
+        try {
+          const result = await this.api.compileGoalBundle(bundle.bundleId);
+          if ("financialPlan" in result) this.transition({ phase: "PLAN_REVIEW", requestText, bundle, plan: result.financialPlan });
+          else if (result.status !== "SAT") this.transition({ phase: "UNAVAILABLE", requestText, kind: result.status, message: result.reason.message });
+          else throw new Error("BUNDLE_COMPILER_RESPONSE_INVALID");
+        } catch (error) { this.transition({ phase: "ERROR", requestText, message: message(error) }); }
+      } else {
+        let goal: GoalContractV1;
+        try { goal = await this.api.confirmGoal(candidateId); }
+        catch (error) { this.transition({ phase: "GOAL_CONFIRMATION_FAILED", requestText, candidateId, candidate, message: message(error) }); return; }
+        this.transition({ phase: "COMPILING", requestText, goal });
+        try {
+          const result = await this.api.compileGoal(goal.id);
+          if (result.status === "SAT") this.transition({ phase: "PLAN_REVIEW", requestText, goal, plan: result.plan });
+          else this.transition({ phase: "UNAVAILABLE", requestText, kind: result.status, message: result.reason.message });
+        } catch (error) { this.transition({ phase: "ERROR", requestText, message: message(error) }); }
       }
     } finally {
       this.meaningConfirmationInFlight = false;
@@ -105,7 +121,7 @@ export class CustomerFlowController {
 
   async authorizeAndExecute(): Promise<void> {
     if (!(this.state.phase === "PLAN_REVIEW" || this.state.phase === "PASSKEY_CANCELLED" || this.state.phase === "APPROVAL_FAILED")) throw new Error("INVALID_FLOW_STATE");
-    const context: Context = { requestText: this.state.requestText, goal: this.state.goal, plan: this.state.plan };
+    const context = contextFrom(this.state);
     this.transition({ phase: "AUTHORIZING", ...context });
     let executionId: string;
     try {
@@ -139,22 +155,34 @@ export class CustomerFlowController {
 
   async passkeyEnrolled(): Promise<void> {
     if (this.state.phase !== "PASSKEY_REQUIRED") throw new Error("INVALID_FLOW_STATE");
-    const context: Context = { requestText: this.state.requestText, goal: this.state.goal, plan: this.state.plan };
+    const context = contextFrom(this.state);
     const validUntil = context.plan.validity.validUntil;
     if (validUntil !== undefined && Date.now() >= Date.parse(validUntil)) { await this.refreshExpiredPlan(context); return; }
     this.transition({ phase: "PLAN_REVIEW", ...context, passkeyReady: true });
   }
 
   private async refreshExpiredPlan(context: Context): Promise<void> {
-    this.transition({ phase: "COMPILING", requestText: context.requestText, goal: context.goal });
+    if ("bundle" in context) this.transition({ phase: "COMPILING_BUNDLE", requestText: context.requestText, bundle: context.bundle });
+    else this.transition({ phase: "COMPILING", requestText: context.requestText, goal: context.goal });
     try {
-      const result = await this.api.compileGoal(context.goal.id);
-      if (result.status === "SAT") this.transition({ phase: "PLAN_REVIEW", requestText: context.requestText, goal: context.goal, plan: result.plan, refreshed: true });
-      else this.transition({ phase: "UNAVAILABLE", requestText: context.requestText, kind: result.status, message: result.reason.message });
+      if ("bundle" in context) {
+        const result = await this.api.compileGoalBundle(context.bundle.bundleId);
+        if ("financialPlan" in result) this.transition({ phase: "PLAN_REVIEW", requestText: context.requestText, bundle: context.bundle, plan: result.financialPlan, refreshed: true });
+        else if (result.status !== "SAT") this.transition({ phase: "UNAVAILABLE", requestText: context.requestText, kind: result.status, message: result.reason.message });
+        else throw new Error("BUNDLE_COMPILER_RESPONSE_INVALID");
+      } else {
+        const result = await this.api.compileGoal(context.goal.id);
+        if (result.status === "SAT") this.transition({ phase: "PLAN_REVIEW", requestText: context.requestText, goal: context.goal, plan: result.plan, refreshed: true });
+        else this.transition({ phase: "UNAVAILABLE", requestText: context.requestText, kind: result.status, message: result.reason.message });
+      }
     } catch (error) {
       this.transition({ phase: "ERROR", requestText: context.requestText, message: message(error) });
     }
   }
 
   reset(): void { this.transition({ phase: "COMPOSE" }); }
+}
+
+function contextFrom(state: Extract<CustomerFlowState, { plan: FinancialPlanV1 }>): Context {
+  return "bundle" in state ? { requestText: state.requestText, bundle: state.bundle, plan: state.plan } : { requestText: state.requestText, goal: state.goal, plan: state.plan };
 }

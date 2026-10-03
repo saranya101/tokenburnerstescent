@@ -21,6 +21,24 @@ describe("dependency clients", () => {
     await expect(new MockBankClient("http://bank.internal").getState("user-1", "trace-bank")).rejects.toThrow("MOCK_BANK_UNAVAILABLE");
   });
 
+  it("distinguishes an ambiguous bank write from a definite dependency read failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("response lost")));
+    const client = new MockBankClient("http://bank.internal");
+    await expect(client.execute("transfer", {}, "same-key", "trace-bank-write")).rejects.toThrow("BANK_RESPONSE_OUTCOME_UNKNOWN");
+    await expect(client.lookupByIdempotencyKey("same-key", "trace-bank-lookup")).rejects.toThrow("BANK_LOOKUP_UNAVAILABLE");
+  });
+
+  it("treats a bank 5xx after dispatch as outcome-unknown but preserves definite 4xx rejection", async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: "internal" }), { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: "INSUFFICIENT_FUNDS" }), { status: 409 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: "FX_UNAVAILABLE" }), { status: 503 }));
+    vi.stubGlobal("fetch", request); const client = new MockBankClient("http://bank.internal");
+    await expect(client.execute("transfer", {}, "same-key", "trace-500")).rejects.toThrow("BANK_RESPONSE_OUTCOME_UNKNOWN");
+    await expect(client.execute("transfer", {}, "other-key", "trace-409")).rejects.toThrow("INSUFFICIENT_FUNDS");
+    await expect(client.execute("fx", {}, "fx-key", "trace-503")).rejects.toThrow("FX_UNAVAILABLE");
+  });
+
   it("preserves an explicit compiler URL and omits a null optional validity timestamp", async () => {
     const result = fixture("compiler-result.json") as { plan: { validity: { validUntil?: string | null } } }; result.plan.validity.validUntil = null;
     const request = vi.fn().mockResolvedValue(new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } })); vi.stubGlobal("fetch", request);

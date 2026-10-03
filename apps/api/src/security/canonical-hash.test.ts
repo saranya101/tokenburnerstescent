@@ -1,6 +1,6 @@
-import { GoalContractV1, type GoalContractV1 as GoalContract } from "@parlance/contracts";
+import { FinancialPlanV1, GoalContractV1, type GoalContractV1 as GoalContract } from "@parlance/contracts";
 import { describe, expect, it } from "vitest";
-import { canonicalGoalContractJson, canonicalHash, canonicalJson, hashGoalContract } from "./canonical-hash.js";
+import { canonicalGoalContractJson, canonicalHash, canonicalJson, hashFinancialPlan, hashGoalContract } from "./canonical-hash.js";
 
 it("canonicalizes object keys while preserving array order", () => {
   expect(canonicalJson({ z: 1, a: { y: 2, x: 3 } })).toBe('{"a":{"x":3,"y":2},"z":1}');
@@ -41,5 +41,35 @@ describe("canonical GoalContract semantic hashing", () => {
     expect(hashGoalContract(goal({ entityBindings: [{ schemaVersion: "1", reference: "John", entityType: "BENEFICIARY", entityId: "ben-john", resolutionMethod: "EXACT", confidence: "1", confirmed: true }] }))).toBe(hashGoalContract(goal()));
     expect(canonicalGoalContractJson(goal())).toBe(canonicalGoalContractJson(JSON.parse(JSON.stringify(goal())) as GoalContract));
     expect(hashGoalContract(goal({ preferences: [{ type: "MINIMIZE_TOTAL_COST" }, { type: "FASTEST" }] }))).not.toBe(hashGoalContract(goal({ preferences: [{ type: "FASTEST" }, { type: "MINIMIZE_TOTAL_COST" }] })));
+  });
+});
+
+describe("canonical FinancialPlan hashing", () => {
+  const plan = () => FinancialPlanV1.parse({
+    schemaVersion: "1", id: "plan-1", goalContractId: "goal-1", goalContractVersion: 1, bankStateVersion: 7,
+    compilerVersion: "compiler-1", policyVersion: "policy-1", operationLibraryVersion: "ops-1",
+    steps: [
+      { id: "fx-1", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", sourceMoney: { currency: "SGD", minorUnits: "100" }, targetCurrency: "USD", quoteId: "quote-1" } },
+      { id: "transfer-1", sequence: 1, action: "TRANSFER", dependsOn: ["fx-1"], reversible: false, parameters: { sourceAccountId: "acc-usd", beneficiaryId: "ben-1", amount: { currency: "USD", minorUnits: "75" } } },
+    ], validity: { validUntil: "2026-10-02T12:00:00.000Z", requiredQuoteIds: ["quote-1"] },
+    projectedOutcome: { goalSatisfied: true, deliveredMoney: { currency: "USD", minorUnits: "75" }, acquiredAssets: [], paidObligationIds: [], projectedAvailableBalances: [{ accountId: "acc-usd", money: { currency: "USD", minorUnits: "25" } }], warnings: [] },
+    planHash: "0".repeat(64),
+  });
+
+  it.each([
+    ["ordered steps", (value: FinancialPlanV1) => ({ ...value, steps: [...value.steps].reverse() })],
+    ["sequence", (value: FinancialPlanV1) => ({ ...value, steps: value.steps.map((step, index) => index === 0 ? { ...step, sequence: 9 } : step) })],
+    ["dependencies", (value: FinancialPlanV1) => ({ ...value, steps: value.steps.map((step, index) => index === 1 ? { ...step, dependsOn: [] } : step) })],
+    ["reversibility", (value: FinancialPlanV1) => ({ ...value, steps: value.steps.map((step, index) => index === 0 ? { ...step, reversible: true } : step) })],
+    ["complete parameters", (value: FinancialPlanV1) => ({ ...value, steps: value.steps.map((step) => step.action === "TRANSFER" ? { ...step, parameters: { ...step.parameters, beneficiaryId: "ben-2" } } : step) })],
+    ["validity", (value: FinancialPlanV1) => ({ ...value, validity: { ...value.validity, validUntil: "2026-10-02T12:01:00.000Z" } })],
+    ["bank state", (value: FinancialPlanV1) => ({ ...value, bankStateVersion: 8 })],
+    ["projected outcome", (value: FinancialPlanV1) => ({ ...value, projectedOutcome: { ...value.projectedOutcome, warnings: ["changed"] } })],
+  ] as const)("covers %s", (_label, mutate) => {
+    const original = plan(); expect(hashFinancialPlan(mutate(original) as FinancialPlanV1)).not.toBe(hashFinancialPlan(original));
+  });
+
+  it("excludes only the self-referential planHash field", () => {
+    const original = plan(); expect(hashFinancialPlan({ ...original, planHash: "f".repeat(64) })).toBe(hashFinancialPlan(original));
   });
 });

@@ -5,22 +5,26 @@ import { getPrismaClient } from "@parlance/db";
 import { registerRoutes } from "./routes/index.js";
 import { CompilerClient } from "./clients/compiler.js";
 import { MockBankClient } from "./clients/mock-bank.js";
-import { createTokenHubIntentInterpreter, MockIntentInterpreter } from "@parlance/intent-engine";
+import { createTokenHubIntentBundleInterpreter, createTokenHubIntentInterpreter, MockIntentInterpreter, type IntentBundleInterpreter } from "@parlance/intent-engine";
 import { CompilationService, ExecutionService, MessageOrchestrationService } from "./orchestration/services.js";
-import type { GoalConfirmationRepository, ParlanceRepository } from "./orchestration/ports.js";
+import { BundleMessageOrchestrationService } from "./orchestration/bundle-services.js";
+import { BundleCompilationService } from "./orchestration/bundle-compilation.js";
+import type { BundleConfirmationRepository, BundlePlanRepository, GoalConfirmationRepository, ParlanceRepository } from "./orchestration/ports.js";
 import { PrismaParlanceRepository } from "./repositories/prisma.js";
 import { PrismaEntityGrounder } from "./repositories/prisma-grounder.js";
 import { WebAuthnService } from "./webauthn/service.js";
 import type { WebAuthnRepository } from "./webauthn/types.js";
 import { PrismaOpsReadService, type OpsReadService } from "./ops/read-model.js";
 
-export interface ApiServices { repository: ParlanceRepository & GoalConfirmationRepository & WebAuthnRepository; messages: MessageOrchestrationService; compilation: CompilationService; execution: ExecutionService; webauthn: WebAuthnService; ops?: OpsReadService; dependencies: { compiler: CompilerClient; bank: MockBankClient } }
+export interface ApiServices { repository: ParlanceRepository & BundlePlanRepository & GoalConfirmationRepository & BundleConfirmationRepository & WebAuthnRepository; messages: MessageOrchestrationService; bundles: BundleMessageOrchestrationService; compilation: CompilationService; bundleCompilation: BundleCompilationService; execution: ExecutionService; webauthn: WebAuthnService; ops?: OpsReadService; dependencies: { compiler: CompilerClient; bank: MockBankClient } }
 export function productionServices(): ApiServices {
   const db = getPrismaClient(); const repository = new PrismaParlanceRepository(db); const bank = new MockBankClient(); const compiler = new CompilerClient();
   const intentMode = process.env.INTENT_INTERPRETER_MODE ?? "TOKENHUB";
   if (intentMode !== "TOKENHUB" && intentMode !== "MOCK") throw new Error("INTENT_INTERPRETER_MODE_INVALID");
   const interpreter = intentMode === "MOCK" ? new MockIntentInterpreter() : createTokenHubIntentInterpreter();
-  return { repository, messages: new MessageOrchestrationService(repository, interpreter, (userId) => new PrismaEntityGrounder(db, userId)), compilation: new CompilationService(repository, bank, compiler), execution: new ExecutionService(repository, bank, compiler), webauthn: new WebAuthnService(repository, bank), ops: new PrismaOpsReadService(db), dependencies: { compiler, bank } };
+  const bundleInterpreter: IntentBundleInterpreter = intentMode === "TOKENHUB" ? createTokenHubIntentBundleInterpreter() : { async interpretUserRequest() { throw new Error("BUNDLE_INTERPRETER_UNAVAILABLE"); } };
+  const grounder = (userId: string) => new PrismaEntityGrounder(db, userId);
+  return { repository, messages: new MessageOrchestrationService(repository, interpreter, grounder), bundles: new BundleMessageOrchestrationService(repository, bundleInterpreter, grounder), compilation: new CompilationService(repository, bank, compiler), bundleCompilation: new BundleCompilationService(repository, bank, compiler), execution: new ExecutionService(repository, bank, compiler), webauthn: new WebAuthnService(repository, bank), ops: new PrismaOpsReadService(db), dependencies: { compiler, bank } };
 }
 export function buildApp(services = productionServices()) {
   const app = Fastify({ loggerInstance: logger });
@@ -32,6 +36,6 @@ export function buildApp(services = productionServices()) {
     if (!databaseReady || !compilerReady || !mockBankReady) return reply.code(503).send({ status: "not_ready", database: databaseReady ? "ready" : "unavailable", dependencies: { compiler: compilerReady ? "ready" : "unavailable", mockBank: mockBankReady ? "ready" : "unavailable" } });
     return { status: "ready", database: "ready", dependencies: { compiler: "ready", mockBank: "ready" } };
   });
-  app.setErrorHandler((error, _request, reply) => { const message = error instanceof Error ? error.message : "INTERNAL_ERROR"; const status = error instanceof z.ZodError ? 400 : /NOT_FOUND/.test(message) ? 404 : message === "COMPILER_UNAVAILABLE" || message === "MOCK_BANK_UNAVAILABLE" ? 503 : 409; return reply.code(status).send({ code: error instanceof z.ZodError ? "INVALID_REQUEST" : message, details: error instanceof z.ZodError ? error.issues : undefined }); });
+  app.setErrorHandler((error, _request, reply) => { const message = error instanceof Error ? error.message : "INTERNAL_ERROR"; const status = error instanceof z.ZodError ? 400 : /NOT_FOUND/.test(message) ? 404 : /(?:COMPILER|INTERPRETER)_UNAVAILABLE/.test(message) || message === "MOCK_BANK_UNAVAILABLE" ? 503 : 409; return reply.code(status).send({ code: error instanceof z.ZodError ? "INVALID_REQUEST" : message, details: error instanceof z.ZodError ? error.issues : undefined }); });
   void app.register(registerRoutes, services); return app;
 }

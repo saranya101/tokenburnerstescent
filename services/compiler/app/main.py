@@ -1,11 +1,16 @@
 from fastapi import FastAPI
 
 from app.models.contracts import (
+    CompileGoalBundleRequestV1,
+    CompileGoalBundleResultV1,
     CompileRequest,
+    CompilerPolicyBlockedV1,
     CompilerResultV1,
+    CompilerUnsatV1,
     OpportunitiesRequest,
     RevalidateRequest,
 )
+from app.planner.bundle import compile_goal_bundle
 from app.planner.simple import compile_goal
 
 app = FastAPI(title="Parlance Financial Compiler", version="0.0.0")
@@ -24,6 +29,17 @@ def ready() -> dict[str, str]:
 @app.post("/v1/compile", response_model=CompilerResultV1, response_model_by_alias=True)
 def compile_endpoint(request: CompileRequest) -> CompilerResultV1:
     return compile_goal(request.goal_contract, request.bank_state_snapshot)
+
+
+@app.post(
+    "/v1/compile-bundle",
+    response_model=CompileGoalBundleResultV1 | CompilerUnsatV1 | CompilerPolicyBlockedV1,
+    response_model_by_alias=True,
+)
+def compile_bundle_endpoint(
+    request: CompileGoalBundleRequestV1,
+) -> CompileGoalBundleResultV1 | CompilerUnsatV1 | CompilerPolicyBlockedV1:
+    return compile_goal_bundle(request.goal_bundle, request.bank_state)
 
 
 @app.post("/v1/revalidate")

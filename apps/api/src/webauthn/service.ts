@@ -7,13 +7,16 @@ import {
   type AuthenticationResponseJSON,
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
-import { ApprovalV1, GoalContractV1 } from "@parlance/contracts";
-import type { BankPort, ParlanceRepository } from "../orchestration/ports.js";
+import { ApprovalV1 } from "@parlance/contracts";
+import { hashGoalBundleContract } from "@parlance/contracts/server";
+import type { BankPort, BundlePlanRepository, ParlanceRepository, StoredPlan } from "../orchestration/ports.js";
 import { hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
 import { financialPlanExpired, requireActiveFinancialPlan } from "../security/plan-validity.js";
 import { canonicalJson } from "../security/canonical-hash.js";
 import { ApprovalPayloadV1, buildApprovalPayload } from "./approval-payload.js";
+import { committedApprovalChallenge, newApprovalChallengeNonce } from "./challenge-commitment.js";
 import type { AuthenticationVerifier, RegistrationVerifier, StoredApprovalEvidence, WebAuthnRepository } from "./types.js";
+import type { ApprovalSubject } from "./approval-payload.js";
 
 const CHALLENGE_TTL_MS = 3 * 60_000;
 const APPROVAL_TTL_MS = 10 * 60_000;
@@ -143,37 +146,49 @@ export class WebAuthnService {
     const config = webAuthnConfig();
     const storedPlan = await this.repository.getPlan(planId);
     if (!storedPlan) throw new Error("PLAN_NOT_FOUND");
+    if (storedPlan.status !== "READY") {
+      await this.repository.recordPlanAudit({ planId, eventType: "PLAN_AUTHORIZATION_REJECTED", traceId, payload: { reason: "FINANCIAL_PLAN_NOT_READY", status: storedPlan.status, boundary: "APPROVAL_OPTIONS" } });
+      throw new Error("FINANCIAL_PLAN_NOT_READY");
+    }
     const issuedAt = this.now();
     requireActiveFinancialPlan(storedPlan.plan, issuedAt);
-    const storedGoal = await this.repository.getConfirmedGoal(storedPlan.plan.goalContractId);
-    if (!storedGoal) throw new Error("CONFIRMED_GOAL_NOT_FOUND");
-    if (storedGoal.contract.version !== storedPlan.plan.goalContractVersion || hashGoalContract(storedGoal.contract) !== storedGoal.contract.contractHash || hashFinancialPlan(storedPlan.plan) !== storedPlan.plan.planHash) throw new Error("APPROVAL_HASH_MISMATCH");
-    const snapshot = await this.bank.getState(storedGoal.contract.userId, traceId);
+    const owner = await confirmedPlanOwner(this.repository, storedPlan);
+    if (owner.subject.version !== storedPlan.plan.goalContractVersion || hashFinancialPlan(storedPlan.plan) !== storedPlan.plan.planHash) throw new Error("APPROVAL_HASH_MISMATCH");
+    const snapshot = await this.bank.getState(owner.subject.userId, traceId);
     await this.repository.saveSnapshot(snapshot, traceId);
     if (snapshot.stateVersion !== storedPlan.plan.bankStateVersion) throw new Error("APPROVAL_STATE_CHANGED");
-    const credentials = await this.repository.listActiveWebAuthnCredentials(storedGoal.contract.userId);
+    const credentials = await this.repository.listActiveWebAuthnCredentials(owner.subject.userId);
     if (credentials.length === 0) throw new Error("PASSKEY_CREDENTIAL_NOT_FOUND");
     const approvalExpiresAt = new Date(issuedAt.getTime() + APPROVAL_TTL_MS);
-    const { payload, payloadHash } = buildApprovalPayload({ goal: storedGoal.contract, plan: storedPlan.plan, bankStateVersion: snapshot.stateVersion, approvalExpiresAt });
-    const challengeBytes = randomChallenge();
+    const { payload, payloadHash } = buildApprovalPayload({ subject: owner.subject, plan: storedPlan.plan, bankStateVersion: snapshot.stateVersion, approvalExpiresAt });
+    const challengeNonce = newApprovalChallengeNonce();
+    const challengeCommitment = committedApprovalChallenge(payloadHash, challengeNonce);
     const options = await generateAuthenticationOptions({
       rpID: config.rpId,
-      challenge: challengeBytes,
+      challenge: new Uint8Array(Buffer.from(challengeCommitment, "base64url")),
       timeout: CHALLENGE_TTL_MS,
       userVerification: "required",
       allowCredentials: credentials.map((credential) => ({ id: credential.credentialId, transports: credential.transports })),
     });
-    const stored = await this.repository.createWebAuthnChallenge({
-      id: randomUUID(), userId: storedGoal.contract.userId, purpose: "APPROVAL", challenge: options.challenge,
-      expectedRpId: config.rpId, expectedOrigin: config.origin, financialPlanId: storedPlan.plan.id,
-      approvalPayload: payload, approvalPayloadHash: payloadHash,
-      expiresAt: new Date(issuedAt.getTime() + CHALLENGE_TTL_MS),
-    });
+    let stored;
+    try {
+      stored = await this.repository.createWebAuthnChallenge({
+        id: randomUUID(), userId: owner.subject.userId, purpose: "APPROVAL", challenge: options.challenge,
+        challengeNonce,
+        expectedRpId: config.rpId, expectedOrigin: config.origin, financialPlanId: storedPlan.plan.id,
+        approvalPayload: payload, approvalPayloadHash: payloadHash,
+        expiresAt: new Date(issuedAt.getTime() + CHALLENGE_TTL_MS),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "FINANCIAL_PLAN_NOT_READY") {
+        await this.repository.recordPlanAudit({ planId, eventType: "PLAN_AUTHORIZATION_REJECTED", traceId, payload: { reason: error.message, boundary: "APPROVAL_CHALLENGE_TRANSACTION" } });
+      }
+      throw error;
+    }
     return { challengeId: stored.id, approvalExpiresAt: approvalExpiresAt.toISOString(), approvalPayloadHash: payloadHash, options };
   }
 
   async verifyApproval(planId: string, challengeId: string, response: AuthenticationResponseJSON, traceId: string) {
-    // WebAuthn authenticates the server challenge; the persisted challenge is separately bound to the exact approval-payload hash.
     const config = webAuthnConfig();
     const challenge = await this.repository.getWebAuthnChallenge(challengeId);
     if (!challenge || challenge.purpose !== "APPROVAL" || challenge.status !== "ISSUED" || challenge.revokedAt) throw new Error("WEBAUTHN_APPROVAL_CHALLENGE_INVALID");
@@ -183,25 +198,29 @@ export class WebAuthnService {
       throw new Error("WEBAUTHN_APPROVAL_CHALLENGE_EXPIRED");
     }
     if (challenge.financialPlanId !== planId) throw new Error("WEBAUTHN_APPROVAL_PLAN_MISMATCH");
-    if (challenge.expectedRpId !== config.rpId || challenge.expectedOrigin !== config.origin || !challenge.approvalPayload || !challenge.approvalPayloadHash) throw new Error("WEBAUTHN_APPROVAL_CHALLENGE_INVALID");
+    if (challenge.expectedRpId !== config.rpId || challenge.expectedOrigin !== config.origin || !challenge.approvalPayload || !challenge.approvalPayloadHash || !challenge.challengeNonce) throw new Error("WEBAUTHN_APPROVAL_CHALLENGE_INVALID");
 
     const storedPlan = await this.repository.getPlan(planId);
     if (!storedPlan) throw new Error("PLAN_NOT_FOUND");
+    if (storedPlan.status !== "READY") {
+      await this.repository.revokeWebAuthnChallenge(challenge.id, now);
+      await this.repository.recordPlanAudit({ planId, eventType: "PLAN_AUTHORIZATION_REJECTED", traceId, payload: { reason: "FINANCIAL_PLAN_NOT_READY", status: storedPlan.status, boundary: "APPROVAL_VERIFICATION" } });
+      throw new Error("FINANCIAL_PLAN_NOT_READY");
+    }
     if (financialPlanExpired(storedPlan.plan, now)) {
       await this.repository.revokeWebAuthnChallenge(challenge.id, now);
       throw new Error("FINANCIAL_PLAN_EXPIRED");
     }
-    const storedGoal = await this.repository.getConfirmedGoal(storedPlan.plan.goalContractId);
-    if (!storedGoal) throw new Error("CONFIRMED_GOAL_NOT_FOUND");
-    const goal = GoalContractV1.parse(storedGoal.contract);
-    if (goal.status !== "CONFIRMED" || goal.confirmedAt === undefined || hashGoalContract(goal) !== goal.contractHash) throw new Error("APPROVAL_GOAL_BINDING_INVALID");
+    const owner = await confirmedPlanOwner(this.repository, storedPlan);
+    const goal = owner.subject;
     if (hashFinancialPlan(storedPlan.plan) !== storedPlan.plan.planHash || storedPlan.plan.goalContractId !== goal.id || storedPlan.plan.goalContractVersion !== goal.version) throw new Error("APPROVAL_PLAN_BINDING_INVALID");
 
     let storedPayload;
     try { storedPayload = ApprovalPayloadV1.parse(challenge.approvalPayload); } catch { throw new Error("APPROVAL_PAYLOAD_INVALID"); }
     if (Date.parse(storedPayload.approvalExpiresAt) <= now.getTime()) throw new Error("APPROVAL_PAYLOAD_EXPIRED");
-    const rebuilt = buildApprovalPayload({ goal, plan: storedPlan.plan, bankStateVersion: storedPlan.plan.bankStateVersion, approvalExpiresAt: new Date(storedPayload.approvalExpiresAt) });
+    const rebuilt = buildApprovalPayload({ subject: goal, plan: storedPlan.plan, bankStateVersion: storedPlan.plan.bankStateVersion, approvalExpiresAt: new Date(storedPayload.approvalExpiresAt) });
     if (canonicalJson(rebuilt.payload) !== canonicalJson(storedPayload) || rebuilt.payloadHash !== challenge.approvalPayloadHash) throw new Error("APPROVAL_PAYLOAD_BINDING_MISMATCH");
+    if (committedApprovalChallenge(rebuilt.payloadHash, challenge.challengeNonce) !== challenge.challenge) throw new Error("APPROVAL_CHALLENGE_BINDING_MISMATCH");
 
     const credential = await this.repository.getWebAuthnCredential(response.id);
     if (!credential) throw new Error("PASSKEY_CREDENTIAL_NOT_FOUND");
@@ -236,10 +255,31 @@ export class WebAuthnService {
       approvalPayloadHash: challenge.approvalPayloadHash, authenticatorCounterBefore: credential.signCount,
       authenticatorCounterAfter: info.newCounter, userVerified: true, rpId: info.rpID, origin: info.origin, verifiedAt: now.toISOString(),
     };
-    const authorized = await this.repository.authorizeVerifiedPasskey({
-      goalRowId: storedGoal.rowId, approval, executionId, evidence, challengeId: challenge.id,
-      credentialId: credential.id, expectedCounter: credential.signCount, newCounter: info.newCounter, now, traceId,
-    });
+    let authorized;
+    try {
+      authorized = await this.repository.authorizeVerifiedPasskey({
+        goalRowId: owner.rowId, ownerType: owner.ownerType, approval, executionId, evidence, challengeId: challenge.id,
+        credentialId: credential.id, expectedCounter: credential.signCount, newCounter: info.newCounter, now, traceId,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "FINANCIAL_PLAN_NOT_READY") {
+        await this.repository.recordPlanAudit({ planId, eventType: "PLAN_AUTHORIZATION_REJECTED", traceId, payload: { reason: error.message, boundary: "AUTHORIZATION_TRANSACTION" } });
+      }
+      throw error;
+    }
     return { approval, evidence: authorized.evidence, execution: authorized.execution };
   }
+}
+
+async function confirmedPlanOwner(repository: ParlanceRepository & WebAuthnRepository, plan: StoredPlan): Promise<{ rowId: string; ownerType: "GOAL" | "BUNDLE"; subject: ApprovalSubject }> {
+  if (plan.ownerType === "BUNDLE") {
+    const method = (repository as ParlanceRepository & WebAuthnRepository & Partial<BundlePlanRepository>).getConfirmedGoalBundle;
+    if (!method) throw new Error("CONFIRMED_GOAL_BUNDLE_NOT_FOUND");
+    const stored = await method.call(repository, plan.plan.goalContractId);
+    if (!stored || hashGoalBundleContract(stored.contract) !== stored.contract.contractHash) throw new Error("APPROVAL_GOAL_BINDING_INVALID");
+    return { rowId: stored.rowId, ownerType: "BUNDLE", subject: { userId: stored.userId, id: stored.contract.bundleId, version: stored.contract.bundleVersion, contractHash: stored.contract.contractHash } };
+  }
+  const stored = await repository.getConfirmedGoal(plan.plan.goalContractId);
+  if (!stored || stored.contract.status !== "CONFIRMED" || stored.contract.confirmedAt === undefined || hashGoalContract(stored.contract) !== stored.contract.contractHash) throw new Error("APPROVAL_GOAL_BINDING_INVALID");
+  return { rowId: stored.rowId, ownerType: "GOAL", subject: { userId: stored.contract.userId, id: stored.contract.id, version: stored.contract.version, contractHash: stored.contract.contractHash } };
 }

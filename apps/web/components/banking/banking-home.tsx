@@ -16,7 +16,7 @@ export function BankingHome() {
       </section>
 
       <section className="parlance-feature" aria-labelledby="ask-parlance-heading">
-        <div className="feature-orbit" aria-hidden="true"><i /><i /></div><span className="parlance-feature-icon"><Icon name="spark" /></span><p>Parlance</p><h2 id="ask-parlance-heading">Do more with one request.</h2><blockquote>“Send NTU US$5,000 and keep S$1,000 available.”</blockquote><Link className="button feature-button" href="/chat">Ask Parlance <Icon name="arrow" /></Link>
+        <div className="feature-orbit" aria-hidden="true"><i /><i /></div><span className="parlance-feature-icon"><Icon name="transfer" /></span><p>Pay &amp; Transfer</p><h2 id="ask-parlance-heading">Tell us what you need to do.</h2><blockquote>“Send NTU USD 7,000 and use SGD for the shortfall.”</blockquote><Link className="button feature-button" href="/chat">Make a payment <Icon name="arrow" /></Link>
       </section>
     </div>
 

@@ -6,6 +6,9 @@ const executionReasonMessages: Readonly<Record<string, string>> = {
   FX_QUOTE_INVALID: "The exchange quote is no longer valid",
   FX_UNAVAILABLE: "Currency conversion is currently unavailable",
   TRANSFER_RAIL_UNAVAILABLE: "This transfer route is currently unavailable",
+  BANK_RESPONSE_OUTCOME_UNKNOWN: "We’re confirming this transaction’s status. Please don’t try again yet",
+  BANK_LOOKUP_UNAVAILABLE: "We’re confirming this transaction’s status. Please don’t try again yet",
+  RECONCILIATION_CONFLICT: "We could not safely confirm the bank result. No further action will continue",
 };
 
 export function customerExecutionMessage(reasonCode?: string, state: CustomerExecutionState = "POLICY_BLOCKED"): string {

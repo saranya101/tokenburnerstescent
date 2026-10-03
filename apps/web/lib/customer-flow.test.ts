@@ -1,4 +1,4 @@
-import { ApprovalV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1 } from "@parlance/contracts";
+import { ApprovalV1, ExecutionResultV1, FinancialPlanV1, GoalBundleContractV1, GoalContractV1 } from "@parlance/contracts";
 import { beforeEach, expect, it, vi } from "vitest";
 import { CustomerFlowController, type CustomerFlowState } from "./customer-flow";
 import type { AuthenticationCredentialJSON, GoalCandidate, ParlanceApi, RegistrationCredentialJSON } from "./parlance-api";
@@ -9,6 +9,14 @@ const candidate: GoalCandidate = {
   constraints: [], preferences: [], entityBindings: [{ schemaVersion: "1", reference: "NTU", entityType: "BENEFICIARY", entityId: "beneficiary-ntu", resolutionMethod: "EXACT", confirmed: false }],
 };
 const goal = GoalContractV1.parse({ ...candidate, id: "goal-1", userId: "user-1", version: 1, sourceIntentDraftId: "candidate-1", status: "CONFIRMED", contractHash: "goal-hash-0000001", createdAt: "2026-09-28T00:00:00.000Z", confirmedAt: "2026-09-28T00:01:00.000Z", entityBindings: candidate.entityBindings.map((item) => ({ ...item, confirmed: true })) });
+const bundle = GoalBundleContractV1.parse({
+  schemaVersion: "1", bundleId: "bundle-1", bundleVersion: 1, contractHash: "b".repeat(64),
+  items: [
+    { itemId: "item-1", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "30000" }, recipientId: "beneficiary-john" }, constraints: [], preferences: [], bindings: [{ schemaVersion: "1", reference: "John", entityType: "BENEFICIARY", entityId: "beneficiary-john", resolutionMethod: "USER_CONFIRMED", confirmed: true }] },
+    { itemId: "item-2", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [], bindings: [{ schemaVersion: "1", reference: "Apple", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "EXACT", confirmed: true }] },
+  ], globalConstraints: [], explicitDependencies: [],
+});
+const bundleCandidate = { schemaVersion: bundle.schemaVersion, items: bundle.items.map((item) => ({ ...item, bindings: item.bindings.map((binding) => ({ ...binding, confirmed: false })) })), globalConstraints: bundle.globalConstraints, explicitDependencies: bundle.explicitDependencies };
 const plan = FinancialPlanV1.parse({
   schemaVersion: "1", id: "plan-1", goalContractId: goal.id, goalContractVersion: 1, bankStateVersion: 7,
   compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test", planHash: "plan-hash-0000001",
@@ -18,6 +26,7 @@ const plan = FinancialPlanV1.parse({
   ],
   validity: { requiredQuoteIds: ["quote-1"] }, projectedOutcome: { goalSatisfied: true, deliveredMoney: { currency: "USD", minorUnits: "500000" }, acquiredAssets: [], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] },
 });
+const bundlePlan = FinancialPlanV1.parse({ ...plan, id: "bundle-plan", goalContractId: bundle.bundleId, planHash: "bundle-plan-hash-1" });
 const refreshedPlan = FinancialPlanV1.parse({ ...plan, id: "plan-2", planHash: "plan-hash-0000002" });
 const pending = ExecutionResultV1.parse({ schemaVersion: "1", executionId: "execution-1", planId: plan.id, status: "PENDING", startedStateVersion: 7, steps: [], goalOutcome: { achieved: false, summary: "Waiting for execution." } });
 const completed = ExecutionResultV1.parse({ schemaVersion: "1", executionId: "execution-1", planId: plan.id, status: "COMPLETED", startedStateVersion: 7, finalStateVersion: 9, steps: plan.steps.map((step) => ({ stepId: step.id, status: "SETTLED", idempotencyKey: `key-${step.id}`, bankReference: `bank-${step.id}` })), goalOutcome: { achieved: true, summary: "Requested funds were delivered.", deliveredMoney: { currency: "USD", minorUnits: "500000" } } });
@@ -51,6 +60,14 @@ it("exposes and executes the hook-facing confirmMeaning method on the real contr
   await values.flow.confirmMeaning();
   expect(values.api.confirmGoal).toHaveBeenCalledOnce();
   expect(values.api.confirmGoal).toHaveBeenCalledWith("candidate-1");
+});
+
+it("submits edited voice text through the exact existing message call without granting later authority", async () => {
+  const values = setup(); const voice = { inputMode: "VOICE" as const, voice: { rawTranscript: "Send John USD 300", provider: "browser-web-speech", transcribedAt: "2026-10-03T10:00:00.000Z" } };
+  await values.flow.submitMessage("Send John USD 3000", voice);
+  expect(values.api.sendMessage).toHaveBeenCalledWith("Send John USD 3000", voice);
+  expect(values.flow.state.phase).toBe("GOAL_REVIEW");
+  expect(values.api.confirmGoal).not.toHaveBeenCalled(); expect(values.api.compileGoal).not.toHaveBeenCalled(); expect(values.api.approvalOptions).not.toHaveBeenCalled(); expect(values.api.runExecution).not.toHaveBeenCalled();
 });
 
 it("runs the real multi-step customer sequence through completion", async () => {
@@ -90,6 +107,26 @@ it("does not confirm, compile, authorize, or execute when candidate data arrives
   expect(values.api.approvalOptions).not.toHaveBeenCalled(); expect(values.api.verifyApproval).not.toHaveBeenCalled(); expect(values.api.runExecution).not.toHaveBeenCalled();
 });
 
+it("stops safely when semantic validation rejects the candidate", async () => {
+  const values = setup({
+    sendMessage: vi.fn().mockResolvedValue({
+      status: "SEMANTIC_VALIDATION_FAILED",
+      message: "We couldn't safely verify that we understood your request. Please clarify or rephrase it.",
+    }),
+  });
+  await values.flow.submitMessage("Send USD 7,000 to NTU");
+  expect(values.flow.state).toEqual({
+    phase: "SEMANTIC_VALIDATION_FAILED",
+    requestText: "Send USD 7,000 to NTU",
+    message: "We couldn't safely verify that we understood your request. Please clarify or rephrase it.",
+  });
+  expect(values.api.confirmGoal).not.toHaveBeenCalled();
+  expect(values.api.compileGoal).not.toHaveBeenCalled();
+  expect(values.api.approvalOptions).not.toHaveBeenCalled();
+  expect(values.api.verifyApproval).not.toHaveBeenCalled();
+  expect(values.api.runExecution).not.toHaveBeenCalled();
+});
+
 it("confirms exactly once and starts compilation only after explicit confirmation succeeds", async () => {
   let resolveConfirmation!: (value: GoalContractV1) => void;
   const confirmation = new Promise<GoalContractV1>((resolve) => { resolveConfirmation = resolve; });
@@ -99,6 +136,21 @@ it("confirms exactly once and starts compilation only after explicit confirmatio
   expect(values.flow.state.phase).toBe("CONFIRMING_GOAL"); expect(values.api.confirmGoal).toHaveBeenCalledOnce(); expect(values.api.compileGoal).not.toHaveBeenCalled();
   resolveConfirmation(goal); await confirming;
   expect(values.api.confirmGoal).toHaveBeenCalledWith("candidate-1"); expect(values.api.compileGoal).toHaveBeenCalledOnce(); expect(values.api.compileGoal).toHaveBeenCalledWith(goal.id); expect(values.flow.state.phase).toBe("PLAN_REVIEW");
+});
+
+it("uses one explicit meaning confirmation and one compilation for a combined request", async () => {
+  const values = setup({
+    sendMessage: vi.fn().mockResolvedValue({ status: "AWAITING_BUNDLE_CONFIRMATION", candidateId: "bundle-candidate", goalBundleCandidate: bundleCandidate }),
+    confirmGoalBundle: vi.fn().mockResolvedValue(bundle),
+    compileGoalBundle: vi.fn().mockResolvedValue({ financialPlan: bundlePlan, satisfactionProof: { schemaVersion: "1", bundleId: bundle.bundleId, bundleContractHash: bundle.contractHash, itemCoverage: [{ itemId: "item-1", satisfiedByStepIds: ["transfer-1"] }, { itemId: "item-2", satisfiedByStepIds: ["fx-1"] }], allItemsSatisfied: true, allHardConstraintsSatisfied: true, allExplicitDependenciesSatisfied: true, allIrreversibleStepsJustified: true } }),
+  });
+  await values.flow.submitMessage("Send John USD 300 and buy one Apple share.");
+  expect(values.flow.state).toMatchObject({ phase: "BUNDLE_REVIEW", candidateId: "bundle-candidate" });
+  expect(values.api.confirmGoalBundle).not.toHaveBeenCalled(); expect(values.api.compileGoalBundle).not.toHaveBeenCalled();
+  await values.flow.confirmMeaning();
+  expect(values.api.confirmGoalBundle).toHaveBeenCalledOnce(); expect(values.api.confirmGoalBundle).toHaveBeenCalledWith("bundle-candidate");
+  expect(values.api.compileGoalBundle).toHaveBeenCalledOnce(); expect(values.api.compileGoalBundle).toHaveBeenCalledWith(bundle.bundleId);
+  expect(values.api.confirmGoal).not.toHaveBeenCalled(); expect(values.flow.state).toMatchObject({ phase: "PLAN_REVIEW", bundle: { bundleId: bundle.bundleId }, plan: { id: bundlePlan.id } });
 });
 
 it("does not confirm after repeated state reads that model rerenders", async () => {

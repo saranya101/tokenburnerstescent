@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BankStateSnapshotV1, GoalContractV1, type IntentDraftV1 } from "@parlance/contracts";
-import type { EntityGrounder, EntityGroundingInput, EntityGroundingResult, IntentInterpreter } from "@parlance/intent-engine";
+import { GoalContractCandidateV1, type EntityGrounder, type EntityGroundingInput, type EntityGroundingResult, type GoalContractBuilder, type IntentInterpreter } from "@parlance/intent-engine";
 import { describe, expect, it, vi } from "vitest";
 import { hashGoalContract } from "../security/canonical-hash.js";
 import type { GoalConfirmationMetadata, GoalConfirmationRepository, ParlanceRepository, StoredClarificationRequest, StoredGoal, StoredGoalCandidate } from "./ports.js";
@@ -20,22 +20,26 @@ class CandidateRepository implements GoalConfirmationRepository {
   goal?: StoredGoal;
   confirmations = 0;
   clarificationAdvances = 0;
+  validationAudits: Array<{ decision: "PASS" | "FAIL"; mismatches: readonly unknown[] }> = [];
   async saveClarification(input: Parameters<GoalConfirmationRepository["saveClarification"]>[0]) { this.clarification = input; return input; }
   async getClarification(id: string) { return this.clarification?.clarificationId === id ? this.clarification : null; }
   async advanceClarification(input: Parameters<GoalConfirmationRepository["advanceClarification"]>[0]) {
     this.clarificationAdvances += 1;
     if (!this.clarification || this.clarification.clarificationId !== input.clarificationId) throw new Error("CLARIFICATION_NOT_FOUND");
     if (input.candidate) {
-      this.candidate = { candidateId: this.clarification.clarificationId, goalContractId: this.clarification.goalContractId, userId: this.clarification.userId, version: this.clarification.version, createdAt: this.clarification.createdAt, candidate: input.candidate };
-      this.clarification = undefined; return { status: "AWAITING_GOAL_CONFIRMATION" as const, candidate: this.candidate };
+      if (input.semanticValidation) this.validationAudits.push(input.semanticValidation);
+      this.candidate = { candidateId: this.clarification.clarificationId, goalContractId: this.clarification.goalContractId, userId: this.clarification.userId, version: this.clarification.version, createdAt: this.clarification.createdAt, candidate: input.candidate, ...(this.clarification.inputProvenance ? { inputProvenance: this.clarification.inputProvenance } : {}) };
+      this.clarification = undefined; return { status: "AWAITING_GOAL_CONFIRMATION" as const, candidate: this.candidate! };
     }
     this.clarification = { ...this.clarification, groundingResults: input.groundingResults, clarifications: input.clarifications };
     return { status: "NEEDS_CLARIFICATION" as const, request: this.clarification };
   }
   async saveGoalCandidate(input: Parameters<GoalConfirmationRepository["saveGoalCandidate"]>[0]) {
-    this.candidate = { candidateId: input.candidateId, goalContractId: input.goalContractId, userId: input.userId, version: input.version, createdAt: input.createdAt, candidate: input.candidate };
+    this.validationAudits.push(input.semanticValidation);
+    this.candidate = { candidateId: input.candidateId, goalContractId: input.goalContractId, userId: input.userId, version: input.version, createdAt: input.createdAt, candidate: input.candidate, inputProvenance: input.inputProvenance };
     return this.candidate;
   }
+  async rejectSemanticValidation(input: Parameters<GoalConfirmationRepository["rejectSemanticValidation"]>[0]) { this.validationAudits.push(input.validation); this.clarification = undefined; }
   async getGoalCandidate(id: string) { return this.candidate?.candidateId === id ? this.candidate : null; }
   async confirmGoal(input: { candidateId: string; contract: GoalContractV1; confirmation: GoalConfirmationMetadata }) {
     if (this.goal) return this.goal;
@@ -85,6 +89,7 @@ describe("Person B to Person A confirmation boundary", () => {
     const repository = new CandidateRepository(); const messages = service(repository);
     const awaiting = await messages.receive({ userId: "user-1", text: transferDraft.originalText }, "trace-message");
     expect(awaiting).toEqual(expect.objectContaining({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1" }));
+    expect(repository.validationAudits).toEqual([expect.objectContaining({ decision: "PASS", mismatches: [] })]);
     expect(repository.goal).toBeUndefined();
     const confirmed = await messages.confirm("candidate-1", "trace-confirm");
     expect(confirmed.goalContract).toEqual(GoalContractV1.parse(confirmed.goalContract));
@@ -100,8 +105,26 @@ describe("Person B to Person A confirmation boundary", () => {
     expect(compile).toHaveBeenCalledWith(confirmed.goalContract, snapshot, "trace-compile");
   });
 
+  it("fails closed before candidate persistence when independent validation detects an amount mismatch", async () => {
+    const repository = new CandidateRepository(); const compile = vi.fn(); const approvalOptions = vi.fn(); const execute = vi.fn();
+    const mismatchedBuilder: GoalContractBuilder = { build: () => GoalContractCandidateV1.parse({
+      schemaVersion: "1", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "5000" }, recipientId: "ben-ntu" }, constraints: [], preferences: [],
+      entityBindings: [{ schemaVersion: "1", reference: "NTU", entityType: "BENEFICIARY", entityId: "ben-ntu", resolutionMethod: "EXACT", confirmed: false }],
+    }) };
+    const messages = new MessageOrchestrationService(repository, new FixedInterpreter(transferDraft), () => exactGrounder(), undefined, mismatchedBuilder, () => new Date("2026-09-25T10:00:00Z"), (() => { const values = ["rejected-1", "goal-never-used"]; return () => values.shift()!; })());
+    const result = await messages.receive({ userId: "user-1", text: transferDraft.originalText }, "trace-validation-fail");
+    expect(result).toEqual({ status: "SEMANTIC_VALIDATION_FAILED", message: "We couldn't safely verify that we understood your request. Please clarify or rephrase it." });
+    expect(result).not.toHaveProperty("candidateId"); expect(repository.candidate).toBeUndefined(); expect(repository.goal).toBeUndefined(); expect(repository.confirmations).toBe(0);
+    expect(repository.validationAudits).toEqual([expect.objectContaining({ decision: "FAIL", mismatches: expect.arrayContaining([expect.objectContaining({ code: "MONEY_MISMATCH", field: "goal.amount" })]) })]);
+    expect(compile).not.toHaveBeenCalled(); expect(approvalOptions).not.toHaveBeenCalled(); expect(execute).not.toHaveBeenCalled();
+  });
+
   it("returns clarification for two matching Johns and creates no candidate or compiler call", async () => {
-    const draft = { ...transferDraft, originalText: "send $500 to John", goal: { ...transferDraft.goal, recipientReference: "John" } } as IntentDraftV1;
+    const draft = {
+      ...transferDraft,
+      originalText: "Send John USD 350.",
+      goal: { ...transferDraft.goal, amount: { currency: "USD", minorUnits: "35000" }, recipientReference: "John" },
+    } as IntentDraftV1;
     const repository = new CandidateRepository(); const compile = vi.fn();
     const messages = new MessageOrchestrationService(repository, new FixedInterpreter(draft), () => new FixedGrounder((input) => ({
       status: "AMBIGUOUS", reference: input.reference, expectedEntityType: "BENEFICIARY", candidates: [
@@ -113,12 +136,28 @@ describe("Person B to Person A confirmation boundary", () => {
     expect(result).toMatchObject({ status: "NEEDS_CLARIFICATION", clarificationId: expect.any(String) }); expect(repository.candidate).toBeUndefined(); expect(repository.goal).toBeUndefined(); expect(compile).not.toHaveBeenCalled();
     if (result.status !== "NEEDS_CLARIFICATION") throw new Error("Expected clarification");
     const continued = await messages.answerClarification(result.clarificationId, { selectedCandidateId: "ben-john-2" }, "trace-answer");
-    expect(continued).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { recipientId: "ben-john-2", amount: { currency: "USD", minorUnits: "50000" } } } });
+    expect(continued).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { recipientId: "ben-john-2", amount: { currency: "USD", minorUnits: "35000" } } } });
     expect(repository.goal).toBeUndefined(); expect(repository.confirmations).toBe(0);
   });
 
+  it("keeps raw and edited voice text as validator evidence while interpreting submitted text", async () => {
+    ids.splice(0, ids.length, "candidate-voice", "goal-voice");
+    const repository = new CandidateRepository();
+    const messages = service(repository);
+    const rawTranscript = "send 500 dollars to NTU"; const submittedText = transferDraft.originalText;
+    await messages.receive({ userId: "user-1", text: submittedText, inputMode: "VOICE", voice: { rawTranscript, provider: "browser-web-speech", transcribedAt: "2026-10-03T10:00:00.000Z" } }, "trace-voice");
+    expect(repository.candidate?.inputProvenance).toEqual({ inputMode: "VOICE", rawTranscript, submittedText, provider: "browser-web-speech", transcribedAt: "2026-10-03T10:00:00.000Z", edited: true });
+    expect(repository.validationAudits[0]).toMatchObject({ decision: "PASS", input: { inputMode: "VOICE", rawTranscript, submittedText, edited: true }, clarificationAnswers: [] });
+    expect(repository.goal).toBeUndefined();
+  });
+
   it("continues a persisted account clarification without reinterpreting the original amount or recipient", async () => {
-    const draft: IntentDraftV1 = { ...transferDraft, originalText: "Send NTU USD 7000 using my SGD account", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "700000" }, recipientReference: "NTU" }, preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }] };
+    const draft: IntentDraftV1 = {
+      ...transferDraft,
+      originalText: "I need to send NTU 7,000 USD. I only have 5,000 in my USD account, so use my SGD account for the rest.",
+      goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "700000" }, recipientReference: "NTU" },
+      preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
+    };
     const interpreter = new FixedInterpreter(draft); const interpret = vi.spyOn(interpreter, "interpretUserRequest"); const repository = new CandidateRepository();
     const grounder = new FixedGrounder((input) => input.expectedEntityType === "BENEFICIARY"
       ? { status: "RESOLVED", reference: input.reference, entityType: "BENEFICIARY", entityId: "ben-ntu", resolutionMethod: "ALIAS" }
@@ -139,7 +178,11 @@ describe("Person B to Person A confirmation boundary", () => {
   });
 
   it("grounds a typed clarification server-side and makes duplicate answers side-effect free", async () => {
-    const draft: IntentDraftV1 = { ...transferDraft, preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }] };
+    const draft: IntentDraftV1 = {
+      ...transferDraft,
+      originalText: "send $500 to NTU using my SGD account",
+      preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
+    };
     const repository = new CandidateRepository();
     const grounder = new FixedGrounder((input) => input.expectedEntityType === "BENEFICIARY"
       ? { status: "RESOLVED", reference: input.reference, entityType: "BENEFICIARY", entityId: "ben-ntu", resolutionMethod: "ALIAS" }

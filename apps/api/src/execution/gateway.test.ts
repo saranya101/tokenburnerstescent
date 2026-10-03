@@ -19,22 +19,22 @@ const evidence = (goal: GoalContractV1, plan: FinancialPlanV1, approval: Approva
 });
 
 it("rejects stale state without revalidation", () => { const goal = GoalContractV1.parse(fixture("goal-contract.json")); const plan = activePlan(); const approval = ApprovalV1.parse({ ...ApprovalV1.parse(fixture("approval.json")), expiresAt: new Date(Date.now() + 60_000).toISOString() }); expect(() => verifyExecutionAuthorization({
-  goal, plan, approval, approvalEvidence: evidence(goal, plan, approval), expectedStateVersion: 7, currentStateVersion: 8, revalidationSucceeded: false,
+  goal, plan, planStatus: "READY", approval, approvalEvidence: evidence(goal, plan, approval), expectedStateVersion: 7, currentStateVersion: 8, revalidationSucceeded: false,
   executionState: "AUTHORIZED", idempotencyKey: "k", proposedStep: plan.steps[0]!,
 })).toThrow(/stale/); });
 
 it("allows static approval verification without treating a state mismatch as revalidated", () => {
   const goal = GoalContractV1.parse(fixture("goal-contract.json")); const plan = activePlan(); const approval = { ...ApprovalV1.parse(fixture("approval.json")), expiresAt: new Date(Date.now() + 60_000).toISOString() };
   const approvalEvidence = evidence(goal, plan, approval);
-  expect(() => verifyExecutionApproval({ goal, plan, approval, approvalEvidence, executionState: "AUTHORIZED" })).not.toThrow();
-  expect(() => verifyExecutionAuthorization({ goal, plan, approval, approvalEvidence, executionState: "AUTHORIZED", expectedStateVersion: 7, currentStateVersion: 8, revalidationSucceeded: false, idempotencyKey: "k", proposedStep: plan.steps[0]! })).toThrow("State version is stale");
+  expect(() => verifyExecutionApproval({ goal, plan, planStatus: "READY", approval, approvalEvidence, executionState: "AUTHORIZED" })).not.toThrow();
+  expect(() => verifyExecutionAuthorization({ goal, plan, planStatus: "READY", approval, approvalEvidence, executionState: "AUTHORIZED", expectedStateVersion: 7, currentStateVersion: 8, revalidationSucceeded: false, idempotencyKey: "k", proposedStep: plan.steps[0]! })).toThrow("State version is stale");
 });
 
 it("rejects an executable action that is not exactly in the approved plan", () => {
   const plan = activePlan();
   const goal = GoalContractV1.parse(fixture("goal-contract.json")); const approval = ApprovalV1.parse({ ...ApprovalV1.parse(fixture("approval.json")), expiresAt: new Date(Date.now() + 60_000).toISOString() });
   expect(() => verifyExecutionAuthorization({
-    goal, plan, approval, approvalEvidence: evidence(goal, plan, approval), expectedStateVersion: plan.bankStateVersion, currentStateVersion: plan.bankStateVersion, revalidationSucceeded: false,
+    goal, plan, planStatus: "READY", approval, approvalEvidence: evidence(goal, plan, approval), expectedStateVersion: plan.bankStateVersion, currentStateVersion: plan.bankStateVersion, revalidationSucceeded: false,
     executionState: "AUTHORIZED", idempotencyKey: "k", proposedStep: { ...plan.steps[0]!, id: "injected-step" },
   })).toThrow("UNAPPROVED_EXECUTABLE_ACTION");
 });
@@ -45,16 +45,24 @@ it.each([
 ])("blocks execution with zero bank writes when cryptographic evidence is %s", async (_label, mutation) => {
   const goal = GoalContractV1.parse(fixture("goal-contract.json")); const plan = activePlan();
   const approval = ApprovalV1.parse({ ...ApprovalV1.parse(fixture("approval.json")), expiresAt: new Date(Date.now() + 60_000).toISOString() }); let writes = 0;
-  const gateway = new ExecutionGateway({ getState: async () => { throw new Error("unused"); }, execute: async () => { writes += 1; return { accepted: true, bankReference: "unexpected", stateVersion: 8 }; } });
+  const gateway = new ExecutionGateway({ getState: async () => { throw new Error("unused"); }, execute: async () => { writes += 1; return { accepted: true, bankReference: "unexpected", stateVersion: 8 }; }, lookupByIdempotencyKey: async () => ({ status: "NOT_FOUND", idempotencyKey: "unused" }) });
   const approvalEvidence = mutation === undefined ? undefined : evidence(goal, plan, approval, mutation);
-  await expect(gateway.execute({ goal, plan, approval, ...(approvalEvidence ? { approvalEvidence } : {}), executionState: "AUTHORIZED", expectedStateVersion: plan.bankStateVersion, currentStateVersion: plan.bankStateVersion, revalidationSucceeded: false, idempotencyKey: "k", proposedStep: plan.steps[0]! }, "trace")).rejects.toThrow(/CRYPTOGRAPHIC_APPROVAL_EVIDENCE/);
+  await expect(gateway.execute({ goal, plan, planStatus: "READY", approval, ...(approvalEvidence ? { approvalEvidence } : {}), executionState: "AUTHORIZED", expectedStateVersion: plan.bankStateVersion, currentStateVersion: plan.bankStateVersion, revalidationSucceeded: false, idempotencyKey: "k", proposedStep: plan.steps[0]! }, "trace")).rejects.toThrow(/CRYPTOGRAPHIC_APPROVAL_EVIDENCE/);
   expect(writes).toBe(0);
 });
 
 it("blocks an expired plan at the final bank gateway with zero writes", async () => {
   const goal = GoalContractV1.parse(fixture("goal-contract.json")); const plan = FinancialPlanV1.parse(fixture("financial-plan.json"));
   const approval = ApprovalV1.parse({ ...ApprovalV1.parse(fixture("approval.json")), expiresAt: new Date(Date.now() + 60_000).toISOString() }); let writes = 0;
-  const gateway = new ExecutionGateway({ getState: async () => { throw new Error("unused"); }, execute: async () => { writes += 1; return { accepted: true, bankReference: "unexpected", stateVersion: 8 }; } });
-  await expect(gateway.execute({ goal, plan, approval, approvalEvidence: evidence(goal, plan, approval), executionState: "AUTHORIZED", expectedStateVersion: 7, currentStateVersion: 7, revalidationSucceeded: false, idempotencyKey: "expired", proposedStep: plan.steps[0]! }, "trace-expired")).rejects.toThrow("FINANCIAL_PLAN_EXPIRED");
+  const gateway = new ExecutionGateway({ getState: async () => { throw new Error("unused"); }, execute: async () => { writes += 1; return { accepted: true, bankReference: "unexpected", stateVersion: 8 }; }, lookupByIdempotencyKey: async () => ({ status: "NOT_FOUND", idempotencyKey: "unused" }) });
+  await expect(gateway.execute({ goal, plan, planStatus: "READY", approval, approvalEvidence: evidence(goal, plan, approval), executionState: "AUTHORIZED", expectedStateVersion: 7, currentStateVersion: 7, revalidationSucceeded: false, idempotencyKey: "expired", proposedStep: plan.steps[0]! }, "trace-expired")).rejects.toThrow("FINANCIAL_PLAN_EXPIRED");
+  expect(writes).toBe(0);
+});
+
+it("blocks a non-ready plan at the final bank gateway with zero writes", async () => {
+  const goal = GoalContractV1.parse(fixture("goal-contract.json")); const plan = activePlan();
+  const approval = ApprovalV1.parse({ ...ApprovalV1.parse(fixture("approval.json")), expiresAt: new Date(Date.now() + 60_000).toISOString() }); let writes = 0;
+  const gateway = new ExecutionGateway({ getState: async () => { throw new Error("unused"); }, execute: async () => { writes += 1; return { accepted: true, bankReference: "unexpected", stateVersion: 8 }; }, lookupByIdempotencyKey: async () => ({ status: "NOT_FOUND", idempotencyKey: "unused" }) });
+  await expect(gateway.execute({ goal, plan, planStatus: "SUPERSEDED", approval, approvalEvidence: evidence(goal, plan, approval), executionState: "AUTHORIZED", expectedStateVersion: 7, currentStateVersion: 7, revalidationSucceeded: false, idempotencyKey: "superseded", proposedStep: plan.steps[0]! }, "trace-superseded")).rejects.toThrow("FINANCIAL_PLAN_NOT_READY");
   expect(writes).toBe(0);
 });

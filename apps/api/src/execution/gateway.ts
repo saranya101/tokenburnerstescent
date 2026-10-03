@@ -1,15 +1,17 @@
-import type { ApprovalV1, FinancialActionV1, FinancialPlanStepV1, FinancialPlanV1, GoalContractV1 } from "@parlance/contracts";
+import type { ApprovalV1, FinancialActionV1, FinancialPlanStepV1, FinancialPlanV1 } from "@parlance/contracts";
 import { canonicalJson } from "../security/canonical-hash.js";
 import { requireActiveFinancialPlan } from "../security/plan-validity.js";
 import type { BankPort, BankWriteResult } from "../orchestration/ports.js";
+import type { StoredPlanStatus } from "../orchestration/ports.js";
 import type { StoredApprovalEvidence } from "../webauthn/types.js";
 const ALLOWLIST = new Set<FinancialActionV1>(["TRANSFER", "FX_CONVERT", "MOVE_FUNDS", "PAY_BILL", "BUY_ASSET", "SELL_ASSET"]);
-export interface ExecutionApproval { goal: GoalContractV1; plan: FinancialPlanV1; approval: ApprovalV1; approvalEvidence?: StoredApprovalEvidence; approvalRevokedAt?: string; executionState: "AUTHORIZED" | "EXECUTING" }
+export interface ExecutionApproval { goal: { status: string; userId: string; id: string; version: number; contractHash: string }; plan: FinancialPlanV1; planStatus: StoredPlanStatus; approval: ApprovalV1; approvalEvidence?: StoredApprovalEvidence; approvalRevokedAt?: string; executionState: "AUTHORIZED" | "EXECUTING" }
 export interface ExecutionAuthorization extends ExecutionApproval { expectedStateVersion: number; currentStateVersion: number; revalidationSucceeded: boolean; idempotencyKey: string; proposedStep: FinancialPlanStepV1 }
 export interface BankOperation { path: "fx" | "transfer" | "payment" | "buy"; payload: unknown }
 
 export function verifyExecutionApproval(input: ExecutionApproval): void {
   if (input.goal.status !== "CONFIRMED") throw new Error("Goal is not confirmed");
+  if (input.planStatus !== "READY") throw new Error("FINANCIAL_PLAN_NOT_READY");
   requireActiveFinancialPlan(input.plan, new Date());
   if (input.approvalRevokedAt) throw new Error("Approval revoked");
   if (Date.parse(input.approval.approvedAt) > Date.now()) throw new Error("Approval is not active yet");

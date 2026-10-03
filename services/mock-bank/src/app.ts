@@ -6,7 +6,9 @@ import { logger, resolveTraceId } from "@parlance/observability";
 
 type Scenario = "FX_UNAVAILABLE" | "TRANSFER_RAIL_UNAVAILABLE" | "ASSET_UNAVAILABLE" | "BALANCE_CHANGED" | "QUOTE_EXPIRED";
 interface State { stateVersion: number; balances: Record<string, bigint>; holdings: Record<string, string>; scenarios: Set<Scenario> }
-interface StoredResponse { requestHash: string; response: { accepted: true; bankReference: string; stateVersion: number } }
+interface StoredResponse { operation: "fx" | "transfer" | "payment" | "buy"; requestHash: string; response: { accepted: true; bankReference: string; stateVersion: number } }
+export interface MockBankWriteRecord { operation: StoredResponse["operation"]; idempotencyKey: string; requestHash: string; response: StoredResponse["response"] }
+export interface MockBankOptions { afterWrite?: (record: MockBankWriteRecord) => void }
 
 const Id = z.string().min(1);
 const FxBody = z.object({ userId: Id, accountId: Id, fromAmount: MoneyV1, toCurrency: z.string().length(3), quoteId: Id }).strict();
@@ -20,9 +22,17 @@ const ACCOUNT_DEFINITIONS = [
   { id: "acc-sgd", type: "CHECKING" as const, currency: "SGD", capabilities: ["SEND_TRANSFER", "RECEIVE_TRANSFER", "CONVERT_FX", "PAY_BILL", "TRADE_ASSET"] as const },
   { id: "acc-usd", type: "CHECKING" as const, currency: "USD", capabilities: ["SEND_TRANSFER", "RECEIVE_TRANSFER", "CONVERT_FX", "TRADE_ASSET"] as const },
 ];
+const BENEFICIARY_DEFINITIONS = [
+  { id: "ben-ntu", name: "Nanyang Technological University", supportedCurrencies: ["USD"], status: "ACTIVE" as const },
+  { id: "ben-john-1", name: "John Tan", supportedCurrencies: ["USD"], status: "ACTIVE" as const },
+  { id: "ben-john-2", name: "John Lim", supportedCurrencies: ["USD"], status: "ACTIVE" as const },
+];
 const fxDestinationAccountId = (currency: string): string | undefined => ACCOUNT_DEFINITIONS.find((account) => account.currency === currency)?.id;
 const initialState = (): State => ({ stateVersion: 7, balances: { "acc-sgd": 2_000_000n, "acc-usd": 500_000n }, holdings: {}, scenarios: new Set() });
-const requestHash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const normalize = (value: unknown): unknown => Array.isArray(value) ? value.map(normalize) : value !== null && typeof value === "object"
+  ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, normalize(item)]))
+  : value;
+const requestHash = (value: unknown): string => createHash("sha256").update(JSON.stringify(normalize(value))).digest("hex");
 const addDecimalStrings = (left: string, right: string): string => {
   const parts = (value: string) => { const [integer, fraction = ""] = value.split("."); return { numerator: BigInt(`${integer}${fraction}`), scale: fraction.length }; };
   const a = parts(left); const b = parts(right); const scale = Math.max(a.scale, b.scale);
@@ -36,15 +46,19 @@ const multiplyRateHalfEven = (minorUnits: string, numerator: bigint, denominator
   return doubled > denominator || (doubled === denominator && quotient % 2n !== 0n) ? quotient + 1n : quotient;
 };
 
-export function buildApp() {
+export function buildApp(options: MockBankOptions = {}) {
   const states = new Map<string, State>(); const idempotency = new Map<string, StoredResponse>();
   const getState = (userId: string): State => { const existing = states.get(userId); if (existing) return existing; const created = initialState(); states.set(userId, created); return created; };
   const app = Fastify({ loggerInstance: logger });
   app.addHook("onRequest", async (request, reply) => { const traceId = resolveTraceId(request.headers["x-trace-id"]); request.headers["x-trace-id"] = traceId; reply.header("x-trace-id", traceId); });
   app.get("/health", async () => ({ status: "ok", service: "mock-bank" })); app.get("/ready", async () => ({ status: "ready" }));
+  app.get("/v1/executions/idempotency/:key", async (request) => {
+    const { key } = z.object({ key: Id }).parse(request.params); const prior = idempotency.get(key);
+    return prior ? { status: "COMPLETED" as const, idempotencyKey: key, operation: prior.operation, requestHash: prior.requestHash, ...prior.response } : { status: "NOT_FOUND" as const, idempotencyKey: key };
+  });
   app.get("/v1/state/:userId", async (request) => { const { userId } = z.object({ userId: Id }).parse(request.params); const state = getState(userId); return BankStateSnapshotV1.parse({
     schemaVersion: "1", userId, stateVersion: state.stateVersion, capturedAt: new Date().toISOString(),
-    accounts: ACCOUNT_DEFINITIONS.map((account) => ({ ...account, capabilities: [...account.capabilities], ledgerMinorUnits: state.balances[account.id]!.toString(), availableMinorUnits: state.balances[account.id]!.toString(), status: "ACTIVE" as const })), beneficiaries: [{ id: "ben-ntu", name: "Nanyang Technological University", supportedCurrencies: ["USD"], status: "ACTIVE" }], assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: true, settlementCurrency: "USD" }],
+    accounts: ACCOUNT_DEFINITIONS.map((account) => ({ ...account, capabilities: [...account.capabilities], ledgerMinorUnits: state.balances[account.id]!.toString(), availableMinorUnits: state.balances[account.id]!.toString(), status: "ACTIVE" as const })), beneficiaries: BENEFICIARY_DEFINITIONS.map((beneficiary) => ({ ...beneficiary, supportedCurrencies: [...beneficiary.supportedCurrencies] })), assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: true, settlementCurrency: "USD" }],
     holdings: Object.entries(state.holdings).map(([assetId, quantity]) => ({ assetId, quantity })), obligations: [], serviceAvailability: { transfers: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), fx: !state.scenarios.has("FX_UNAVAILABLE"), billPayments: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), investments: !state.scenarios.has("ASSET_UNAVAILABLE") },
     fxQuotes: [{ id: `q-${userId}-${state.stateVersion}`, fromCurrency: "SGD", toCurrency: "USD", rate: "0.75", expiresAt: new Date(Date.now() + 60_000).toISOString() }],
   }); });
@@ -52,10 +66,10 @@ export function buildApp() {
   const debit = (state: State, accountId: string, money: { minorUnits: string }): void => { const balance = state.balances[accountId]; if (balance === undefined) throw new Error("ACCOUNT_NOT_FOUND"); const amount = BigInt(money.minorUnits); if (balance < amount) throw new Error("INSUFFICIENT_FUNDS"); state.balances[accountId] = balance - amount; };
   const execute = <T extends WriteBody>(path: "fx" | "transfer" | "payment" | "buy", schema: z.ZodType<T>, blocked: Scenario, mutate: (state: State, body: T) => void) => app.post(`/v1/execute/${path}`, async (request, reply) => {
     const key = request.headers["idempotency-key"]; if (typeof key !== "string" || !key) return reply.code(400).send({ code: "IDEMPOTENCY_KEY_REQUIRED" });
-    const body = schema.parse(request.body); const hash = requestHash(body); const prior = idempotency.get(key); if (prior) return prior.requestHash === hash ? prior.response : reply.code(409).send({ code: "IDEMPOTENCY_KEY_REUSED" });
+    const body = schema.parse(request.body); const hash = requestHash(body); const prior = idempotency.get(key); if (prior) return prior.operation === path && prior.requestHash === hash ? prior.response : reply.code(409).send({ code: "IDEMPOTENCY_KEY_REUSED" });
     const state = getState(body.userId); if (state.scenarios.has(blocked)) return reply.code(503).send({ code: blocked }); if (path === "fx" && state.scenarios.has("QUOTE_EXPIRED")) return reply.code(409).send({ code: "QUOTE_EXPIRED" }); if (state.scenarios.has("BALANCE_CHANGED")) return reply.code(409).send({ code: "BALANCE_CHANGED", stateVersion: state.stateVersion });
     try { mutate(state, body); } catch (error) { return reply.code(409).send({ code: error instanceof Error ? error.message : "WRITE_REJECTED" }); }
-    state.stateVersion += 1; const response = { accepted: true as const, bankReference: `mock-${key}`, stateVersion: state.stateVersion }; idempotency.set(key, { requestHash: hash, response }); return response;
+    state.stateVersion += 1; const response = { accepted: true as const, bankReference: `mock-${key}`, stateVersion: state.stateVersion }; const record = { operation: path, idempotencyKey: key, requestHash: hash, response }; idempotency.set(key, { operation: path, requestHash: hash, response }); options.afterWrite?.(record); return response;
   });
   execute("fx", FxBody, "FX_UNAVAILABLE", (state, body) => { debit(state, body.accountId, body.fromAmount); const target = fxDestinationAccountId(body.toCurrency); if (!target) throw new Error("FX_DESTINATION_ACCOUNT_NOT_FOUND"); state.balances[target] = (state.balances[target] ?? 0n) + multiplyRateHalfEven(body.fromAmount.minorUnits, 75n, 100n); });
   execute("transfer", TransferBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => { debit(state, body.sourceAccountId, body.amount); if ("destinationAccountId" in body) state.balances[body.destinationAccountId] = (state.balances[body.destinationAccountId] ?? 0n) + BigInt(body.amount.minorUnits); });

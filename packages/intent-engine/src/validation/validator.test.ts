@@ -30,6 +30,24 @@ describe("independent read-only intent validation", () => {
     expect(validator.validate({ sourceText, draft, candidate: goalCandidate })).toEqual({ status: "PASS", mismatches: [] });
   });
 
+  it("accepts an explicit customer-authored source-account preference", () => {
+    const sourceText = "I need to send NTU 7,000 USD. I only have 5,000 in my USD account, so use my SGD account for the rest.";
+    const draft = {
+      schemaVersion: "1", originalText: sourceText,
+      goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "700000" }, recipientReference: "NTU" }, constraints: [],
+      preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }], references: [],
+    };
+    const goalCandidate = candidate({
+      goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "700000" }, recipientId: "ben-ntu" }, constraints: [],
+      preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }],
+      entityBindings: [
+        { schemaVersion: "1", reference: "NTU", entityType: "BENEFICIARY", entityId: "ben-ntu", resolutionMethod: "EXACT", confirmed: false },
+        { schemaVersion: "1", reference: "my SGD account", entityType: "ACCOUNT", entityId: "acc-sgd", resolutionMethod: "EXACT", confirmed: false },
+      ],
+    });
+    expect(validator.validate({ sourceText, draft, candidate: goalCandidate })).toEqual({ status: "PASS", mismatches: [] });
+  });
+
   it("fails when the NTU transfer is reinterpreted as an asset acquisition", () => {
     const sourceText = "Send USD 7000.00 to Nanyang Technological University";
     const draft = {

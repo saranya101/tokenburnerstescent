@@ -1,0 +1,3 @@
+ALTER TABLE "Message"
+ADD COLUMN "inputMode" TEXT NOT NULL DEFAULT 'TYPED',
+ADD COLUMN "inputMetadata" JSONB;

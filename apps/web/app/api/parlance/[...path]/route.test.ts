@@ -13,6 +13,15 @@ it("injects the configured server-side customer identity into message requests",
   expect(upstream).toHaveBeenCalledWith("http://api.internal:4001/v1/messages", expect.objectContaining({ body: JSON.stringify({ userId: "user-1", text: "Send money" }) }));
 });
 
+it("forwards validated voice provenance through the same server-bound message route", async () => {
+  process.env.PARLANCE_CUSTOMER_USER_ID = "user-1"; process.env.API_URL = "http://api.internal:4001";
+  const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "SEMANTIC_VALIDATION_FAILED", message: "Please clarify." }), { status: 200 })); vi.stubGlobal("fetch", upstream);
+  const voice = { rawTranscript: "Send John USD 300", provider: "browser-web-speech", transcribedAt: "2026-10-03T10:00:00.000Z" };
+  const response = await POST(new NextRequest("http://localhost/api/parlance/messages", { method: "POST", body: JSON.stringify({ text: "Send John USD 3000", inputMode: "VOICE", voice }), headers: { "content-type": "application/json" } }), { params: Promise.resolve({ path: ["messages"] }) });
+  expect(response.status).toBe(200);
+  expect(upstream).toHaveBeenCalledWith("http://api.internal:4001/v1/messages", expect.objectContaining({ body: JSON.stringify({ userId: "user-1", text: "Send John USD 3000", inputMode: "VOICE", voice }) }));
+});
+
 it("does not expose the removed direct approval path", async () => {
   const upstream = vi.fn(); vi.stubGlobal("fetch", upstream);
   const response = await POST(new NextRequest("http://localhost/api/parlance/plans/plan-1/approve", { method: "POST", body: "{}" }), { params: Promise.resolve({ path: ["plans", "plan-1", "approve"] }) });

@@ -1,12 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@parlance/db";
-import { ApprovalV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1, IntentDraftV1, type CompilerResultV1 } from "@parlance/contracts";
+import { ApprovalV1, BundleSatisfactionProofV1, ExecutionResultV1, FinancialPlanV1, GoalBundleContractV1, GoalBundleItemV1, GoalContractV1, IntentBundleDraftV1, IntentDraftV1, type CompilerResultV1 } from "@parlance/contracts";
 import { GoalContractCandidateV1 } from "@parlance/intent-engine";
-import type { ClarificationProgress, GoalConfirmationRepository, ParlanceRepository, StoredApproval, StoredClarificationRequest, StoredExecution, StoredGoal, StoredGoalCandidate, StoredPlan } from "../orchestration/ports.js";
+import type { BundleClarificationProgress, BundleConfirmationRepository, BundlePlanRepository, GoalBundleCandidate, ClarificationProgress, GoalConfirmationRepository, ParlanceRepository, StoredApproval, StoredBundleCandidate, StoredBundleClarification, StoredClarificationRequest, StoredExecution, StoredGoal, StoredGoalBundle, StoredGoalCandidate, StoredPlan } from "../orchestration/ports.js";
 import type { ApprovalPayload, NewWebAuthnChallenge, NewWebAuthnCredential, StoredApprovalEvidence, StoredWebAuthnChallenge, StoredWebAuthnCredential, VerifiedPasskeyAuthorizationInput, WebAuthnRepository } from "../webauthn/types.js";
+import type { ConversationalInputProvenance } from "../orchestration/input-provenance.js";
 
 const json = (value: unknown): Prisma.InputJsonValue => value as Prisma.InputJsonValue;
 const bytes = (value: Uint8Array): Uint8Array<ArrayBuffer> => new Uint8Array(value);
+
+function typedProvenance(submittedText: string): ConversationalInputProvenance { return { inputMode: "TYPED", submittedText, edited: false }; }
+function storedProvenance(value: unknown, submittedText: string): ConversationalInputProvenance {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return typedProvenance(submittedText);
+  const item = value as Record<string, unknown>;
+  if (item.inputMode !== "VOICE" || typeof item.rawTranscript !== "string" || typeof item.submittedText !== "string" || typeof item.provider !== "string" || typeof item.transcribedAt !== "string" || typeof item.edited !== "boolean") return typedProvenance(submittedText);
+  return { inputMode: "VOICE", rawTranscript: item.rawTranscript, submittedText: item.submittedText, provider: item.provider, transcribedAt: item.transcribedAt, edited: item.edited };
+}
+function messageProvenance(input: ConversationalInputProvenance): { inputMode: string; inputMetadata?: Prisma.InputJsonValue } {
+  if (input.inputMode === "TYPED") return { inputMode: "TYPED" };
+  return { inputMode: "VOICE", inputMetadata: json({ rawTranscript: input.rawTranscript, provider: input.provider, transcribedAt: input.transcribedAt, edited: input.edited }) };
+}
 
 function transports(value: Prisma.JsonValue | null): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
@@ -21,6 +34,7 @@ type ChallengeRow = Prisma.WebAuthnChallengeGetPayload<Record<string, never>>;
 function mapWebAuthnChallenge(row: ChallengeRow): StoredWebAuthnChallenge {
   return {
     ...row,
+    challengeNonce: row.challengeNonce,
     userHandle: row.userHandle ? bytes(row.userHandle) : null,
     approvalPayload: row.approvalPayload as ApprovalPayload | null,
   };
@@ -55,6 +69,7 @@ function mapGoalCandidate(row: IntentDraftRow): StoredGoalCandidate {
   return {
     candidateId: row.id, goalContractId: payload.goalContractId, userId: row.userId, version: payload.version,
     createdAt: row.createdAt.toISOString(), candidate: GoalContractCandidateV1.parse(payload.candidate),
+    inputProvenance: storedProvenance(payload.inputProvenance, typeof payload.originalText === "string" ? payload.originalText : ""),
   };
 }
 
@@ -67,6 +82,40 @@ function mapClarification(row: IntentDraftRow): StoredClarificationRequest {
     createdAt: row.createdAt.toISOString(), originalText: payload.originalText, intentDraft: IntentDraftV1.parse(payload.intentDraft),
     groundingResults: payload.groundingResults as StoredClarificationRequest["groundingResults"],
     clarifications: payload.clarifications as StoredClarificationRequest["clarifications"],
+    inputProvenance: storedProvenance(payload.inputProvenance, payload.originalText),
+    clarificationAnswers: Array.isArray(payload.clarificationAnswers) ? payload.clarificationAnswers.filter((value): value is string => typeof value === "string") : [],
+  };
+}
+
+function mapBundleCandidate(row: IntentDraftRow): StoredBundleCandidate {
+  if (typeof row.payload !== "object" || row.payload === null || Array.isArray(row.payload)) throw new Error("GOAL_BUNDLE_CANDIDATE_INVALID");
+  const payload = row.payload as Record<string, unknown>;
+  if (payload.kind !== "GOAL_BUNDLE_CANDIDATE_V1" || typeof payload.bundleId !== "string" || typeof payload.version !== "number" || typeof payload.originalText !== "string" || !Array.isArray(payload.clarificationAnswers)) throw new Error("GOAL_BUNDLE_CANDIDATE_INVALID");
+  const candidateValue = payload.candidate as GoalBundleCandidate;
+  const candidate: GoalBundleCandidate = {
+    schemaVersion: "1", items: candidateValue.items.map((item) => GoalBundleItemV1.parse(item)),
+    globalConstraints: candidateValue.globalConstraints, explicitDependencies: candidateValue.explicitDependencies,
+  };
+  return {
+    candidateId: row.id, bundleId: payload.bundleId, userId: row.userId, version: payload.version,
+    createdAt: row.createdAt.toISOString(), originalText: payload.originalText, intentBundle: IntentBundleDraftV1.parse(payload.intentBundle),
+    candidate, clarificationAnswers: payload.clarificationAnswers as StoredBundleCandidate["clarificationAnswers"],
+    inputProvenance: storedProvenance(payload.inputProvenance, payload.originalText),
+  };
+}
+
+function mapBundleClarification(row: IntentDraftRow): StoredBundleClarification {
+  if (typeof row.payload !== "object" || row.payload === null || Array.isArray(row.payload)) throw new Error("BUNDLE_CLARIFICATION_INVALID");
+  const payload = row.payload as Record<string, unknown>;
+  if (payload.kind !== "BUNDLE_CLARIFICATION_PENDING_V1" || typeof payload.bundleId !== "string" || typeof payload.version !== "number" || typeof payload.originalText !== "string" || !Array.isArray(payload.itemGroundingResults) || !Array.isArray(payload.globalGroundingResults) || !Array.isArray(payload.clarifications) || !Array.isArray(payload.clarificationAnswers)) throw new Error("BUNDLE_CLARIFICATION_INVALID");
+  return {
+    clarificationId: row.id, bundleId: payload.bundleId, userId: row.userId, version: payload.version,
+    createdAt: row.createdAt.toISOString(), originalText: payload.originalText, intentBundle: IntentBundleDraftV1.parse(payload.intentBundle),
+    itemGroundingResults: payload.itemGroundingResults as StoredBundleClarification["itemGroundingResults"],
+    globalGroundingResults: payload.globalGroundingResults as StoredBundleClarification["globalGroundingResults"],
+    clarifications: payload.clarifications as StoredBundleClarification["clarifications"],
+    clarificationAnswers: payload.clarificationAnswers as StoredBundleClarification["clarificationAnswers"],
+    inputProvenance: storedProvenance(payload.inputProvenance, payload.originalText),
   };
 }
 
@@ -77,6 +126,11 @@ function mapPlan(row: PlanRow): FinancialPlanV1 {
     policyVersion: row.policyVersion, operationLibraryVersion: row.operationLibraryVersion,
     steps: row.steps.sort((a, b) => a.sequence - b.sequence).map((step) => ({ id: step.stepKey, sequence: step.sequence, action: step.action, dependsOn: step.dependsOn, reversible: step.reversible, parameters: step.parameters })),
     validity: row.validity, projectedOutcome: row.projectedOutcome, planHash: row.planHash });
+}
+
+type BundleRow = Prisma.GoalBundleContractGetPayload<Record<string, never>>;
+function mapGoalBundle(row: BundleRow): StoredGoalBundle {
+  return { rowId: row.id, userId: row.userId, contract: GoalBundleContractV1.parse(row.payload) };
 }
 
 type EvidenceRow = Prisma.ApprovalEvidenceGetPayload<Record<string, never>>;
@@ -116,20 +170,24 @@ const event = (eventType: string, aggregateType: string, aggregateId: string, tr
   outbox: { topic: eventType, aggregateId, traceId, payload: json(payload) },
 });
 
-export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirmationRepository, WebAuthnRepository {
+export class PrismaParlanceRepository implements ParlanceRepository, BundlePlanRepository, GoalConfirmationRepository, BundleConfirmationRepository, WebAuthnRepository {
   constructor(private readonly db: PrismaClient, private readonly options: { afterExecutionUpdate?: () => void } = {}) {}
 
   async getConfirmedGoal(contractId: string): Promise<StoredGoal | null> {
     const row = await this.db.goalContract.findFirst({ where: { contractKey: contractId, status: "CONFIRMED" }, orderBy: { version: "desc" }, include: { constraints: true, entityBindings: true } });
     return row ? mapGoal(row) : null;
   }
+  async getConfirmedGoalBundle(bundleId: string): Promise<StoredGoalBundle | null> {
+    const row = await this.db.goalBundleContract.findFirst({ where: { bundleKey: bundleId, status: "CONFIRMED" }, orderBy: { version: "desc" } });
+    return row ? mapGoalBundle(row) : null;
+  }
   async saveClarification(input: Parameters<GoalConfirmationRepository["saveClarification"]>[0]): Promise<StoredClarificationRequest> {
     const intentDraft = IntentDraftV1.parse(input.intentDraft); const createdAt = new Date(input.createdAt);
     const row = await this.db.$transaction(async (tx) => {
-      const conversation = await tx.conversation.create({ data: { userId: input.userId, createdAt, messages: { create: { role: "USER", content: input.originalText, traceId: input.traceId, createdAt } } } });
+      const conversation = await tx.conversation.create({ data: { userId: input.userId, createdAt, messages: { create: { role: "USER", content: input.originalText, traceId: input.traceId, createdAt, ...messageProvenance(input.inputProvenance) } } } });
       return tx.intentDraftRecord.create({ data: {
         id: input.clarificationId, userId: input.userId, conversationId: conversation.id, schemaVersion: intentDraft.schemaVersion,
-        payload: json({ kind: "CLARIFICATION_PENDING_V1", goalContractId: input.goalContractId, version: input.version, originalText: input.originalText, intentDraft, groundingResults: input.groundingResults, clarifications: input.clarifications }),
+        payload: json({ kind: "CLARIFICATION_PENDING_V1", goalContractId: input.goalContractId, version: input.version, originalText: input.originalText, inputProvenance: input.inputProvenance, clarificationAnswers: input.clarificationAnswers ?? [], intentDraft, groundingResults: input.groundingResults, clarifications: input.clarifications }),
         status: "NEEDS_CLARIFICATION", createdAt,
       } });
     });
@@ -149,10 +207,11 @@ export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirm
       }
       const pending = mapClarification(current);
       const payload = input.candidate === undefined
-        ? { kind: "CLARIFICATION_PENDING_V1", goalContractId: pending.goalContractId, version: pending.version, originalText: pending.originalText, intentDraft: pending.intentDraft, groundingResults: input.groundingResults, clarifications: input.clarifications }
-        : { kind: "GOAL_CANDIDATE_V1", goalContractId: pending.goalContractId, version: pending.version, intentDraft: pending.intentDraft, candidate: GoalContractCandidateV1.parse(input.candidate) };
+        ? { kind: "CLARIFICATION_PENDING_V1", goalContractId: pending.goalContractId, version: pending.version, originalText: pending.originalText, inputProvenance: pending.inputProvenance, clarificationAnswers: [...(pending.clarificationAnswers ?? []), input.answerText], intentDraft: pending.intentDraft, groundingResults: input.groundingResults, clarifications: input.clarifications }
+        : { kind: "GOAL_CANDIDATE_V1", goalContractId: pending.goalContractId, version: pending.version, originalText: pending.originalText, inputProvenance: pending.inputProvenance, clarificationAnswers: [...(pending.clarificationAnswers ?? []), input.answerText], intentDraft: pending.intentDraft, candidate: GoalContractCandidateV1.parse(input.candidate) };
       const status = input.candidate === undefined ? "NEEDS_CLARIFICATION" : "AWAITING_GOAL_CONFIRMATION";
       if (input.candidate !== undefined) {
+        if (input.semanticValidation?.decision !== "PASS") throw new Error("SEMANTIC_VALIDATION_REQUIRED");
         const claimed = await tx.intentDraftRecord.updateMany({ where: { id: input.clarificationId, status: "NEEDS_CLARIFICATION" }, data: { payload: json(payload), status } });
         if (claimed.count === 0) {
           const completed = await tx.intentDraftRecord.findUnique({ where: { id: input.clarificationId } });
@@ -160,6 +219,8 @@ export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirm
           throw new Error("CLARIFICATION_NOT_ANSWERABLE");
         }
         await tx.message.create({ data: { conversationId: current.conversationId, role: "USER", content: input.answerText, traceId: input.traceId } });
+        const validationEvent = event("SEMANTIC_VALIDATION_PASSED", "IntentDraftRecord", input.clarificationId, input.traceId, input.semanticValidation);
+        await tx.auditEvent.create({ data: validationEvent.audit }); await tx.outboxEvent.create({ data: validationEvent.outbox });
         const updated = await tx.intentDraftRecord.findUniqueOrThrow({ where: { id: input.clarificationId } });
         return { status: "AWAITING_GOAL_CONFIRMATION", candidate: mapGoalCandidate(updated) };
       }
@@ -170,19 +231,43 @@ export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirm
   async saveGoalCandidate(input: Parameters<GoalConfirmationRepository["saveGoalCandidate"]>[0]): Promise<StoredGoalCandidate> {
     const intentDraft = IntentDraftV1.parse(input.intentDraft);
     const candidate = GoalContractCandidateV1.parse(input.candidate);
+    if (input.semanticValidation.decision !== "PASS") throw new Error("SEMANTIC_VALIDATION_REQUIRED");
     const createdAt = new Date(input.createdAt);
     const row = await this.db.$transaction(async (tx) => {
-      const conversation = await tx.conversation.create({ data: { userId: input.userId, createdAt, messages: { create: { role: "USER", content: input.originalText, traceId: input.traceId, createdAt } } } });
-      return tx.intentDraftRecord.create({ data: {
+      const conversation = await tx.conversation.create({ data: { userId: input.userId, createdAt, messages: { create: { role: "USER", content: input.originalText, traceId: input.traceId, createdAt, ...messageProvenance(input.inputProvenance) } } } });
+      const stored = await tx.intentDraftRecord.create({ data: {
         id: input.candidateId, userId: input.userId, conversationId: conversation.id, schemaVersion: intentDraft.schemaVersion,
-        payload: json({ kind: "GOAL_CANDIDATE_V1", goalContractId: input.goalContractId, version: input.version, intentDraft, candidate }),
+        payload: json({ kind: "GOAL_CANDIDATE_V1", goalContractId: input.goalContractId, version: input.version, originalText: input.originalText, inputProvenance: input.inputProvenance, intentDraft, candidate }),
         status: "AWAITING_GOAL_CONFIRMATION", createdAt,
       } });
+      const validationEvent = event("SEMANTIC_VALIDATION_PASSED", "IntentDraftRecord", input.candidateId, input.traceId, input.semanticValidation);
+      await tx.auditEvent.create({ data: validationEvent.audit }); await tx.outboxEvent.create({ data: validationEvent.outbox });
+      return stored;
     });
     return mapGoalCandidate(row);
   }
+  async rejectSemanticValidation(input: Parameters<GoalConfirmationRepository["rejectSemanticValidation"]>[0]): Promise<void> {
+    if (input.validation.decision !== "FAIL") throw new Error("SEMANTIC_VALIDATION_FAILURE_REQUIRED");
+    const createdAt = new Date(input.createdAt);
+    await this.db.$transaction(async (tx) => {
+      const current = await tx.intentDraftRecord.findUnique({ where: { id: input.recordId } });
+      if (current) {
+        if (current.status === "CONFIRMED") throw new Error("SEMANTIC_VALIDATION_RECORD_FINALIZED");
+        await tx.intentDraftRecord.update({ where: { id: input.recordId }, data: { status: "SEMANTIC_VALIDATION_FAILED" } });
+        if (input.answerText) await tx.message.create({ data: { conversationId: current.conversationId, role: "USER", content: input.answerText, traceId: input.traceId } });
+      } else {
+        const conversation = await tx.conversation.create({ data: { userId: input.userId, createdAt, messages: { create: { role: "USER", content: input.originalText, traceId: input.traceId, createdAt, ...messageProvenance(input.inputProvenance) } } } });
+        await tx.intentDraftRecord.create({ data: {
+          id: input.recordId, userId: input.userId, conversationId: conversation.id, schemaVersion: input.schemaVersion,
+          payload: json({ kind: "SEMANTIC_VALIDATION_REJECTED_V1", originalText: input.originalText, inputProvenance: input.inputProvenance, semanticValidation: input.validation }), status: "SEMANTIC_VALIDATION_FAILED", createdAt,
+        } });
+      }
+      const validationEvent = event("SEMANTIC_VALIDATION_FAILED", "IntentDraftRecord", input.recordId, input.traceId, input.validation);
+      await tx.auditEvent.create({ data: validationEvent.audit }); await tx.outboxEvent.create({ data: validationEvent.outbox });
+    });
+  }
   async getGoalCandidate(candidateId: string): Promise<StoredGoalCandidate | null> {
-    const row = await this.db.intentDraftRecord.findUnique({ where: { id: candidateId } });
+    const row = await this.db.intentDraftRecord.findFirst({ where: { id: candidateId, status: { in: ["AWAITING_GOAL_CONFIRMATION", "CONFIRMED"] } } });
     return row ? mapGoalCandidate(row) : null;
   }
   async confirmGoal(input: Parameters<GoalConfirmationRepository["confirmGoal"]>[0]): Promise<StoredGoal> {
@@ -210,27 +295,163 @@ export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirm
     });
     return mapGoal(row);
   }
+  async saveBundleClarification(input: Parameters<BundleConfirmationRepository["saveBundleClarification"]>[0]): Promise<StoredBundleClarification> {
+    const intentBundle = IntentBundleDraftV1.parse(input.intentBundle); const createdAt = new Date(input.createdAt);
+    const row = await this.db.$transaction(async (tx) => {
+      const conversation = await tx.conversation.create({ data: { userId: input.userId, createdAt, messages: { create: { role: "USER", content: input.originalText, traceId: input.traceId, createdAt, ...messageProvenance(input.inputProvenance) } } } });
+      const stored = await tx.intentDraftRecord.create({ data: {
+        id: input.clarificationId, userId: input.userId, conversationId: conversation.id, schemaVersion: "1", status: "NEEDS_CLARIFICATION", createdAt,
+        payload: json({ kind: "BUNDLE_CLARIFICATION_PENDING_V1", bundleId: input.bundleId, version: input.version, originalText: input.originalText, inputProvenance: input.inputProvenance, intentBundle, itemGroundingResults: input.itemGroundingResults, globalGroundingResults: input.globalGroundingResults, clarifications: input.clarifications, clarificationAnswers: input.clarificationAnswers }),
+      } });
+      const e = event("BUNDLE_INTERPRETED", "IntentDraftRecord", input.clarificationId, input.traceId, { itemCount: intentBundle.items.length, itemIds: intentBundle.items.map(({ itemId }) => itemId), dependencyCount: intentBundle.explicitDependencies.length, status: "NEEDS_CLARIFICATION" });
+      await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox }); return stored;
+    });
+    return mapBundleClarification(row);
+  }
+  async getBundleClarification(clarificationId: string): Promise<StoredBundleClarification | null> {
+    const row = await this.db.intentDraftRecord.findFirst({ where: { id: clarificationId, status: "NEEDS_CLARIFICATION" } });
+    if (!row || typeof row.payload !== "object" || row.payload === null || Array.isArray(row.payload) || (row.payload as Record<string, unknown>).kind !== "BUNDLE_CLARIFICATION_PENDING_V1") return null;
+    return mapBundleClarification(row);
+  }
+  async advanceBundleClarification(input: Parameters<BundleConfirmationRepository["advanceBundleClarification"]>[0]): Promise<BundleClarificationProgress> {
+    return this.db.$transaction(async (tx) => {
+      const current = await tx.intentDraftRecord.findUnique({ where: { id: input.clarificationId } });
+      if (!current) throw new Error("BUNDLE_CLARIFICATION_NOT_FOUND");
+      if (current.status !== "NEEDS_CLARIFICATION") {
+        if (current.status === "AWAITING_GOAL_CONFIRMATION") return { status: "AWAITING_BUNDLE_CONFIRMATION", candidate: mapBundleCandidate(current) };
+        throw new Error("BUNDLE_CLARIFICATION_NOT_ANSWERABLE");
+      }
+      const payload = input.candidate === undefined
+        ? { kind: "BUNDLE_CLARIFICATION_PENDING_V1", bundleId: input.bundleId, version: input.version, originalText: input.originalText, inputProvenance: input.inputProvenance, intentBundle: input.intentBundle, itemGroundingResults: input.itemGroundingResults, globalGroundingResults: input.globalGroundingResults, clarifications: input.clarifications, clarificationAnswers: input.clarificationAnswers }
+        : { kind: "GOAL_BUNDLE_CANDIDATE_V1", bundleId: input.bundleId, version: input.version, originalText: input.originalText, inputProvenance: input.inputProvenance, intentBundle: input.intentBundle, candidate: input.candidate, clarificationAnswers: input.clarificationAnswers };
+      const status = input.candidate === undefined ? "NEEDS_CLARIFICATION" : "AWAITING_GOAL_CONFIRMATION";
+      if (input.candidate !== undefined && input.semanticValidation?.decision !== "PASS") throw new Error("SEMANTIC_VALIDATION_REQUIRED");
+      const claimed = await tx.intentDraftRecord.updateMany({ where: { id: input.clarificationId, status: "NEEDS_CLARIFICATION" }, data: { payload: json(payload), status } });
+      if (claimed.count !== 1) throw new Error("BUNDLE_CLARIFICATION_NOT_ANSWERABLE");
+      await tx.message.create({ data: { conversationId: current.conversationId, role: "USER", content: input.answerText, traceId: input.traceId } });
+      const clarificationEvent = event("BUNDLE_CLARIFICATION_ANSWERED", "IntentDraftRecord", input.clarificationId, input.traceId, { field: input.clarificationAnswers.at(-1)?.field, remainingClarifications: input.clarifications.length });
+      await tx.auditEvent.create({ data: clarificationEvent.audit }); await tx.outboxEvent.create({ data: clarificationEvent.outbox });
+      if (input.semanticValidation) {
+        const validationEvent = event("BUNDLE_SEMANTIC_VALIDATION_PASSED", "IntentDraftRecord", input.clarificationId, input.traceId, input.semanticValidation);
+        await tx.auditEvent.create({ data: validationEvent.audit }); await tx.outboxEvent.create({ data: validationEvent.outbox });
+      }
+      const updated = await tx.intentDraftRecord.findUniqueOrThrow({ where: { id: input.clarificationId } });
+      return input.candidate === undefined ? { status: "NEEDS_CLARIFICATION", request: mapBundleClarification(updated) } : { status: "AWAITING_BUNDLE_CONFIRMATION", candidate: mapBundleCandidate(updated) };
+    });
+  }
+  async saveBundleCandidate(input: Parameters<BundleConfirmationRepository["saveBundleCandidate"]>[0]): Promise<StoredBundleCandidate> {
+    if (input.semanticValidation.decision !== "PASS") throw new Error("SEMANTIC_VALIDATION_REQUIRED");
+    const createdAt = new Date(input.createdAt); const intentBundle = IntentBundleDraftV1.parse(input.intentBundle);
+    const row = await this.db.$transaction(async (tx) => {
+      const conversation = await tx.conversation.create({ data: { userId: input.userId, createdAt, messages: { create: { role: "USER", content: input.originalText, traceId: input.traceId, createdAt, ...messageProvenance(input.inputProvenance) } } } });
+      const stored = await tx.intentDraftRecord.create({ data: {
+        id: input.candidateId, userId: input.userId, conversationId: conversation.id, schemaVersion: "1", status: "AWAITING_GOAL_CONFIRMATION", createdAt,
+        payload: json({ kind: "GOAL_BUNDLE_CANDIDATE_V1", bundleId: input.bundleId, version: input.version, originalText: input.originalText, inputProvenance: input.inputProvenance, intentBundle, candidate: input.candidate, clarificationAnswers: input.clarificationAnswers }),
+      } });
+      const interpreted = event("BUNDLE_INTERPRETED", "IntentDraftRecord", input.candidateId, input.traceId, { itemCount: intentBundle.items.length, itemIds: intentBundle.items.map(({ itemId }) => itemId), dependencyCount: intentBundle.explicitDependencies.length, status: "AWAITING_BUNDLE_CONFIRMATION" });
+      const validated = event("BUNDLE_SEMANTIC_VALIDATION_PASSED", "IntentDraftRecord", input.candidateId, input.traceId, input.semanticValidation);
+      await tx.auditEvent.createMany({ data: [interpreted.audit, validated.audit] }); await tx.outboxEvent.createMany({ data: [interpreted.outbox, validated.outbox] }); return stored;
+    });
+    return mapBundleCandidate(row);
+  }
+  async getBundleCandidate(candidateId: string): Promise<StoredBundleCandidate | null> {
+    const row = await this.db.intentDraftRecord.findFirst({ where: { id: candidateId, status: { in: ["AWAITING_GOAL_CONFIRMATION", "CONFIRMED"] } } });
+    if (!row || typeof row.payload !== "object" || row.payload === null || Array.isArray(row.payload) || (row.payload as Record<string, unknown>).kind !== "GOAL_BUNDLE_CANDIDATE_V1") return null;
+    return mapBundleCandidate(row);
+  }
+  async rejectBundleSemanticValidation(input: Parameters<BundleConfirmationRepository["rejectBundleSemanticValidation"]>[0]): Promise<void> {
+    if (input.validation.decision !== "FAIL") throw new Error("SEMANTIC_VALIDATION_FAILURE_REQUIRED");
+    const createdAt = new Date(input.createdAt);
+    await this.db.$transaction(async (tx) => {
+      const current = await tx.intentDraftRecord.findUnique({ where: { id: input.recordId } });
+      if (current) {
+        await tx.intentDraftRecord.update({ where: { id: input.recordId }, data: { status: "SEMANTIC_VALIDATION_FAILED" } });
+        if (input.answerText) await tx.message.create({ data: { conversationId: current.conversationId, role: "USER", content: input.answerText, traceId: input.traceId } });
+      } else {
+        const conversation = await tx.conversation.create({ data: { userId: input.userId, createdAt, messages: { create: { role: "USER", content: input.originalText, traceId: input.traceId, createdAt, ...messageProvenance(input.inputProvenance) } } } });
+        await tx.intentDraftRecord.create({ data: { id: input.recordId, userId: input.userId, conversationId: conversation.id, schemaVersion: input.schemaVersion, payload: json({ kind: "BUNDLE_SEMANTIC_VALIDATION_REJECTED_V1", originalText: input.originalText, inputProvenance: input.inputProvenance, semanticValidation: input.validation }), status: "SEMANTIC_VALIDATION_FAILED", createdAt } });
+      }
+      const e = event("BUNDLE_SEMANTIC_VALIDATION_FAILED", "IntentDraftRecord", input.recordId, input.traceId, input.validation);
+      await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox });
+    });
+  }
+  async confirmGoalBundle(input: Parameters<BundleConfirmationRepository["confirmGoalBundle"]>[0]): Promise<StoredGoalBundle> {
+    const contract = GoalBundleContractV1.parse(input.contract);
+    const row = await this.db.$transaction(async (tx) => {
+      const claimed = await tx.intentDraftRecord.updateMany({ where: { id: input.candidateId, userId: input.userId, status: "AWAITING_GOAL_CONFIRMATION" }, data: { status: "CONFIRMED" } });
+      if (claimed.count === 0) {
+        const existing = await tx.goalBundleContract.findFirst({ where: { sourceIntentDraftId: input.candidateId, bundleKey: contract.bundleId, version: contract.bundleVersion, status: "CONFIRMED" } });
+        if (existing) return existing; throw new Error("GOAL_BUNDLE_CANDIDATE_NOT_CONFIRMABLE");
+      }
+      const created = await tx.goalBundleContract.create({ data: { bundleKey: contract.bundleId, version: contract.bundleVersion, userId: input.userId, sourceIntentDraftId: input.candidateId, status: "CONFIRMED", schemaVersion: contract.schemaVersion, payload: json(contract), contractHash: contract.contractHash, confirmedAt: new Date(input.confirmedAt) } });
+      const e = event("GOAL_BUNDLE_CONFIRMED", "GoalBundleContract", contract.bundleId, input.traceId, { bundleId: contract.bundleId, bundleVersion: contract.bundleVersion, contractHash: contract.contractHash, itemCount: contract.items.length, confirmationType: "EXPLICIT_USER_CONFIRMATION" });
+      await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox }); return created;
+    });
+    return mapGoalBundle(row);
+  }
   async saveSnapshot(snapshot: Parameters<ParlanceRepository["saveSnapshot"]>[0], traceId: string): Promise<void> {
     await this.db.bankStateSnapshot.upsert({ where: { userId_stateVersion: { userId: snapshot.userId, stateVersion: snapshot.stateVersion } },
       create: { userId: snapshot.userId, schemaVersion: snapshot.schemaVersion, stateVersion: snapshot.stateVersion, snapshot: json(snapshot), capturedAt: new Date(snapshot.capturedAt), traceId }, update: {} });
   }
   async savePlan(goalRowId: string, plan: FinancialPlanV1, traceId: string): Promise<void> {
-    const e = event("PLAN_COMPILED", "FinancialPlan", plan.id, traceId, { planId: plan.id, planHash: plan.planHash });
     await this.db.$transaction(async (tx) => {
+      const superseded = await tx.financialPlan.findMany({ where: {
+        goalContractRowId: goalRowId, goalContractKey: plan.goalContractId,
+        goalContractVersion: plan.goalContractVersion, status: "READY", id: { not: plan.id },
+      }, select: { id: true, planHash: true } });
+      if (superseded.length > 0) await tx.financialPlan.updateMany({ where: { id: { in: superseded.map(({ id }) => id) }, status: "READY" }, data: { status: "SUPERSEDED" } });
       await tx.financialPlan.create({ data: { id: plan.id, goalContractRowId: goalRowId, goalContractKey: plan.goalContractId, status: "READY", schemaVersion: plan.schemaVersion,
         goalContractVersion: plan.goalContractVersion, bankStateVersion: plan.bankStateVersion, compilerVersion: plan.compilerVersion, policyVersion: plan.policyVersion,
         operationLibraryVersion: plan.operationLibraryVersion, validity: json(plan.validity), projectedOutcome: json(plan.projectedOutcome), planHash: plan.planHash, traceId,
         steps: { create: plan.steps.map((step) => ({ stepKey: step.id, sequence: step.sequence, action: step.action, dependsOn: json(step.dependsOn), reversible: step.reversible, parameters: json(step.parameters) })) } } });
+      const e = event("PLAN_COMPILED", "FinancialPlan", plan.id, traceId, { planId: plan.id, planHash: plan.planHash, status: "READY", supersededPlanIds: superseded.map(({ id }) => id) });
       await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox });
-    });
+      for (const oldPlan of superseded) {
+        const supersededEvent = event("PLAN_SUPERSEDED", "FinancialPlan", oldPlan.id, traceId, { planId: oldPlan.id, planHash: oldPlan.planHash, replacementPlanId: plan.id, reason: "REPLACEMENT_PLAN_COMPILED" });
+        await tx.auditEvent.create({ data: supersededEvent.audit }); await tx.outboxEvent.create({ data: supersededEvent.outbox });
+      }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+  async saveBundlePlan(bundleRowId: string, plan: FinancialPlanV1, proof: BundleSatisfactionProofV1, traceId: string): Promise<void> {
+    await this.db.$transaction(async (tx) => {
+      const bundle = await tx.goalBundleContract.findUnique({ where: { id: bundleRowId } });
+      if (!bundle || bundle.status !== "CONFIRMED" || bundle.bundleKey !== plan.goalContractId || bundle.version !== plan.goalContractVersion) throw new Error("GOAL_BUNDLE_PLAN_BINDING_INVALID");
+      const superseded = await tx.financialPlan.findMany({ where: { goalBundleRowId: bundleRowId, goalContractKey: plan.goalContractId, goalContractVersion: plan.goalContractVersion, status: "READY", id: { not: plan.id } }, select: { id: true, planHash: true } });
+      if (superseded.length > 0) await tx.financialPlan.updateMany({ where: { id: { in: superseded.map(({ id }) => id) }, status: "READY" }, data: { status: "SUPERSEDED" } });
+      await tx.financialPlan.create({ data: {
+        id: plan.id, goalBundleRowId: bundleRowId, goalContractKey: plan.goalContractId, status: "READY", schemaVersion: plan.schemaVersion,
+        goalContractVersion: plan.goalContractVersion, bankStateVersion: plan.bankStateVersion, compilerVersion: plan.compilerVersion,
+        policyVersion: plan.policyVersion, operationLibraryVersion: plan.operationLibraryVersion, validity: json(plan.validity),
+        projectedOutcome: json(plan.projectedOutcome), satisfactionProof: json(proof), planHash: plan.planHash, traceId,
+        steps: { create: plan.steps.map((step) => ({ stepKey: step.id, sequence: step.sequence, action: step.action, dependsOn: json(step.dependsOn), reversible: step.reversible, parameters: json(step.parameters) })) },
+      } });
+      const compiled = event("BUNDLE_PLAN_COMPILED", "FinancialPlan", plan.id, traceId, { planId: plan.id, planHash: plan.planHash, bundleId: bundle.bundleKey, bundleContractHash: bundle.contractHash, bankStateVersion: plan.bankStateVersion, satisfactionProof: proof, status: "READY", supersededPlanIds: superseded.map(({ id }) => id) });
+      await tx.auditEvent.create({ data: compiled.audit }); await tx.outboxEvent.create({ data: compiled.outbox });
+      for (const oldPlan of superseded) {
+        const e = event("PLAN_SUPERSEDED", "FinancialPlan", oldPlan.id, traceId, { planId: oldPlan.id, planHash: oldPlan.planHash, replacementPlanId: plan.id, reason: "REPLACEMENT_BUNDLE_PLAN_COMPILED" });
+        await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox });
+      }
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
   async saveCompilationFailure(goalRowId: string, result: Exclude<CompilerResultV1, { status: "SAT" }>, traceId: string): Promise<void> {
     const e = event(`COMPILATION_${result.status}`, "GoalContract", goalRowId, traceId, result);
     await this.db.$transaction(async (tx) => { await tx.goalContract.update({ where: { id: goalRowId }, data: { status: "FAILED" } }); await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox }); });
   }
+  async saveBundleCompilationFailure(bundleRowId: string, result: Exclude<CompilerResultV1, { status: "SAT" }>, traceId: string): Promise<void> {
+    const e = event(`BUNDLE_COMPILATION_${result.status}`, "GoalBundleContract", bundleRowId, traceId, result);
+    await this.db.$transaction(async (tx) => { await tx.goalBundleContract.update({ where: { id: bundleRowId }, data: { status: "FAILED" } }); await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox }); });
+  }
   async getPlan(planId: string): Promise<StoredPlan | null> {
     const row = await this.db.financialPlan.findUnique({ where: { id: planId }, include: { steps: true } });
-    return row ? { goalRowId: row.goalContractRowId, plan: mapPlan(row) } : null;
+    if (!row) return null;
+    if ((row.goalContractRowId === null) === (row.goalBundleRowId === null)) throw new Error("FINANCIAL_PLAN_OWNER_INVARIANT_VIOLATION");
+    const ownerType = row.goalBundleRowId ? "BUNDLE" as const : "GOAL" as const;
+    const goalRowId = row.goalBundleRowId ?? row.goalContractRowId;
+    if (!goalRowId) throw new Error("FINANCIAL_PLAN_OWNER_MISSING");
+    return { goalRowId, ownerType, status: row.status, plan: mapPlan(row), ...(row.satisfactionProof === null ? {} : { satisfactionProof: BundleSatisfactionProofV1.parse(row.satisfactionProof) }) };
+  }
+  async recordPlanAudit(input: Parameters<ParlanceRepository["recordPlanAudit"]>[0]): Promise<void> {
+    await this.db.auditEvent.create({ data: { eventType: input.eventType, aggregateType: "FinancialPlan", aggregateId: input.planId, traceId: input.traceId, payload: json(input.payload) } });
   }
   async authorizeVerifiedPasskey(input: VerifiedPasskeyAuthorizationInput): Promise<{ evidence: StoredApprovalEvidence; execution: ExecutionResultV1 }> {
     const { approval, evidence } = input;
@@ -243,6 +464,16 @@ export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirm
       || approval.approvedAt !== input.now.toISOString() || evidence.verifiedAt !== input.now.toISOString()
       || Date.parse(approval.expiresAt) <= input.now.getTime()) throw new Error("WEBAUTHN_APPROVAL_EVIDENCE_INVALID");
     await this.db.$transaction(async (tx) => {
+      const authoritativePlan = await tx.financialPlan.findUnique({ where: { id: approval.financialPlanId }, select: {
+        status: true, planHash: true, goalContractRowId: true, goalBundleRowId: true, goalContractKey: true, goalContractVersion: true, bankStateVersion: true,
+      } });
+      if (!authoritativePlan || authoritativePlan.status !== "READY") throw new Error("FINANCIAL_PLAN_NOT_READY");
+      if ((authoritativePlan.goalContractRowId === null) === (authoritativePlan.goalBundleRowId === null)
+        || (input.ownerType === "BUNDLE") !== (authoritativePlan.goalBundleRowId !== null)) throw new Error("FINANCIAL_PLAN_OWNER_INVARIANT_VIOLATION");
+      const authoritativeOwnerRowId = input.ownerType === "BUNDLE" ? authoritativePlan.goalBundleRowId : authoritativePlan.goalContractRowId;
+      if (authoritativePlan.planHash !== approval.financialPlanHash || authoritativeOwnerRowId !== input.goalRowId
+        || authoritativePlan.goalContractKey !== approval.goalContractId || authoritativePlan.goalContractVersion !== approval.goalContractVersion
+        || authoritativePlan.bankStateVersion !== approval.bankStateVersion) throw new Error("WEBAUTHN_APPROVAL_EVIDENCE_INVALID");
       const claimed = await tx.webAuthnChallenge.updateMany({ where: {
         id: input.challengeId, userId: approval.userId, purpose: "APPROVAL", status: "ISSUED", revokedAt: null,
         expiresAt: { gt: input.now }, financialPlanId: approval.financialPlanId, approvalPayloadHash: evidence.approvalPayloadHash,
@@ -254,7 +485,7 @@ export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirm
       }, data: { signCount: BigInt(input.newCounter), lastUsedAt: input.now } });
       if (counterUpdated.count !== 1) throw new Error("WEBAUTHN_CREDENTIAL_STATE_CHANGED");
       await tx.approval.create({ data: {
-        id: approval.id, userId: approval.userId, goalContractRowId: input.goalRowId, goalContractKey: approval.goalContractId,
+        id: approval.id, userId: approval.userId, ...(input.ownerType === "BUNDLE" ? { goalBundleRowId: input.goalRowId } : { goalContractRowId: input.goalRowId }), goalContractKey: approval.goalContractId,
         goalContractVersion: approval.goalContractVersion, goalContractHash: approval.goalContractHash, financialPlanId: approval.financialPlanId,
         financialPlanHash: approval.financialPlanHash, bankStateVersion: approval.bankStateVersion, method: "PASSKEY",
         signatureReference: evidence.id, approvedAt: new Date(approval.approvedAt), expiresAt: new Date(approval.expiresAt), traceId: input.traceId,
@@ -273,7 +504,7 @@ export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirm
       const authorized = event("PLAN_AUTHORIZED", "ExecutionRun", input.executionId, input.traceId, { ...auditPayload, executionId: input.executionId });
       await tx.auditEvent.createMany({ data: [verified.audit, authorized.audit] });
       await tx.outboxEvent.createMany({ data: [verified.outbox, authorized.outbox] });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     const stored = await this.getExecution(input.executionId); if (!stored) throw new Error("EXECUTION_NOT_FOUND");
     return { evidence, execution: stored.result };
   }
@@ -297,26 +528,35 @@ export class PrismaParlanceRepository implements ParlanceRepository, GoalConfirm
   async recordStep(input: Parameters<ParlanceRepository["recordStep"]>[0]): Promise<void> {
     const planStep = await this.db.financialPlanStep.findFirstOrThrow({ where: { plan: { executionRuns: { some: { id: input.executionId } } }, stepKey: input.planStepId } });
     const data = { status: input.status, ...(input.bankReference ? { bankReference: input.bankReference } : {}), ...(input.errorCode ? { errorCode: input.errorCode } : {}), ...(input.resultingStateVersion === undefined ? {} : { resultingStateVersion: input.resultingStateVersion }), traceId: input.traceId };
-    const e = event("EXECUTION_STEP_UPDATED", "ExecutionRun", input.executionId, input.traceId, { stepId: input.planStepId, status: input.status, resultingStateVersion: input.resultingStateVersion });
+    const e = event("EXECUTION_STEP_UPDATED", "ExecutionRun", input.executionId, input.traceId, { stepId: input.planStepId, status: input.status, errorCode: input.errorCode, resultingStateVersion: input.resultingStateVersion });
     await this.db.$transaction(async (tx) => { await tx.executionStep.upsert({ where: { executionRunId_planStepId: { executionRunId: input.executionId, planStepId: planStep.id } }, create: { id: input.stepId, executionRunId: input.executionId, planStepId: planStep.id, idempotencyKey: input.idempotencyKey, ...data }, update: data }); await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox }); });
   }
   async finishExecution(input: Parameters<ParlanceRepository["finishExecution"]>[0]): Promise<void> { const status = input.result.status === "COMPLETED" ? "COMPLETED" : input.result.status === "FAILED" ? "FAILED" : "PAUSED"; const e = event(`EXECUTION_${input.result.status}`, "ExecutionRun", input.executionId, input.traceId, input.result); await this.db.$transaction(async (tx) => { await tx.executionRun.update({ where: { id: input.executionId }, data: { status, ...(input.result.finalStateVersion === undefined ? {} : { finalStateVersion: input.result.finalStateVersion }), goalOutcome: json(input.result.goalOutcome) } }); await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox }); }); }
   async listExecutions(): Promise<StoredExecution[]> { const rows = await this.db.executionRun.findMany({ orderBy: { createdAt: "desc" }, include: { steps: { include: { planStep: true } } }, take: 100 }); return rows.map(mapExecution); }
   async listRecoverableExecutions(): Promise<StoredExecution[]> { const rows = await this.db.executionRun.findMany({ where: { status: { in: ["AUTHORIZED", "EXECUTING", "PAUSED", "REAPPROVAL_REQUIRED"] } }, orderBy: { updatedAt: "asc" }, include: { steps: { include: { planStep: true } } } }); return rows.map(mapExecution); }
   async listAudit(): Promise<unknown[]> { return this.db.auditEvent.findMany({ orderBy: { occurredAt: "desc" }, take: 100 }); }
-  async isReady(): Promise<boolean> { try { await this.db.$queryRaw`SELECT 1`; return true; } catch { return false; } }
+  async isReady(): Promise<boolean> { try { await this.db.user.findFirst({ select: { id: true } }); return true; } catch { return false; } }
 
   async webAuthnUserExists(userId: string): Promise<boolean> {
     return (await this.db.user.count({ where: { id: userId } })) === 1;
   }
   async createWebAuthnChallenge(input: NewWebAuthnChallenge): Promise<StoredWebAuthnChallenge> {
-    const row = await this.db.webAuthnChallenge.create({ data: {
+    const create = (tx: Prisma.TransactionClient | PrismaClient) => tx.webAuthnChallenge.create({ data: {
       id: input.id, userId: input.userId, purpose: input.purpose, challenge: input.challenge,
+      ...(input.challengeNonce ? { challengeNonce: input.challengeNonce } : {}),
       ...(input.userHandle ? { userHandle: bytes(input.userHandle) } : {}), expectedRpId: input.expectedRpId,
       expectedOrigin: input.expectedOrigin, ...(input.financialPlanId ? { financialPlanId: input.financialPlanId } : {}),
       ...(input.approvalPayload ? { approvalPayload: json(input.approvalPayload) } : {}),
       ...(input.approvalPayloadHash ? { approvalPayloadHash: input.approvalPayloadHash } : {}), expiresAt: input.expiresAt,
     } });
+    const row = input.purpose === "APPROVAL"
+      ? await this.db.$transaction(async (tx) => {
+        if (!input.financialPlanId || !input.challengeNonce || !input.approvalPayload || !input.approvalPayloadHash) throw new Error("WEBAUTHN_APPROVAL_CHALLENGE_INVALID");
+        const plan = await tx.financialPlan.findUnique({ where: { id: input.financialPlanId }, select: { status: true } });
+        if (!plan || plan.status !== "READY") throw new Error("FINANCIAL_PLAN_NOT_READY");
+        return create(tx);
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+      : await create(this.db);
     return mapWebAuthnChallenge(row);
   }
   async getWebAuthnChallenge(id: string): Promise<StoredWebAuthnChallenge | null> {

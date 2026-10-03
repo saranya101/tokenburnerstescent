@@ -41,6 +41,38 @@ describe("API status handling", () => {
     expect(response.statusCode).toBe(400); expect(confirm).not.toHaveBeenCalled(); await app.close();
   });
 
+  it("rejects caller-supplied bundle authority and accepts only server-side confirmation", async () => {
+    const confirm = vi.fn().mockResolvedValue({ status: "CONFIRMED" }); const injected = services();
+    injected.bundles = { handles: () => true, receive: async () => ({}), answerClarification: async () => ({}), confirm } as unknown as ApiServices["bundles"];
+    const app = buildApp(injected);
+    const invalid = await app.inject({ method: "POST", url: "/v1/goal-bundle-candidates/candidate-1/confirm", payload: { bundleId: "caller", contractHash: "caller", items: [] } });
+    expect(invalid.statusCode).toBe(400); expect(confirm).not.toHaveBeenCalled();
+    const valid = await app.inject({ method: "POST", url: "/v1/goal-bundle-candidates/candidate-1/confirm", payload: {} });
+    expect(valid.statusCode).toBe(200); expect(confirm).toHaveBeenCalledOnce(); await app.close();
+  });
+
+  it("keeps single requests on the legacy path and routes only composite requests to bundle orchestration", async () => {
+    const receiveSingle = vi.fn().mockResolvedValue({ path: "single" }); const receiveBundle = vi.fn().mockResolvedValue({ path: "bundle" }); const injected = services();
+    injected.messages = { receive: receiveSingle } as unknown as ApiServices["messages"];
+    injected.bundles = { handles: (text: string) => text.includes(" and buy "), receive: receiveBundle } as unknown as ApiServices["bundles"];
+    const app = buildApp(injected);
+    expect((await app.inject({ method: "POST", url: "/v1/messages", payload: { userId: "user-1", text: "Send John USD 350." } })).json()).toEqual({ path: "single" });
+    expect((await app.inject({ method: "POST", url: "/v1/messages", payload: { userId: "user-1", text: "Send John USD 300 and buy one Apple share." } })).json()).toEqual({ path: "bundle" });
+    expect(receiveSingle).toHaveBeenCalledOnce(); expect(receiveBundle).toHaveBeenCalledOnce(); await app.close();
+  });
+
+  it("accepts voice evidence only as provenance on the same message route", async () => {
+    const receive = vi.fn().mockResolvedValue({ status: "AWAITING_GOAL_CONFIRMATION" }); const injected = services();
+    injected.messages = { receive } as unknown as ApiServices["messages"];
+    injected.bundles = { handles: () => false } as unknown as ApiServices["bundles"];
+    const app = buildApp(injected); const voice = { rawTranscript: "Send John USD 300", provider: "browser-web-speech", transcribedAt: "2026-10-03T10:00:00.000Z" };
+    const valid = await app.inject({ method: "POST", url: "/v1/messages", payload: { userId: "user-1", text: "Send John USD 3000", inputMode: "VOICE", voice } });
+    const forged = await app.inject({ method: "POST", url: "/v1/messages", payload: { userId: "user-1", text: "Send John USD 3000", inputMode: "VOICE", voice, edited: false } });
+    expect(valid.statusCode).toBe(200); expect(forged.statusCode).toBe(400);
+    expect(receive).toHaveBeenCalledOnce(); expect(receive).toHaveBeenCalledWith({ userId: "user-1", text: "Send John USD 3000", inputMode: "VOICE", voice }, expect.any(String));
+    await app.close();
+  });
+
   it("accepts only a candidate choice or typed text for clarification continuation", async () => {
     const answerClarification = vi.fn().mockResolvedValue({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-1", clarifications: [] });
     const injected = services(); injected.messages = { receive: async () => ({}), answerClarification, confirm: async () => ({}) } as unknown as ApiServices["messages"];

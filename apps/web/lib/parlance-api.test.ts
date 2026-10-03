@@ -33,6 +33,14 @@ it("sends a strict empty body when the customer explicitly confirms meaning", as
   expect(fetcher).toHaveBeenCalledWith("/api/parlance/goal-candidates/candidate-1/confirm", expect.objectContaining({ method: "POST", body: "{}" }));
 });
 
+it("sends no client bundle payload or hash when confirming combined meaning", async () => {
+  const contract = { schemaVersion: "1", bundleId: "bundle-1", bundleVersion: 1, items: [{ itemId: "item-1", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [], bindings: [] }], globalConstraints: [], explicitDependencies: [], contractHash: "b".repeat(64) };
+  const fetcher = vi.fn().mockResolvedValue(json({ goalBundleContract: contract }));
+  const api = createParlanceApi(fetcher as typeof fetch); await api.confirmGoalBundle("candidate-bundle");
+  expect(fetcher).toHaveBeenCalledWith("/api/parlance/goal-bundle-candidates/candidate-bundle/confirm", expect.objectContaining({ method: "POST", body: "{}" }));
+  expect(String(fetcher.mock.calls[0]?.[1]?.body)).not.toMatch(/bundleId|contractHash|items/u);
+});
+
 it("uses only server-bound passkey enrollment endpoints", async () => {
   const fetcher = vi.fn()
     .mockResolvedValueOnce(json({ status: "NOT_ENROLLED", userVerification: "required" }))
@@ -54,4 +62,23 @@ it("continues clarification with only the request identifier and customer answer
   const fetcher = vi.fn().mockResolvedValue(json({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: { schemaVersion: "1", goal: { type: "PAY_BILL", billerId: "biller-1" }, constraints: [], preferences: [], entityBindings: [] } }));
   const api = createParlanceApi(fetcher as typeof fetch); await api.answerClarification("clarification-1", { selectedCandidateId: "account-1" });
   expect(fetcher).toHaveBeenCalledWith("/api/parlance/clarifications/clarification-1/answer", expect.objectContaining({ method: "POST", body: JSON.stringify({ selectedCandidateId: "account-1" }) }));
+});
+
+it("preserves the customer-safe semantic validation failure response", async () => {
+  const response = {
+    status: "SEMANTIC_VALIDATION_FAILED",
+    message: "We couldn't safely verify that we understood your request. Please clarify or rephrase it.",
+  } as const;
+  const fetcher = vi.fn().mockResolvedValue(json(response));
+  const api = createParlanceApi(fetcher as typeof fetch);
+  await expect(api.sendMessage("Send USD 7,000 to NTU")).resolves.toEqual(response);
+});
+
+it("adds voice provenance to the same messages endpoint and no compiler or bank endpoint", async () => {
+  const response = { status: "SEMANTIC_VALIDATION_FAILED", message: "Please clarify." } as const;
+  const fetcher = vi.fn().mockResolvedValue(json(response)); const api = createParlanceApi(fetcher as typeof fetch);
+  const voice = { inputMode: "VOICE" as const, voice: { rawTranscript: "Send John USD 300", provider: "browser-web-speech", transcribedAt: "2026-10-03T10:00:00.000Z" } };
+  await api.sendMessage("Send John USD 3000", voice);
+  expect(fetcher).toHaveBeenCalledWith("/api/parlance/messages", expect.objectContaining({ body: JSON.stringify({ text: "Send John USD 3000", ...voice }) }));
+  expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual(["/api/parlance/messages"]);
 });

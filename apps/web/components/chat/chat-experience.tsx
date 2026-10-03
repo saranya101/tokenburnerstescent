@@ -1,7 +1,7 @@
 "use client";
 
 import type { CustomerFlowState } from "../../lib/customer-flow";
-import { presentGoal, presentPlan, type PlanPresentation } from "../../lib/customer-presentation";
+import { presentBundle, presentBundlePlan, presentGoal, presentPlan, type PlanPresentation } from "../../lib/customer-presentation";
 import { customerExecutionMessage } from "../../lib/customer-safety-copy";
 import { useCustomerFlow } from "../../hooks/use-customer-flow";
 import { ExecutionTimeline, type TimelineItem } from "../execution/execution-timeline";
@@ -9,6 +9,7 @@ import { ReapprovalCard } from "../execution/reapproval-card";
 import { SafeStopCard } from "../execution/safe-stop-card";
 import { ClarificationCard } from "../goal/clarification-card";
 import { UnderstoodGoalCard } from "../goal/understood-goal-card";
+import { UnderstoodBundleCard } from "../goal/understood-bundle-card";
 import { FinancialPlanPreview } from "../plan/financial-plan-preview";
 import { PasskeySetupCard } from "../security/passkey-setup-card";
 import { Icon } from "../ui/icon";
@@ -27,7 +28,7 @@ function executionTimeline(presentation: PlanPresentation, state: CustomerFlowSt
   const finished = state.phase === "COMPLETED";
   return [
     { label: "Latest account state checked", detail: "Balances and availability were checked", status: "complete" },
-    { label: "Approved route verified", detail: "Only the exact passkey-approved route can continue", status: finished ? "complete" : state.phase === "EXECUTING" ? "active" : "complete" },
+    { label: "Payment approval checked", detail: "Your passkey approval matches these payment details", status: finished ? "complete" : state.phase === "EXECUTING" ? "active" : "complete" },
     ...presentation.steps.map((step) => ({ label: step.title, detail: step.summary, status: statusFor(step.id, state) })),
     { label: "Confirmed with bank", detail: finished ? "Bank confirmation received" : "Waiting for final bank confirmation", status: finished ? "complete" : state.phase === "EXECUTION_ERROR" ? "stopped" : "waiting" },
   ];
@@ -35,22 +36,26 @@ function executionTimeline(presentation: PlanPresentation, state: CustomerFlowSt
 
 export function ChatExperience() {
   const flow = useCustomerFlow(); const { state } = flow; const message = requestText(state); const isInitial = state.phase === "COMPOSE";
-  const planPresentation = "goal" in state && "plan" in state ? presentPlan(state.goal, state.plan) : undefined;
+  const planPresentation = "plan" in state ? ("bundle" in state ? presentBundlePlan(state.bundle, state.plan) : "goal" in state ? presentPlan(state.goal, state.plan) : undefined) : undefined;
   return <div className={`parlance-workspace ${isInitial ? "is-initial" : "is-active"}`}>
-    <header className="workspace-header"><div className="workspace-title"><span className="parlance-symbol"><Icon name="spark" /></span><div><p>{isInitial ? "Parlance" : "Active request"}</p><h1>{isInitial ? "Tell us the outcome you want." : "Parlance"}</h1></div></div>{isInitial && <span className="workspace-security"><Icon name="shield" />Inside digibank</span>}</header>
+    <header className="workspace-header"><div className="workspace-title"><div><p>{isInitial ? "Good evening, Alex." : "Pay & Transfer"}</p><h1>{isInitial ? "What would you like to do?" : "Your payment request"}</h1></div></div></header>
     <div className="workspace-body">
-      {isInitial && <div className="workspace-intro"><h2>What would you like to do?</h2><p>AI helps understand your request. Banking systems decide how it can be completed safely.</p></div>}
-      {isInitial && <ConversationComposer onSubmit={(text) => void flow.submitMessage(text)} />}
+      {isInitial && <ConversationComposer onSubmit={(text, input) => void flow.submitMessage(text, input)} />}
       {message && <div className="conversation-stream">
-        <div className="request-context"><span className="request-context-icon"><Icon name="spark" /></span><div><small>Your request</small><strong>{message}</strong></div><button type="button" onClick={flow.reset}>Start over <Icon name="arrow" /></button></div>
+        <div className="request-context"><span className="request-context-icon"><Icon name="transfer" /></span><div><small>Your request</small><strong>“{message}”</strong></div><button type="button" onClick={flow.reset}>Start over <Icon name="arrow" /></button></div>
         {state.phase === "INTERPRETING" && <WorkingState title="Understanding your request…" detail="Checking names and details against your available banking relationships." />}
         {state.phase === "CLARIFICATION" && state.clarifications[0] && <ClarificationCard clarification={state.clarifications[0]} onCancel={flow.reset} onSelect={(option) => void flow.answerClarification(state.clarifications[0]!, option)} onAnswerText={(answer) => void flow.answerClarificationText(state.clarifications[0]!, answer)} />}
+        {state.phase === "SEMANTIC_VALIDATION_FAILED" && <OutcomeCard title="Please clarify your request" detail={state.message} onDone={flow.reset} />}
         {state.phase === "GOAL_REVIEW" && <>{state.answers.map((answer) => <InlineNotice key={`${answer.reference}:${answer.answer}`} title={`You clarified “${answer.reference}”`} detail={answer.answer} />)}<UnderstoodGoalCard goal={presentGoal(state.candidate, new Map(state.answers.map((answer) => [answer.reference, answer.answer])))} onEdit={flow.reset} onConfirm={() => void flow.confirmMeaning()} /></>}
+        {state.phase === "BUNDLE_REVIEW" && <>{state.answers.map((answer) => <InlineNotice key={`${answer.reference}:${answer.answer}`} title={`You clarified “${answer.reference}”`} detail={answer.answer} />)}<UnderstoodBundleCard bundle={presentBundle(state.candidate)} onEdit={flow.reset} onConfirm={() => void flow.confirmMeaning()} /></>}
         {state.phase === "GOAL_CONFIRMATION_FAILED" && <><UnderstoodGoalCard goal={presentGoal(state.candidate)} onEdit={flow.reset} onConfirm={() => void flow.confirmMeaning()} /><InlineNotice title="Meaning confirmation could not be recorded" detail="No plan was created. Review the meaning and try again when ready." /></>}
+        {state.phase === "BUNDLE_CONFIRMATION_FAILED" && <><UnderstoodBundleCard bundle={presentBundle(state.candidate)} onEdit={flow.reset} onConfirm={() => void flow.confirmMeaning()} /><InlineNotice title="Meaning confirmation could not be recorded" detail="No plan was created. Review the combined meaning and try again when ready." /></>}
         {state.phase === "CONFIRMING_GOAL" && <WorkingState title="Confirming what you mean…" detail="Your confirmation is being recorded before any transaction plan is created." />}
+        {state.phase === "CONFIRMING_BUNDLE" && <WorkingState title="Confirming your combined request…" detail="Your confirmation is being recorded before any transaction plan is created." />}
         {state.phase === "COMPILING" && <CompilingState />}
-        {state.phase === "UNAVAILABLE" && <OutcomeCard title={state.kind === "POLICY_BLOCKED" ? "Cannot currently be completed safely" : "This goal cannot currently be completed"} detail={state.kind === "POLICY_BLOCKED" ? customerExecutionMessage(undefined, "POLICY_BLOCKED") : state.message} onDone={flow.reset} />}
-        {planPresentation && state.phase === "PLAN_REVIEW" && <>{state.refreshed && <InlineNotice title="Plan refreshed" detail="This plan was refreshed because its quote expired. Please review it again." />}{state.passkeyReady && <InlineNotice title="Passkey ready" detail="Review this exact plan, then confirm it with your passkey." />}<FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => void flow.authorizeAndExecute()} /></>}
+        {state.phase === "COMPILING_BUNDLE" && <CompilingState />}
+        {state.phase === "UNAVAILABLE" && <OutcomeCard title="We can’t complete this payment right now" detail={state.kind === "POLICY_BLOCKED" ? customerExecutionMessage(undefined, "POLICY_BLOCKED") : state.message} onDone={flow.reset} />}
+        {planPresentation && state.phase === "PLAN_REVIEW" && <>{state.refreshed && <InlineNotice title="Payment details refreshed" detail="Some details changed while you were reviewing this payment. Please review the updated payment before continuing." />}{state.passkeyReady && <InlineNotice title="Passkey ready" detail="Review these payment details, then confirm with your passkey." />}<FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => void flow.authorizeAndExecute()} /></>}
         {planPresentation && state.phase === "PASSKEY_REQUIRED" && <><FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => undefined} busy /><PasskeySetupCard transaction onReady={() => void flow.passkeyEnrolled()} /></>}
         {planPresentation && state.phase === "AUTHORIZING" && <><FinancialPlanPreview scenario={planPresentation} onCancel={() => undefined} onApprove={() => undefined} busy /><WorkingState title="Confirm with your passkey" detail="Your bank is verifying approval for this exact plan." /></>}
         {planPresentation && state.phase === "PASSKEY_CANCELLED" && <><FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => void flow.authorizeAndExecute()} /><InlineNotice title="Passkey confirmation was cancelled" detail="Nothing was authorized or executed. You can try again when ready." /></>}
@@ -67,6 +72,6 @@ export function ChatExperience() {
 }
 
 function WorkingState({ title, detail }: { title: string; detail: string }) { return <section className="product-card compiling-card" aria-live="polite"><div className="compiler-orbit" aria-hidden="true"><span /><i /></div><h2>{title}</h2><p className="card-description">{detail}</p></section>; }
-function CompilingState() { return <section className="product-card compiling-card" aria-live="polite"><div className="compiler-orbit" aria-hidden="true"><span /><i /></div><p className="eyebrow">Your confirmed goal</p><h2>Finding a safe route…</h2><p className="card-description">Latest account state is being checked before deterministic banking systems construct a valid route.</p><div className="compile-checks"><span className="done">✓ <strong>Meaning confirmed</strong></span><span className="active"><i /> Checking latest account state</span><span><i /> Constructing a valid route</span></div><p className="trust-note"><Icon name="shield" /> The conversational layer does not create transaction steps.</p></section>; }
+function CompilingState() { return <section className="product-card compiling-card" aria-live="polite"><div className="compiler-orbit" aria-hidden="true"><span /><i /></div><p className="eyebrow">Request confirmed</p><h2>Preparing your payment details…</h2><p className="card-description">We’re checking your latest account information before showing you exactly what will happen.</p><div className="compile-checks"><span className="done">✓ <strong>Request understood</strong></span><span className="active"><i /> Checking latest account information</span><span><i /> Preparing payment details</span></div></section>; }
 function InlineNotice({ title, detail }: { title: string; detail: string }) { return <section className="product-card"><h2>{title}</h2><p className="card-description">{detail}</p></section>; }
 function OutcomeCard({ title, detail, onDone }: { title: string; detail: string; onDone(): void }) { return <section className="product-card safe-stop-card"><div className="safe-stop-symbol"><Icon name="shield" /></div><h2>{title}</h2><p className="card-description">{detail}</p><div className="card-actions"><button className="button bank-primary" type="button" onClick={onDone}>Done</button></div></section>; }
