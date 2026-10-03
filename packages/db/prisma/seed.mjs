@@ -65,6 +65,12 @@ try {
   await db.$transaction(async (tx) => {
     await tx.user.upsert({ where: { id: userId }, create: { id: userId }, update: {} });
 
+    await tx.userRiskProfile.upsert({
+      where: { userId },
+      create: { userId, kycStatus: "VERIFIED", version: 1 },
+      update: { kycStatus: "VERIFIED", version: 1 },
+    });
+
     for (const account of accounts) {
       await tx.account.upsert({
         where: { id: account.id },
