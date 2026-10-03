@@ -386,6 +386,131 @@ describe.skipIf(!testDatabaseUrl)(
     );
 
     it(
+      "settles an executed step and consumes the completed reservation",
+      async () => {
+        const userId = await createUser();
+
+        const plan = await createPlan(
+          userId,
+          "10000",
+          "e",
+        );
+
+        const repository =
+          new PrismaRiskRepository(db);
+
+        const now = new Date(
+          "2026-10-03T12:00:00.000Z",
+        );
+
+        const reserved = await repository.reserve({
+          userId,
+          financialPlanId: plan.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now,
+        });
+
+        expect(reserved.reservation).toBeDefined();
+
+        const settled = await repository.settleStep({
+          reservationId: reserved.reservation!.id,
+          userId,
+          financialPlanId: plan.id,
+          financialPlanHash: plan.planHash,
+          policyVersion: policy.policyVersion,
+          stepId: plan.steps[0]!.id,
+          now: new Date(
+            "2026-10-03T12:01:00.000Z",
+          ),
+        });
+
+        expect(settled.status).toBe("CONSUMED");
+
+        const entry =
+          await db.riskVelocityEntry.findFirstOrThrow({
+            where: {
+              reservationId: reserved.reservation!.id,
+            },
+          });
+
+        expect(entry.status).toBe("SETTLED");
+        expect(entry.settledAt).not.toBeNull();
+      },
+      15_000,
+    );
+
+    it(
+      "releases unused reserved exposure so it does not count against later velocity",
+      async () => {
+        const userId = await createUser();
+
+        const firstPlan = await createPlan(
+          userId,
+          "300000",
+          "f",
+        );
+
+        const repository =
+          new PrismaRiskRepository(db);
+
+        const now = new Date(
+          "2026-10-03T12:00:00.000Z",
+        );
+
+        const first = await repository.reserve({
+          userId,
+          financialPlanId: firstPlan.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now,
+        });
+
+        expect(first.assessment.decision).toBe("ALLOW");
+
+        await repository.release({
+          reservationId: first.reservation!.id,
+          userId,
+          financialPlanId: firstPlan.id,
+          financialPlanHash: firstPlan.planHash,
+          policyVersion: policy.policyVersion,
+          now: new Date(
+            "2026-10-03T12:01:00.000Z",
+          ),
+        });
+
+        const releasedEntry =
+          await db.riskVelocityEntry.findFirstOrThrow({
+            where: {
+              reservationId: first.reservation!.id,
+            },
+          });
+
+        expect(releasedEntry.status).toBe("RELEASED");
+
+        const secondPlan = await createPlan(
+          userId,
+          "300000",
+          "1",
+        );
+
+        const second = await repository.reserve({
+          userId,
+          financialPlanId: secondPlan.id,
+          policy,
+          traceId: `it-risk-${randomUUID()}`,
+          now: new Date(
+            "2026-10-03T12:02:00.000Z",
+          ),
+        });
+
+        expect(second.assessment.decision).toBe("ALLOW");
+        expect(second.reservation).toBeDefined();
+      },
+      15_000,
+    );
+
+    it(
       "fails closed when KYC authority is unavailable",
       async () => {
         const userId = `it-risk-${randomUUID()}`;

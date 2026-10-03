@@ -486,4 +486,180 @@ export class PrismaRiskRepository {
 
     throw new Error("RISK_RESERVATION_RETRY_EXHAUSTED");
   }
+
+  async getActiveReservation(input: {
+    userId: string;
+    financialPlanId: string;
+    financialPlanHash: string;
+    policyVersion: string;
+    now?: Date;
+  }): Promise<RiskReservation | null> {
+    const now = input.now ?? new Date();
+
+    const row = await this.db.riskReservation.findFirst({
+      where: {
+        userId: input.userId,
+        financialPlanId: input.financialPlanId,
+        financialPlanHash: input.financialPlanHash,
+        policyVersion: input.policyVersion,
+        status: "ACTIVE",
+        expiresAt: { gt: now },
+      },
+      include: {
+        assessment: true,
+        entries: true,
+      },
+    });
+
+    return row ? mapReservation(row) : null;
+  }
+
+  async settleStep(input: {
+    reservationId: string;
+    userId: string;
+    financialPlanId: string;
+    financialPlanHash: string;
+    policyVersion: string;
+    stepId: string;
+    now?: Date;
+  }): Promise<RiskReservation> {
+    const now = input.now ?? new Date();
+
+    return this.db.$transaction(
+      async (tx) => {
+        const reservation = await tx.riskReservation.findUnique({
+          where: { id: input.reservationId },
+          include: {
+            assessment: true,
+            entries: true,
+          },
+        });
+
+        if (
+          !reservation ||
+          reservation.userId !== input.userId ||
+          reservation.financialPlanId !== input.financialPlanId ||
+          reservation.financialPlanHash !== input.financialPlanHash ||
+          reservation.policyVersion !== input.policyVersion
+        ) {
+          throw new Error("RISK_RESERVATION_BINDING_INVALID");
+        }
+
+        if (
+          reservation.status !== "ACTIVE" ||
+          reservation.expiresAt.getTime() <= now.getTime()
+        ) {
+          throw new Error("RISK_RESERVATION_NOT_ACTIVE");
+        }
+
+        const settled = await tx.riskVelocityEntry.updateMany({
+          where: {
+            reservationId: input.reservationId,
+            stepId: input.stepId,
+            status: "RESERVED",
+          },
+          data: {
+            status: "SETTLED",
+            settledAt: now,
+          },
+        });
+
+        if (settled.count !== 1) {
+          throw new Error("RISK_STEP_NOT_RESERVED");
+        }
+
+        const remaining = await tx.riskVelocityEntry.count({
+          where: {
+            reservationId: input.reservationId,
+            status: "RESERVED",
+          },
+        });
+
+        if (remaining === 0) {
+          await tx.riskReservation.update({
+            where: { id: input.reservationId },
+            data: {
+              status: "CONSUMED",
+              consumedAt: now,
+            },
+          });
+        }
+
+        const updated = await tx.riskReservation.findUniqueOrThrow({
+          where: { id: input.reservationId },
+          include: {
+            assessment: true,
+            entries: true,
+          },
+        });
+
+        return mapReservation(updated);
+      },
+      {
+        isolationLevel:
+          Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+  }
+
+  async release(input: {
+    reservationId: string;
+    userId: string;
+    financialPlanId: string;
+    financialPlanHash: string;
+    policyVersion: string;
+    now?: Date;
+  }): Promise<boolean> {
+    const now = input.now ?? new Date();
+
+    return this.db.$transaction(
+      async (tx) => {
+        const reservation = await tx.riskReservation.findUnique({
+          where: { id: input.reservationId },
+        });
+
+        if (!reservation) {
+          return false;
+        }
+
+        if (
+          reservation.userId !== input.userId ||
+          reservation.financialPlanId !== input.financialPlanId ||
+          reservation.financialPlanHash !== input.financialPlanHash ||
+          reservation.policyVersion !== input.policyVersion
+        ) {
+          throw new Error("RISK_RESERVATION_BINDING_INVALID");
+        }
+
+        if (reservation.status !== "ACTIVE") {
+          return false;
+        }
+
+        await tx.riskVelocityEntry.updateMany({
+          where: {
+            reservationId: input.reservationId,
+            status: "RESERVED",
+          },
+          data: {
+            status: "RELEASED",
+            releasedAt: now,
+          },
+        });
+
+        await tx.riskReservation.update({
+          where: { id: input.reservationId },
+          data: {
+            status: "RELEASED",
+            releasedAt: now,
+          },
+        });
+
+        return true;
+      },
+      {
+        isolationLevel:
+          Prisma.TransactionIsolationLevel.Serializable,
+      },
+    );
+  }
 }
