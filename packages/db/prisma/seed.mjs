@@ -68,7 +68,7 @@ try {
     await tx.userRiskProfile.upsert({
       where: { userId },
       create: { userId, kycStatus: "VERIFIED", version: 1 },
-      update: { kycStatus: "VERIFIED", version: 1 },
+      update: {},
     });
 
     for (const account of accounts) {
