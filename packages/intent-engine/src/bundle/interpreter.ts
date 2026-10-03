@@ -14,7 +14,7 @@ import type {
   IntentBundleModelClient,
   InterpretIntentBundleInput,
 } from "./types.js";
-import { sourceSupportedExplicitDependencies } from "./validator.js";
+import { sourceActionGoalTypes, sourceSupportedExplicitDependencies } from "./validator.js";
 
 const ClarifiedIntentBundleItemV1 = IntentBundleItemDraftV1.omit({ itemId: true }).strict();
 
@@ -47,8 +47,46 @@ export class ModelBackedIntentBundleInterpreter implements IntentBundleInterpret
         validationIssues(parsed.error),
       );
     }
-    return normalizeSourceSupportedDependencyDirections(input.text, parsed.data);
+    const sourceOrdered = normalizeUniquelyMatchableItemOrder(input.text, parsed.data);
+    return normalizeSourceSupportedDependencyDirections(input.text, sourceOrdered);
   }
+}
+
+function normalizeUniquelyMatchableItemOrder(sourceText: string, bundle: IntentBundleDraft): IntentBundleDraft {
+  const sourceTypes = sourceActionGoalTypes(sourceText);
+  if (sourceTypes.length !== bundle.items.length) return bundle;
+
+  const sourceCounts = goalTypeCounts(sourceTypes);
+  const bundleCounts = goalTypeCounts(bundle.items.map(({ goal }) => goal.type));
+  if (
+    sourceCounts.size !== bundleCounts.size
+    || [...sourceCounts].some(([type, count]) => count !== 1 || bundleCounts.get(type) !== count)
+  ) return bundle;
+
+  const stableIds = bundle.items.map(({ itemId }) => itemId);
+  const orderedItems = sourceTypes.map((type) => bundle.items.find((item) => item.goal.type === type));
+  if (orderedItems.some((item) => item === undefined)) return bundle;
+
+  const remappedIds = new Map<string, string>();
+  orderedItems.forEach((item, index) => {
+    const stableId = stableIds[index];
+    if (item !== undefined && stableId !== undefined) remappedIds.set(item.itemId, stableId);
+  });
+  return IntentBundleDraftV1.parse({
+    ...bundle,
+    items: orderedItems.map((item, index) => ({ ...item!, itemId: stableIds[index]! })),
+    explicitDependencies: bundle.explicitDependencies.map((dependency) => ({
+      ...dependency,
+      beforeItemId: remappedIds.get(dependency.beforeItemId) ?? dependency.beforeItemId,
+      afterItemId: remappedIds.get(dependency.afterItemId) ?? dependency.afterItemId,
+    })),
+  });
+}
+
+function goalTypeCounts(types: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const type of types) counts.set(type, (counts.get(type) ?? 0) + 1);
+  return counts;
 }
 
 function normalizeSourceSupportedDependencyDirections(sourceText: string, bundle: IntentBundleDraft): IntentBundleDraft {

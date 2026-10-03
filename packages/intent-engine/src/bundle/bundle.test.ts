@@ -52,6 +52,105 @@ describe("multi-intent bundle interpretation", () => {
     expect(JSON.stringify(vi.mocked(client.generateIntentBundle).mock.calls[0]?.[0])).not.toContain("private-user");
   });
 
+  it("normalizes reversed headline items into source order and preserves the global reserve", async () => {
+    const expected = acceptanceBundle();
+    const parsed = await new ModelBackedIntentBundleInterpreter(modelClient({
+      schemaVersion: "1",
+      items: [
+        { ...expected.items[1], itemId: "model-asset" },
+        { ...expected.items[0], itemId: "model-transfer" },
+      ],
+      globalConstraints: expected.globalConstraints,
+      explicitDependencies: [{ beforeItemId: "model-asset", afterItemId: "model-transfer", reason: "USER_EXPLICIT_ORDER" }],
+    })).interpretUserRequest({ text: acceptanceText, userId: "user" });
+
+    expect(parsed.items.map(({ itemId, goal }) => ({ itemId, type: goal.type }))).toEqual([
+      { itemId: "item-1", type: "DELIVER_MONEY" },
+      { itemId: "item-2", type: "ACQUIRE_ASSET" },
+    ]);
+    expect(parsed.explicitDependencies).toEqual([{ beforeItemId: "item-1", afterItemId: "item-2", reason: "USER_EXPLICIT_ORDER" }]);
+    expect(parsed.globalConstraints).toEqual([{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" } }]);
+    expect(new DeterministicIntentBundleCoverageValidator().validate({ sourceText: acceptanceText, bundle: parsed })).toEqual({ status: "PASS", mismatches: [] });
+  });
+
+  it("normalizes reversed model items for after while preserving execution direction", async () => {
+    const expected = acceptanceBundle();
+    const text = "Buy one Apple share after sending John USD 300";
+    const parsed = await new ModelBackedIntentBundleInterpreter(modelClient({
+      schemaVersion: "1",
+      items: [
+        { ...expected.items[0], itemId: "model-transfer" },
+        { ...expected.items[1], itemId: "model-asset" },
+      ],
+      globalConstraints: [],
+      explicitDependencies: [{ beforeItemId: "model-transfer", afterItemId: "model-asset", reason: "USER_EXPLICIT_ORDER" }],
+    })).interpretUserRequest({ text, userId: "user" });
+
+    expect(parsed.items.map(({ itemId, goal }) => ({ itemId, type: goal.type }))).toEqual([
+      { itemId: "item-1", type: "ACQUIRE_ASSET" },
+      { itemId: "item-2", type: "DELIVER_MONEY" },
+    ]);
+    expect(parsed.explicitDependencies).toEqual([{ beforeItemId: "item-2", afterItemId: "item-1", reason: "USER_EXPLICIT_ORDER" }]);
+    expect(new DeterministicIntentBundleCoverageValidator().validate({ sourceText: text, bundle: parsed })).toEqual({ status: "PASS", mismatches: [] });
+  });
+
+  it("normalizes reversed plain-and items without creating a dependency", async () => {
+    const expected = acceptanceBundle();
+    const text = "Send John USD 300 and buy one Apple share";
+    const parsed = await new ModelBackedIntentBundleInterpreter(modelClient({
+      schemaVersion: "1",
+      items: [
+        { ...expected.items[1], itemId: "model-asset" },
+        { ...expected.items[0], itemId: "model-transfer" },
+      ],
+      globalConstraints: [],
+      explicitDependencies: [],
+    })).interpretUserRequest({ text, userId: "user" });
+
+    expect(parsed.items.map(({ goal }) => goal.type)).toEqual(["DELIVER_MONEY", "ACQUIRE_ASSET"]);
+    expect(parsed.explicitDependencies).toEqual([]);
+    expect(new DeterministicIntentBundleCoverageValidator().validate({ sourceText: text, bundle: parsed })).toEqual({ status: "PASS", mismatches: [] });
+  });
+
+  it("does not reorder ambiguous duplicate goal types using type-only evidence", async () => {
+    const text = "Send John USD 100 and send Mary USD 200";
+    const parsed = await new ModelBackedIntentBundleInterpreter(modelClient({
+      schemaVersion: "1",
+      items: [
+        { itemId: "model-mary", goal: { type: "DELIVER_MONEY", recipientReference: "Mary", amount: { currency: "USD", minorUnits: "20000" } }, constraints: [], preferences: [] },
+        { itemId: "model-john", goal: { type: "DELIVER_MONEY", recipientReference: "John", amount: { currency: "USD", minorUnits: "10000" } }, constraints: [], preferences: [] },
+      ],
+      globalConstraints: [], explicitDependencies: [],
+    })).interpretUserRequest({ text, userId: "user" });
+
+    expect(parsed.items.map(({ itemId, goal }) => ({ itemId, recipient: goal.type === "DELIVER_MONEY" ? goal.recipientReference : undefined }))).toEqual([
+      { itemId: "item-1", recipient: "Mary" },
+      { itemId: "item-2", recipient: "John" },
+    ]);
+  });
+
+  it("remaps existing dependency IDs without synthesizing or removing edges", async () => {
+    const expected = acceptanceBundle();
+    const text = "Send John USD 300 and buy one Apple share";
+    const parsed = await new ModelBackedIntentBundleInterpreter(modelClient({
+      schemaVersion: "1",
+      items: [
+        { ...expected.items[1], itemId: "model-asset" },
+        { ...expected.items[0], itemId: "model-transfer" },
+      ],
+      globalConstraints: [],
+      explicitDependencies: [{ beforeItemId: "model-asset", afterItemId: "model-transfer", reason: "USER_EXPLICIT_ORDER" }],
+    })).interpretUserRequest({ text, userId: "user" });
+
+    expect(parsed.items.map(({ itemId, goal }) => ({ itemId, type: goal.type }))).toEqual([
+      { itemId: "item-1", type: "DELIVER_MONEY" },
+      { itemId: "item-2", type: "ACQUIRE_ASSET" },
+    ]);
+    expect(parsed.explicitDependencies).toEqual([{ beforeItemId: "item-2", afterItemId: "item-1", reason: "USER_EXPLICIT_ORDER" }]);
+    expect(new DeterministicIntentBundleCoverageValidator().validate({ sourceText: text, bundle: parsed }).mismatches)
+      .toContainEqual(expect.objectContaining({ code: "DEPENDENCY_NOT_SUPPORTED_BY_SOURCE" }));
+  });
+
   it("keeps a plain conjunction as two intents with no ordering edge", async () => {
     const text = "Send John USD 300 and buy Apple";
     const value = acceptanceBundle(false);

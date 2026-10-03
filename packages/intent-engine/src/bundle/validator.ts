@@ -17,11 +17,11 @@ export interface IntentBundleCoverageValidationInput {
   readonly bundle: unknown;
 }
 
-type GoalType = IntentBundleDraft["items"][number]["goal"]["type"];
+export type SourceActionGoalType = IntentBundleDraft["items"][number]["goal"]["type"];
 type MismatchDetail = Omit<IntentValidationMismatch, "code" | "field">;
 
 interface ActionSignal {
-  readonly type: GoalType;
+  readonly type: SourceActionGoalType;
   readonly start: number;
   readonly end: number;
 }
@@ -110,6 +110,11 @@ export function sourceSupportedExplicitDependencies(
   });
 }
 
+/** Ordered goal types detected by the same deterministic source scanner used for coverage. */
+export function sourceActionGoalTypes(sourceText: string): readonly SourceActionGoalType[] {
+  return actionSignals(sourceText).map(({ type }) => type);
+}
+
 function validateGlobalConstraints(
   sourceText: string,
   bundle: IntentBundleDraft,
@@ -147,7 +152,7 @@ function actionSignals(sourceText: string): readonly ActionSignal[] {
   return signals;
 }
 
-function goalTypeForVerb(verb: string, followingText: string): GoalType {
+function goalTypeForVerb(verb: string, followingText: string): SourceActionGoalType {
   if (/^(?:buy|buying|acquir|purchas|get|getting|invest)/u.test(verb)) return "ACQUIRE_ASSET";
   if (/^(?:pay|sett)/u.test(verb)) return "PAY_BILL";
   if (/^mov/u.test(verb)) return "MOVE_FUNDS";

@@ -101,7 +101,9 @@ describe("production bundle message orchestration", () => {
 
   it("routes the headline voice transcript through the existing bundle and targeted clarification path", async () => {
     const repository = new MemoryBundleRepository();
-    const service = new BundleMessageOrchestrationService(repository, interpreter(draft(acceptanceText)), () => grounder(true), undefined, undefined, undefined, undefined, () => new Date("2026-10-03T10:00:00Z"), (() => { let id = 0; return () => `voice-${++id}`; })());
+    const modelBundle = draft(acceptanceText);
+    const reversedModelBundle = IntentBundleDraftV1.parse({ ...modelBundle, items: [...modelBundle.items].reverse() });
+    const service = new BundleMessageOrchestrationService(repository, interpreter(reversedModelBundle), () => grounder(true), undefined, undefined, undefined, undefined, () => new Date("2026-10-03T10:00:00Z"), (() => { let id = 0; return () => `voice-${++id}`; })());
     const result = await service.receive({ userId: "user-1", text: acceptanceText, inputMode: "VOICE", voice: { rawTranscript: acceptanceText, provider: "browser-web-speech", transcribedAt: "2026-10-03T09:59:00.000Z" } }, "trace-voice-bundle");
     expect(result).toMatchObject({ status: "NEEDS_BUNDLE_CLARIFICATION", clarifications: [{ originalReference: "John" }] });
     expect(repository.clarification?.inputProvenance).toMatchObject({ inputMode: "VOICE", rawTranscript: acceptanceText, submittedText: acceptanceText, edited: false });
