@@ -62,6 +62,22 @@ const planInclude = {
       },
     },
   },
+  riskAssessments: {
+    orderBy: { assessedAt: "desc" },
+    take: 1,
+    select: {
+      id: true, decision: true, reasonCodes: true, exposures: true, rollingUsage: true,
+      policyVersion: true, kycStatus: true, bankStateVersion: true, assessedAt: true,
+    },
+  },
+  riskReservations: {
+    orderBy: { createdAt: "desc" },
+    take: 1,
+    select: {
+      id: true, status: true, policyVersion: true, createdAt: true, consumedAt: true, releasedAt: true,
+      entries: { orderBy: { stepId: "asc" }, select: { stepId: true, action: true, currency: true, minorUnits: true, status: true } },
+    },
+  },
 } satisfies Prisma.FinancialPlanInclude;
 
 const runInclude = {
@@ -153,6 +169,8 @@ function buildOpsRun(row: OpsRunRow, allAudit: readonly OpsAuditRow[]): OpsRun {
   const approval = plan?.approvals[0];
   const challenge = plan?.webAuthnChallenges[0];
   const execution = plan?.executionRuns[0];
+  const riskAssessment = plan?.riskAssessments?.[0];
+  const riskReservation = plan?.riskReservations?.[0];
   const candidatePayload = record(row.payload);
   const candidate = record(candidatePayload.candidate);
   const intentDraft = record(candidatePayload.intentDraft);
@@ -280,7 +298,7 @@ function buildOpsRun(row: OpsRunRow, allAudit: readonly OpsAuditRow[]): OpsRun {
     planStage = { state: "NOT_REACHED", summary: goal ? "No compiler result recorded" : "Meaning not yet confirmed" };
   }
 
-  const authorizationStage = authorization(!!plan, approval, challenge);
+  const authorizationStage = authorization(!!plan, approval, challenge, riskAssessment, riskReservation);
   const executionStage = executionStatus(!!approval?.evidence, execution);
   const bankResultStage = bankResult(execution);
 
@@ -303,7 +321,45 @@ function buildOpsRun(row: OpsRunRow, allAudit: readonly OpsAuditRow[]): OpsRun {
   };
 }
 
-function authorization(planExists: boolean, approval: OpsRunRow["goalContracts"][number]["financialPlans"][number]["approvals"][number] | undefined, challenge: OpsRunRow["goalContracts"][number]["financialPlans"][number]["webAuthnChallenges"][number] | undefined): OpsStage {
+type OpsPlan = OpsRunRow["goalContracts"][number]["financialPlans"][number];
+
+function authorization(
+  planExists: boolean,
+  approval: OpsPlan["approvals"][number] | undefined,
+  challenge: OpsPlan["webAuthnChallenges"][number] | undefined,
+  riskAssessment: OpsPlan["riskAssessments"][number] | undefined,
+  riskReservation: OpsPlan["riskReservations"][number] | undefined,
+): OpsStage {
+  const risk = riskAssessment ? {
+    decision: riskAssessment.decision,
+    reasonCodes: safeJson(riskAssessment.reasonCodes),
+    exposures: safeJson(riskAssessment.exposures),
+    rollingUsage: safeJson(riskAssessment.rollingUsage),
+    policyVersion: riskAssessment.policyVersion,
+    kycStatus: riskAssessment.kycStatus,
+    bankStateVersion: riskAssessment.bankStateVersion,
+    assessedAt: riskAssessment.assessedAt.toISOString(),
+    assessmentId: shortIdentifier(riskAssessment.id),
+    reservation: riskReservation ? {
+      id: shortIdentifier(riskReservation.id),
+      status: riskReservation.status,
+      policyVersion: riskReservation.policyVersion,
+      entries: riskReservation.entries.map((entry) => ({
+        stepId: shortIdentifier(entry.stepId), action: entry.action, currency: entry.currency,
+        minorUnits: entry.minorUnits.toString(), status: entry.status,
+      })),
+      consumedAt: riskReservation.consumedAt?.toISOString() ?? "not consumed",
+      releasedAt: riskReservation.releasedAt?.toISOString() ?? "not released",
+    } : "none",
+  } : undefined;
+
+  if (riskAssessment && riskAssessment.decision !== "ALLOW") {
+    return {
+      state: "STOPPED",
+      summary: `Risk decision: ${riskAssessment.decision}`,
+      detail: { risk },
+    };
+  }
   if (approval) {
     return {
       state: approval.evidence ? "COMPLETE" : "FAILED",
@@ -317,6 +373,7 @@ function authorization(planExists: boolean, approval: OpsRunRow["goalContracts"]
         approvedBankStateVersion: approval.bankStateVersion,
         approvalId: shortIdentifier(approval.id),
         evidenceId: approval.evidence ? shortIdentifier(approval.evidence.id) : "missing",
+        ...(risk ? { risk } : {}),
       },
     };
   }
@@ -325,13 +382,13 @@ function authorization(planExists: boolean, approval: OpsRunRow["goalContracts"]
     return {
       state: "FAILED",
       summary: challenge.status === "CONSUMED" ? "Challenge consumed without ApprovalEvidence" : `Passkey challenge ${challenge.status.toLowerCase()}`,
-      detail: { method: "PASSKEY", userVerified: false, approvalEvidence: "missing", challengeStatus: challenge.status, challengeId: shortIdentifier(challenge.id) },
+      detail: { method: "PASSKEY", userVerified: false, approvalEvidence: "missing", challengeStatus: challenge.status, challengeId: shortIdentifier(challenge.id), ...(risk ? { risk } : {}) },
     };
   }
   return {
     state: "WAITING",
     summary: challenge ? "Passkey challenge issued" : "Waiting for passkey authorization",
-    ...(challenge ? { detail: { method: "PASSKEY", userVerified: false, approvalEvidence: "missing", challengeStatus: challenge.status, challengeId: shortIdentifier(challenge.id) } } : {}),
+    ...((challenge || risk) ? { detail: { ...(challenge ? { method: "PASSKEY", userVerified: false, approvalEvidence: "missing", challengeStatus: challenge.status, challengeId: shortIdentifier(challenge.id) } : {}), ...(risk ? { risk } : {}) } } : {}),
   };
 }
 
@@ -381,6 +438,7 @@ function bankResult(execution: OpsRunRow["goalContracts"][number]["financialPlan
 function overallState(execution: OpsRunRow["goalContracts"][number]["financialPlans"][number]["executionRuns"][number] | undefined, authorizationStage: OpsStage, planStage: OpsStage, goalStage: OpsStage, semanticValidationStage: OpsStage): string {
   if (execution) return execution.status;
   if (semanticValidationStage.state === "STOPPED") return "SEMANTIC_VALIDATION_FAILED";
+  if (authorizationStage.state === "STOPPED") return `RISK_${text(record(authorizationStage.detail?.risk).decision) ?? "STOPPED"}`;
   if (authorizationStage.state === "FAILED") return "AUTHORIZATION_FAILED";
   if (authorizationStage.state === "WAITING") return "AWAITING_AUTHORIZATION";
   if (planStage.state === "STOPPED") return String(planStage.detail?.compilerOutcome ?? "COMPILATION_STOPPED");

@@ -68,4 +68,18 @@ describe("OpsDashboard", () => {
     expect(html).not.toMatch(/<(button|form|input|textarea|select)\b/i);
     expect(html).not.toMatch(/approve|execute now|run execution/i);
   });
+
+  it("renders deterministic risk evidence for a stopped REVIEW without exposing mutation controls", () => {
+    const value = run("RISK_REVIEW", {
+      authorization: stage("STOPPED", "Risk decision: REVIEW", { risk: { decision: "REVIEW", reasonCodes: ["SINGLE_TRANSACTION_REVIEW_THRESHOLD"], policyVersion: "demo-risk-v1", kycStatus: "VERIFIED", rollingUsage: [{ currency: "USD", settledAmountMinorUnits: "50100", settledTransactionCount: 1 }], reservation: "none" } }),
+      execution: stage("NOT_REACHED", "Authorization not complete"),
+      bankResult: stage("NOT_REACHED", "Execution never reached the bank"),
+    });
+    const html = renderToStaticMarkup(createElement(OpsDashboard, { runs: [value] }));
+    expect(html).toContain("Risk review");
+    expect(html).toContain("SINGLE_TRANSACTION_REVIEW_THRESHOLD");
+    expect(html).toContain("demo-risk-v1");
+    expect(html).toContain("50100");
+    expect(html).not.toMatch(/<(button|form|input|textarea|select)\b/i);
+  });
 });

@@ -71,13 +71,48 @@ describe("ops read model", () => {
   });
 
   it("represents a completed run without exposing private operation data", () => {
-    const run = buildOpsRuns([row({ execution: "COMPLETED" })], [semanticAudit("SEMANTIC_VALIDATION_PASSED", { decision: "PASS", mismatches: [] }), audit(2), audit(1)])[0]!;
+    const completed = row({ execution: "COMPLETED" });
+    completed.goalContracts[0]!.financialPlans[0]!.riskAssessments = [{
+      id: "risk-assessment-abcdefghijklmnopqrstuvwxyz", decision: "ALLOW", reasonCodes: [],
+      exposures: [{ stepId: "step-transfer-abcdefghijklmnopqrstuvwxyz", action: "TRANSFER", currency: "USD", minorUnits: "700000" }],
+      rollingUsage: [{ currency: "USD", settledAmountMinorUnits: "50100", reservedAmountMinorUnits: "0", settledTransactionCount: 1, reservedTransactionCount: 0 }],
+      policyVersion: "demo-risk-v1", kycStatus: "VERIFIED", bankStateVersion: 7, assessedAt: at(3),
+    }];
+    completed.goalContracts[0]!.financialPlans[0]!.riskReservations = [{
+      id: "risk-reservation-abcdefghijklmnopqrstuvwxyz", status: "CONSUMED", policyVersion: "demo-risk-v1", createdAt: at(3), consumedAt: at(5), releasedAt: null,
+      entries: [{ stepId: "step-transfer-abcdefghijklmnopqrstuvwxyz", action: "TRANSFER", currency: "USD", minorUnits: 700000n, status: "SETTLED" }],
+    }];
+    const run = buildOpsRuns([completed], [semanticAudit("SEMANTIC_VALIDATION_PASSED", { decision: "PASS", mismatches: [] }), audit(2), audit(1)])[0]!;
     expect(run.stages.semanticValidation).toMatchObject({ state: "COMPLETE" });
     expect(run.stages.authorization).toMatchObject({ state: "COMPLETE", detail: { method: "PASSKEY", userVerified: true, approvalEvidence: "present" } });
+    expect(run.stages.authorization.detail?.risk).toMatchObject({ decision: "ALLOW", policyVersion: "demo-risk-v1", kycStatus: "VERIFIED", reservation: { status: "CONSUMED", entries: [{ status: "SETTLED" }] } });
     expect(run.stages.execution).toMatchObject({ state: "COMPLETE" });
     expect(run.stages.bankResult).toMatchObject({ state: "COMPLETE", detail: { reconciliation: "confirmed with bank" } });
     expect(JSON.stringify(run)).not.toContain("idempotencyKey");
     expect(run.audit.map((event) => event.occurredAt)).toEqual([at(1).toISOString(), at(1).toISOString(), at(2).toISOString()]);
+  });
+
+  it.each(["REVIEW", "BLOCK"] as const)("shows a %s assessment as a deterministic safe stop with no invented authority", (decision) => {
+    const stopped = row();
+    const plan = stopped.goalContracts[0]!.financialPlans[0]!;
+    plan.riskAssessments = [{
+      id: `risk-${decision.toLowerCase()}-abcdefghijklmnopqrstuvwxyz`, decision,
+      reasonCodes: [decision === "REVIEW" ? "SINGLE_TRANSACTION_REVIEW_THRESHOLD" : "ROLLING_AMOUNT_BLOCK_THRESHOLD"],
+      exposures: [{ stepId: "step-transfer-abcdefghijklmnopqrstuvwxyz", action: "TRANSFER", currency: "USD", minorUnits: decision === "REVIEW" ? "300000" : "449900" }],
+      rollingUsage: [{ currency: "USD", settledAmountMinorUnits: "50100", reservedAmountMinorUnits: "0", settledTransactionCount: 1, reservedTransactionCount: 0 }],
+      policyVersion: "demo-risk-v1", kycStatus: "VERIFIED", bankStateVersion: 9, assessedAt: at(3),
+    }];
+    plan.riskReservations = [];
+
+    const run = buildOpsRuns([stopped], [])[0]!;
+    expect(run.overallState).toBe(`RISK_${decision}`);
+    expect(run.stages.authorization).toMatchObject({
+      state: "STOPPED",
+      summary: `Risk decision: ${decision}`,
+      detail: { risk: { decision, policyVersion: "demo-risk-v1", kycStatus: "VERIFIED", reservation: "none" } },
+    });
+    expect(run.stages.execution.state).toBe("NOT_REACHED");
+    expect(run.stages.bankResult.state).toBe("NOT_REACHED");
   });
 
   it("shows safe voice transcript provenance and the customer edit in the input stage", () => {

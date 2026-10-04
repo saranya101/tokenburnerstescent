@@ -16,7 +16,7 @@ const stages = [
 
 export function OpsDashboard({ runs, error }: { runs: OpsRun[]; error?: string }) {
   const completed = runs.filter((run) => run.overallState === "COMPLETED").length;
-  const stopped = runs.filter((run) => ["PAUSED", "REAPPROVAL_REQUIRED", "AUTHORIZATION_FAILED", "UNSAT", "POLICY_BLOCKED"].includes(run.overallState)).length;
+  const stopped = runs.filter((run) => ["PAUSED", "REAPPROVAL_REQUIRED", "AUTHORIZATION_FAILED", "UNSAT", "POLICY_BLOCKED", "RISK_REVIEW", "RISK_BLOCK"].includes(run.overallState)).length;
   return (
     <main className={styles.shell}>
       <header className={styles.header}>
@@ -112,5 +112,5 @@ function Meta({ label, value }: { label: string; value: string }) { return <p cl
 function stateLabel(state: OpsStageState) { return state === "NOT_REACHED" ? "not reached" : state.toLowerCase(); }
 function humanize(value: string) { return value.replaceAll("_", " ").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().replace(/^./, (letter) => letter.toUpperCase()); }
 function formatTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(date) + " UTC"; }
-function tone(state: string) { if (state === "COMPLETED") return styles.toneComplete; if (state === "FAILED" || state === "AUTHORIZATION_FAILED") return styles.toneFailed; if (["PAUSED", "REAPPROVAL_REQUIRED", "UNSAT", "POLICY_BLOCKED"].includes(state)) return styles.toneStopped; return styles.toneWaiting; }
+function tone(state: string) { if (state === "COMPLETED") return styles.toneComplete; if (state === "FAILED" || state === "AUTHORIZATION_FAILED") return styles.toneFailed; if (["PAUSED", "REAPPROVAL_REQUIRED", "UNSAT", "POLICY_BLOCKED", "RISK_REVIEW", "RISK_BLOCK"].includes(state)) return styles.toneStopped; return styles.toneWaiting; }
 function isMoney(value: unknown): value is Parameters<typeof formatMoney>[0] { return typeof value === "object" && value !== null && !Array.isArray(value) && typeof (value as Record<string, unknown>).currency === "string" && typeof (value as Record<string, unknown>).minorUnits === "string"; }
