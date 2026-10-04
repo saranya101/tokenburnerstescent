@@ -1,6 +1,6 @@
 import { ApprovalV1, ExecutionResultV1, FinancialPlanV1, GoalBundleContractV1, GoalContractV1 } from "@parlance/contracts";
 import { beforeEach, expect, it, vi } from "vitest";
-import { CustomerFlowController, type CustomerFlowState } from "./customer-flow";
+import { createExecutionResumeStore, CustomerFlowController, type CustomerFlowState, type ExecutionResumeStore } from "./customer-flow";
 import type { AuthenticationCredentialJSON, GoalCandidate, ParlanceApi, RegistrationCredentialJSON } from "./parlance-api";
 import { PasskeyCancelledError, type PasskeyClient } from "./passkey";
 
@@ -34,17 +34,19 @@ const unknown = ExecutionResultV1.parse({ ...completed, status: "UNKNOWN", goalO
 const credential: AuthenticationCredentialJSON = { id: "credential-1", rawId: "credential-1", type: "public-key", response: { clientDataJSON: "client", authenticatorData: "authenticator", signature: "signature" }, clientExtensionResults: {} };
 const registration: RegistrationCredentialJSON = { id: "credential-1", rawId: "credential-1", type: "public-key", response: { clientDataJSON: "client", attestationObject: "attestation", transports: [] }, clientExtensionResults: {} };
 
-function setup(overrides: Partial<ParlanceApi> = {}, passkeyResult: AuthenticationCredentialJSON | Error = credential) {
+const detail = (state: "AUTHORIZED" | "EXECUTING" | "PAUSED" | "REAPPROVAL_REQUIRED" | "COMPLETED" | "FAILED", result = completed) => ({ state, result, plan, goal });
+
+function setup(overrides: Partial<ParlanceApi> = {}, passkeyResult: AuthenticationCredentialJSON | Error = credential, resumeStore?: ExecutionResumeStore) {
   const api = {
     sendMessage: vi.fn().mockResolvedValue({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: candidate }),
     answerClarification: vi.fn().mockResolvedValue({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: candidate }),
     confirmGoal: vi.fn().mockResolvedValue(goal), compileGoal: vi.fn().mockResolvedValue({ schemaVersion: "1", status: "SAT", plan }),
     approvalOptions: vi.fn().mockResolvedValue({ challengeId: "challenge-1", options: { challenge: "challenge" } }),
     verifyApproval: vi.fn().mockResolvedValue({ approval: ApprovalV1.parse({ schemaVersion: "1", id: "approval-1", userId: "user-1", goalContractId: goal.id, goalContractVersion: 1, goalContractHash: goal.contractHash, financialPlanId: plan.id, financialPlanHash: plan.planHash, bankStateVersion: 7, method: "PASSKEY", approvedAt: "2026-09-28T00:02:00.000Z", expiresAt: "2026-09-28T00:12:00.000Z", signatureReference: "evidence-1" }), execution: pending }),
-    runExecution: vi.fn().mockResolvedValue(completed), executionDetail: vi.fn().mockResolvedValue({ state: "COMPLETED", result: completed }), ...overrides,
+    runExecution: vi.fn().mockResolvedValue(completed), executionDetail: vi.fn().mockResolvedValue(detail("COMPLETED")), ...overrides,
   } as unknown as ParlanceApi;
   const passkey: PasskeyClient = { request: vi.fn().mockImplementation(() => passkeyResult instanceof Error ? Promise.reject(passkeyResult) : Promise.resolve(passkeyResult)), register: vi.fn().mockResolvedValue(registration) };
-  const states: CustomerFlowState[] = []; const flow = new CustomerFlowController(api, passkey, (state) => states.push(state));
+  const states: CustomerFlowState[] = []; const flow = new CustomerFlowController(api, passkey, (state) => states.push(state), resumeStore);
   return { api, passkey, flow, states };
 }
 
@@ -246,7 +248,7 @@ it.each([[
 ], [
   "REAPPROVAL_REQUIRED", "REAPPROVAL_REQUIRED",
 ]] as const)("maps an UNKNOWN execution to %s from authoritative execution detail", async (backendState, phase) => {
-  const values = setup({ runExecution: vi.fn().mockResolvedValue(unknown), executionDetail: vi.fn().mockResolvedValue({ state: backendState, result: unknown }) }); await reachPlan(values); await values.flow.authorizeAndExecute();
+  const values = setup({ runExecution: vi.fn().mockResolvedValue(unknown), executionDetail: vi.fn().mockResolvedValue(detail(backendState, unknown)) }); await reachPlan(values); await values.flow.authorizeAndExecute();
   expect(values.flow.state.phase).toBe(phase); expect(values.api.executionDetail).toHaveBeenCalledWith("execution-1");
 });
 
@@ -259,4 +261,191 @@ it("maps compiler policy refusal to the safe customer stop state", async () => {
   const values = setup({ compileGoal: vi.fn().mockResolvedValue({ schemaVersion: "1", status: "POLICY_BLOCKED", reason: { code: "SERVICE_UNAVAILABLE", message: "Required service is unavailable." } }) });
   await values.flow.submitMessage("Send NTU USD 5,000"); await values.flow.confirmMeaning();
   expect(values.flow.state).toMatchObject({ phase: "UNAVAILABLE", kind: "POLICY_BLOCKED" }); expect(values.api.approvalOptions).not.toHaveBeenCalled();
+});
+
+function memoryResumeStore(initial?: string) {
+  let raw = initial;
+  const storage = { getItem: vi.fn(() => raw ?? null), setItem: vi.fn((_key: string, value: string) => { raw = value; }), removeItem: vi.fn(() => { raw = undefined; }) };
+  return { store: createExecutionResumeStore(storage), storage, value: () => raw };
+}
+
+it("recovers a completed execution after the run response is lost without another approval or bank call", async () => {
+  const saved = memoryResumeStore();
+  const values = setup({ runExecution: vi.fn().mockRejectedValue(new Error("NETWORK_LOST")), executionDetail: vi.fn().mockResolvedValue(detail("COMPLETED")) }, credential, saved.store);
+  await values.flow.resumeActiveExecution();
+  await reachPlan(values); await values.flow.authorizeAndExecute();
+  expect(values.flow.state.phase).toBe("COMPLETED");
+  expect(values.api.runExecution).toHaveBeenCalledOnce(); expect(values.api.approvalOptions).toHaveBeenCalledOnce(); expect(values.api.verifyApproval).toHaveBeenCalledOnce();
+  expect(saved.value()).toBe(JSON.stringify({ executionId: "execution-1", requestText: "Send NTU USD 5,000" }));
+});
+
+it("maps a lost response with an unknown bank outcome to a readable paused state", async () => {
+  const bankUnknown = ExecutionResultV1.parse({ ...unknown, steps: [{ stepId: "fx-1", status: "UNKNOWN", idempotencyKey: "key-fx", errorCode: "BANK_RESPONSE_OUTCOME_UNKNOWN" }] });
+  const values = setup({ runExecution: vi.fn().mockRejectedValue(new Error("NETWORK_LOST")), executionDetail: vi.fn().mockResolvedValue(detail("PAUSED", bankUnknown)) });
+  await reachPlan(values); await values.flow.authorizeAndExecute();
+  expect(values.flow.state.phase).toBe("PAUSED");
+});
+
+it("keeps an unavailable execution detail in recovery pending and later resolves by read only", async () => {
+  const executionDetail = vi.fn().mockRejectedValueOnce(new Error("OFFLINE")).mockResolvedValueOnce(detail("COMPLETED"));
+  const values = setup({ runExecution: vi.fn().mockRejectedValue(new Error("NETWORK_LOST")), executionDetail });
+  await reachPlan(values); await values.flow.authorizeAndExecute(); expect(values.flow.state.phase).toBe("RECOVERY_PENDING");
+  await values.flow.checkExecutionStatus(); expect(values.flow.state.phase).toBe("COMPLETED");
+  expect(executionDetail).toHaveBeenCalledTimes(2); expect(values.api.runExecution).toHaveBeenCalledOnce();
+});
+
+it("coalesces duplicate check-status clicks into one authoritative read", async () => {
+  let resolveDetail!: (value: ReturnType<typeof detail>) => void;
+  const later = new Promise<ReturnType<typeof detail>>((resolve) => { resolveDetail = resolve; });
+  const executionDetail = vi.fn().mockRejectedValueOnce(new Error("OFFLINE")).mockReturnValueOnce(later);
+  const values = setup({ runExecution: vi.fn().mockRejectedValue(new Error("NETWORK_LOST")), executionDetail });
+  await reachPlan(values); await values.flow.authorizeAndExecute();
+  const first = values.flow.checkExecutionStatus(); const duplicate = values.flow.checkExecutionStatus();
+  resolveDetail(detail("COMPLETED")); await Promise.all([first, duplicate]);
+  expect(executionDetail).toHaveBeenCalledTimes(2); expect(values.flow.state.phase).toBe("COMPLETED");
+});
+
+it("classifies a settled first step and failed second step as partially completed", async () => {
+  const partial = ExecutionResultV1.parse({ ...completed, status: "FAILED", steps: [
+    { stepId: "fx-1", status: "SETTLED", idempotencyKey: "key-fx", bankReference: "bank-fx" },
+    { stepId: "transfer-1", status: "FAILED", idempotencyKey: "key-transfer", errorCode: "BANK_WRITE_FAILED" },
+  ], goalOutcome: { achieved: false, summary: "Second action stopped." } });
+  const values = setup({ runExecution: vi.fn().mockResolvedValue(partial) }); await reachPlan(values); await values.flow.authorizeAndExecute();
+  expect(values.flow.state.phase).toBe("PARTIALLY_COMPLETED");
+});
+
+it("keeps a settled first step and unknown second step paused for status checks", async () => {
+  const partial = ExecutionResultV1.parse({ ...unknown, steps: [
+    { stepId: "fx-1", status: "SETTLED", idempotencyKey: "key-fx", bankReference: "bank-fx" },
+    { stepId: "transfer-1", status: "UNKNOWN", idempotencyKey: "key-transfer", errorCode: "BANK_RESPONSE_OUTCOME_UNKNOWN" },
+  ] });
+  const values = setup({ runExecution: vi.fn().mockResolvedValue(partial), executionDetail: vi.fn().mockResolvedValue(detail("PAUSED", partial)) });
+  await reachPlan(values); await values.flow.authorizeAndExecute(); expect(values.flow.state.phase).toBe("PAUSED");
+});
+
+it("classifies a settled step followed by a deterministically prevented pre-write step as partial completion", async () => {
+  const partial = ExecutionResultV1.parse({ ...unknown, steps: [
+    { stepId: "fx-1", status: "SETTLED", idempotencyKey: "key-fx", bankReference: "bank-fx" },
+    { stepId: "transfer-1", status: "UNKNOWN", idempotencyKey: "key-transfer", errorCode: "GOAL_CONSTRAINT_VIOLATION" },
+  ] });
+  const values = setup({ runExecution: vi.fn().mockResolvedValue(unknown), executionDetail: vi.fn().mockResolvedValue(detail("PAUSED", partial)) });
+  await reachPlan(values); await values.flow.authorizeAndExecute(); expect(values.flow.state.phase).toBe("PARTIALLY_COMPLETED");
+});
+
+it("keeps a settled step followed by a reconciliation conflict financially unresolved", async () => {
+  const partial = ExecutionResultV1.parse({ ...unknown, steps: [
+    { stepId: "fx-1", status: "SETTLED", idempotencyKey: "key-fx", bankReference: "bank-fx" },
+    { stepId: "transfer-1", status: "UNKNOWN", idempotencyKey: "key-transfer", errorCode: "RECONCILIATION_CONFLICT" },
+  ] });
+  const values = setup({ runExecution: vi.fn().mockResolvedValue(unknown), executionDetail: vi.fn().mockResolvedValue(detail("PAUSED", partial)) });
+  await reachPlan(values); await values.flow.authorizeAndExecute(); expect(values.flow.state.phase).toBe("PAUSED");
+});
+
+it("keeps settled bookkeeping and a later pending step unresolved", async () => {
+  const partial = ExecutionResultV1.parse({ ...unknown, steps: [
+    { stepId: "fx-1", status: "SETTLED", idempotencyKey: "key-fx", bankReference: "bank-fx", errorCode: "SETTLED_BOOKKEEPING_PENDING" },
+    { stepId: "transfer-1", status: "PENDING", idempotencyKey: "key-transfer" },
+  ] });
+  const values = setup({ runExecution: vi.fn().mockResolvedValue(unknown), executionDetail: vi.fn().mockResolvedValue(detail("PAUSED", partial)) });
+  await reachPlan(values); await values.flow.authorizeAndExecute(); expect(values.flow.state.phase).toBe("PAUSED");
+});
+
+it.each([
+  ["COMPLETED", "COMPLETED", completed],
+  ["PAUSED", "PAUSED", unknown],
+  ["EXECUTING", "EXECUTING", pending],
+] as const)("reconstructs a %s execution after refresh using only authoritative detail", async (backendState, phase, result) => {
+  const saved = memoryResumeStore(JSON.stringify({ executionId: "execution-1", requestText: "Original request" }));
+  const values = setup({ executionDetail: vi.fn().mockResolvedValue(detail(backendState, result)) }, credential, saved.store);
+  expect(values.flow.state.phase).toBe("RESTORING_EXECUTION");
+  await values.flow.resumeActiveExecution();
+  expect(values.flow.state).toMatchObject({ phase, requestText: "Original request", plan: { id: plan.id }, goal: { id: goal.id } });
+  expect(values.api.sendMessage).not.toHaveBeenCalled(); expect(values.api.confirmGoal).not.toHaveBeenCalled(); expect(values.api.compileGoal).not.toHaveBeenCalled();
+  expect(values.api.approvalOptions).not.toHaveBeenCalled(); expect(values.api.verifyApproval).not.toHaveBeenCalled(); expect(values.api.runExecution).not.toHaveBeenCalled();
+});
+
+it("continues a recovered authorized execution with the same execution id and no new approval", async () => {
+  const saved = memoryResumeStore(JSON.stringify({ executionId: "execution-1", requestText: "Original request" }));
+  const values = setup({ executionDetail: vi.fn().mockResolvedValue(detail("AUTHORIZED", pending)) }, credential, saved.store);
+  await values.flow.resumeActiveExecution(); expect(values.flow.state.phase).toBe("AUTHORIZED");
+  await values.flow.continueAuthorizedExecution();
+  expect(values.api.runExecution).toHaveBeenCalledOnce(); expect(values.api.runExecution).toHaveBeenCalledWith("execution-1");
+  expect(values.api.approvalOptions).not.toHaveBeenCalled(); expect(values.api.verifyApproval).not.toHaveBeenCalled();
+});
+
+it("clears corrupt resume metadata without making financial calls", async () => {
+  const saved = memoryResumeStore(JSON.stringify({ executionId: "execution-1", requestText: "text", plan: { invented: true } }));
+  const values = setup({}, credential, saved.store); await values.flow.resumeActiveExecution();
+  expect(values.flow.state.phase).toBe("COMPOSE"); expect(saved.storage.removeItem).toHaveBeenCalledOnce(); expect(values.api.executionDetail).not.toHaveBeenCalled();
+});
+
+it("finishes bootstrap at COMPOSE only after finding no resume record", async () => {
+  const saved = memoryResumeStore(); const values = setup({}, credential, saved.store);
+  expect(values.flow.state.phase).toBe("RESTORING_EXECUTION");
+  await expect(values.flow.submitMessage("Send John USD 10")).rejects.toThrow("INVALID_FLOW_STATE");
+  await values.flow.resumeActiveExecution(); expect(values.flow.state.phase).toBe("COMPOSE");
+  expect(values.api.executionDetail).not.toHaveBeenCalled(); expect(values.api.sendMessage).not.toHaveBeenCalled();
+});
+
+it("rejects a repeat message in paused, recovery-pending, and authorized states without clearing recovery", async () => {
+  const pausedStore = memoryResumeStore(); const pausedResult = ExecutionResultV1.parse({ ...unknown, steps: [{ stepId: "fx-1", status: "UNKNOWN", idempotencyKey: "key-fx", errorCode: "BANK_RESPONSE_OUTCOME_UNKNOWN" }] });
+  const paused = setup({ runExecution: vi.fn().mockResolvedValue(unknown), executionDetail: vi.fn().mockResolvedValue(detail("PAUSED", pausedResult)) }, credential, pausedStore.store);
+  await paused.flow.resumeActiveExecution(); await reachPlan(paused); await paused.flow.authorizeAndExecute(); const pausedCalls = vi.mocked(paused.api.sendMessage).mock.calls.length;
+  await expect(paused.flow.submitMessage("repeat payment")).rejects.toThrow("INVALID_FLOW_STATE"); expect(paused.api.sendMessage).toHaveBeenCalledTimes(pausedCalls); expect(pausedStore.value()).toContain("execution-1");
+
+  const recoveryStore = memoryResumeStore(); const recovery = setup({ runExecution: vi.fn().mockRejectedValue(new Error("LOST")), executionDetail: vi.fn().mockRejectedValue(new Error("OFFLINE")) }, credential, recoveryStore.store);
+  await recovery.flow.resumeActiveExecution(); await reachPlan(recovery); await recovery.flow.authorizeAndExecute(); const recoveryCalls = vi.mocked(recovery.api.sendMessage).mock.calls.length;
+  await expect(recovery.flow.submitMessage("repeat payment")).rejects.toThrow("INVALID_FLOW_STATE"); expect(recovery.api.sendMessage).toHaveBeenCalledTimes(recoveryCalls); expect(recoveryStore.value()).toContain("execution-1");
+
+  const authorizedStore = memoryResumeStore(JSON.stringify({ executionId: "execution-1", requestText: "Original request" })); const authorized = setup({ executionDetail: vi.fn().mockResolvedValue(detail("AUTHORIZED", pending)) }, credential, authorizedStore.store);
+  await authorized.flow.resumeActiveExecution(); await expect(authorized.flow.submitMessage("repeat payment")).rejects.toThrow("INVALID_FLOW_STATE");
+  expect(authorized.api.sendMessage).not.toHaveBeenCalled(); expect(authorizedStore.value()).toContain("execution-1");
+});
+
+it("coalesces duplicate bootstrap restores into one read and no financial action", async () => {
+  let resolveDetail!: (value: ReturnType<typeof detail>) => void;
+  const pendingDetail = new Promise<ReturnType<typeof detail>>((resolve) => { resolveDetail = resolve; });
+  const saved = memoryResumeStore(JSON.stringify({ executionId: "execution-1", requestText: "Original request" }));
+  const executionDetail = vi.fn().mockReturnValue(pendingDetail); const values = setup({ executionDetail }, credential, saved.store);
+  const first = values.flow.resumeActiveExecution(); const duplicate = values.flow.resumeActiveExecution();
+  expect(values.flow.state.phase).toBe("RESTORING_EXECUTION"); expect(executionDetail).toHaveBeenCalledOnce();
+  resolveDetail(detail("COMPLETED")); await Promise.all([first, duplicate]);
+  expect(values.flow.state.phase).toBe("COMPLETED"); expect(values.api.runExecution).not.toHaveBeenCalled(); expect(values.api.approvalOptions).not.toHaveBeenCalled();
+  expect(values.api.compileGoal).not.toHaveBeenCalled(); expect(values.api.sendMessage).not.toHaveBeenCalled();
+});
+
+it("continues the same authorized execution when resume persistence throws", async () => {
+  const throwingStore: ExecutionResumeStore = { load: () => undefined, save: () => { throw new DOMException("Unavailable", "SecurityError"); }, clear: () => undefined };
+  const values = setup({}, credential, throwingStore); await values.flow.resumeActiveExecution(); await reachPlan(values); await values.flow.authorizeAndExecute();
+  expect(values.flow.state.phase).toBe("COMPLETED"); expect(values.api.runExecution).toHaveBeenCalledOnce(); expect(values.api.runExecution).toHaveBeenCalledWith("execution-1");
+  expect(values.api.approvalOptions).toHaveBeenCalledOnce(); expect(values.api.verifyApproval).toHaveBeenCalledOnce();
+});
+
+it("treats browser storage read, write, and removal failures as non-financial", () => {
+  const store = createExecutionResumeStore({
+    getItem: () => { throw new DOMException("Unavailable", "SecurityError"); },
+    setItem: () => { throw new DOMException("Full", "QuotaExceededError"); },
+    removeItem: () => { throw new DOMException("Unavailable", "SecurityError"); },
+  });
+  expect(() => store.load()).not.toThrow(); expect(store.load()).toBeUndefined();
+  expect(() => store.save({ executionId: "execution-1", requestText: "request" })).not.toThrow(); expect(() => store.clear()).not.toThrow();
+});
+
+it("reviews a freshly compiled plan after reapproval with zero settled steps and requires a new approval action", async () => {
+  const changed = ExecutionResultV1.parse({ ...unknown, steps: [{ stepId: "fx-1", status: "FAILED", idempotencyKey: "key-fx", errorCode: "STATE_CHANGED" }] });
+  const compileGoal = vi.fn().mockResolvedValueOnce({ schemaVersion: "1", status: "SAT", plan }).mockResolvedValueOnce({ schemaVersion: "1", status: "SAT", plan: refreshedPlan });
+  const values = setup({ compileGoal, runExecution: vi.fn().mockResolvedValue(unknown), executionDetail: vi.fn().mockResolvedValue(detail("REAPPROVAL_REQUIRED", changed)) });
+  await reachPlan(values); await values.flow.authorizeAndExecute(); expect(values.flow.state.phase).toBe("REAPPROVAL_REQUIRED");
+  await values.flow.reviewUpdatedPlan(); expect(values.flow.state).toMatchObject({ phase: "PLAN_REVIEW", refreshed: true, plan: { id: refreshedPlan.id } });
+  expect(compileGoal).toHaveBeenCalledTimes(2); expect(values.api.approvalOptions).toHaveBeenCalledOnce(); expect(values.api.runExecution).toHaveBeenCalledOnce();
+});
+
+it("never recompiles the original request for reapproval after any step settled", async () => {
+  const partial = ExecutionResultV1.parse({ ...unknown, steps: [
+    { stepId: "fx-1", status: "SETTLED", idempotencyKey: "key-fx", bankReference: "bank-fx" },
+    { stepId: "transfer-1", status: "FAILED", idempotencyKey: "key-transfer", errorCode: "STATE_CHANGED" },
+  ] });
+  const values = setup({ runExecution: vi.fn().mockResolvedValue(unknown), executionDetail: vi.fn().mockResolvedValue(detail("REAPPROVAL_REQUIRED", partial)) });
+  await reachPlan(values); await values.flow.authorizeAndExecute(); expect(values.flow.state.phase).toBe("PARTIALLY_COMPLETED");
+  await expect(values.flow.reviewUpdatedPlan()).rejects.toThrow("INVALID_FLOW_STATE"); expect(values.api.compileGoal).toHaveBeenCalledOnce();
 });

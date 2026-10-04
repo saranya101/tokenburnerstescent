@@ -1,5 +1,5 @@
 import {
-  BankStateSnapshotV1, CompileGoalBundleResultV1, CompilerResultV1, CustomerActivityV1, ExecutionResultV1, GoalBundleContractV1, GoalContractV1,
+  BankStateSnapshotV1, CompileGoalBundleResultV1, CompilerResultV1, CustomerActivityV1, ExecutionResultV1, FinancialPlanV1, GoalBundleContractV1, GoalContractV1,
   type BankStateSnapshotV1 as BankStateSnapshot, type CustomerActivityV1 as CustomerActivity,
   type ExecutionResultV1 as ExecutionResult, type GoalBundleContractV1 as GoalBundleContract, type GoalContractV1 as GoalContract,
 } from "@parlance/contracts";
@@ -41,7 +41,11 @@ export type PasskeyStatusResponse = { status: "NOT_ENROLLED" | "READY"; userVeri
 export type RegistrationOptionsResponse = { challengeId: string; options: RegistrationOptionsJSON };
 export type ApprovalOptionsResponse = { challengeId: string; options: AuthenticationOptionsJSON };
 export type ApprovalVerificationResponse = { execution: ExecutionResult };
-export type ExecutionDetail = { state: "AUTHORIZED" | "EXECUTING" | "PAUSED" | "REAPPROVAL_REQUIRED" | "COMPLETED" | "FAILED"; result: ExecutionResult };
+export type ExecutionDetail = {
+  state: "AUTHORIZED" | "EXECUTING" | "PAUSED" | "REAPPROVAL_REQUIRED" | "COMPLETED" | "FAILED";
+  result: ExecutionResult;
+  plan: FinancialPlanV1;
+} & ({ goal: GoalContract; goalBundle?: never } | { goalBundle: GoalBundleContract; goal?: never });
 
 const GoalCandidateSchema = GoalContractV1.pick({ schemaVersion: true, goal: true, constraints: true, preferences: true, entityBindings: true });
 
@@ -151,8 +155,23 @@ export function createParlanceApi(fetcher: typeof fetch = fetch) {
     },
     async executionDetail(executionId: string): Promise<ExecutionDetail> {
       const value = record(await request(`executions/${encodeURIComponent(executionId)}/detail`, "GET"));
-      if (!value || typeof value.state !== "string") throw new ParlanceApiError("INVALID_API_RESPONSE", 502);
-      return { state: value.state as ExecutionDetail["state"], result: ExecutionResultV1.parse(value.result) };
+      const states = ["AUTHORIZED", "EXECUTING", "PAUSED", "REAPPROVAL_REQUIRED", "COMPLETED", "FAILED"] as const;
+      if (!value || !states.includes(value.state as typeof states[number])) throw new ParlanceApiError("INVALID_API_RESPONSE", 502);
+      const common = {
+        state: value.state as ExecutionDetail["state"],
+        result: ExecutionResultV1.parse(value.result),
+        plan: FinancialPlanV1.parse(value.plan),
+      };
+      const hasGoal = value.goal !== undefined; const hasBundle = value.goalBundle !== undefined;
+      if (hasGoal === hasBundle) throw new ParlanceApiError("INVALID_API_RESPONSE", 502);
+      if (hasGoal) {
+        const goal = GoalContractV1.parse(value.goal);
+        if (common.plan.goalContractId !== goal.id || common.plan.goalContractVersion !== goal.version) throw new ParlanceApiError("INVALID_API_RESPONSE", 502);
+        return { ...common, goal };
+      }
+      const goalBundle = GoalBundleContractV1.parse(value.goalBundle);
+      if (common.plan.goalContractId !== goalBundle.bundleId || common.plan.goalContractVersion !== goalBundle.bundleVersion) throw new ParlanceApiError("INVALID_API_RESPONSE", 502);
+      return { ...common, goalBundle };
     },
   };
 }

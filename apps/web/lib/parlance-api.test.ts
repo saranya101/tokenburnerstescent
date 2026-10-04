@@ -102,3 +102,31 @@ it("loads and validates customer-safe authoritative activity", async () => {
   await expect(api.customerActivity()).resolves.toEqual(activity);
   expect(fetcher).toHaveBeenCalledWith("/api/parlance/customer/activity", expect.objectContaining({ method: "GET", cache: "no-store" }));
 });
+
+it("loads execution detail only with a validated plan and exactly one confirmed context", async () => {
+  const goal = {
+    schemaVersion: "1", id: "goal-1", userId: "user-1", version: 1, goal: { type: "PAY_BILL", billerId: "biller-1" }, constraints: [], preferences: [], entityBindings: [],
+    status: "CONFIRMED", contractHash: "goal-hash-0000001", createdAt: "2026-09-28T00:00:00.000Z", confirmedAt: "2026-09-28T00:01:00.000Z",
+  };
+  const plan = {
+    schemaVersion: "1", id: "plan-1", goalContractId: "goal-1", goalContractVersion: 1, bankStateVersion: 7, compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test", planHash: "plan-hash-0000001",
+    steps: [], validity: { requiredQuoteIds: [] }, projectedOutcome: { goalSatisfied: true, acquiredAssets: [], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] },
+  };
+  const result = { schemaVersion: "1", executionId: "execution-1", planId: "plan-1", status: "COMPLETED", startedStateVersion: 7, finalStateVersion: 7, steps: [], goalOutcome: { achieved: true, summary: "Complete." } };
+  const api = createParlanceApi(vi.fn().mockResolvedValue(json({ state: "COMPLETED", result, plan, goal })) as typeof fetch);
+  await expect(api.executionDetail("execution-1")).resolves.toEqual({ state: "COMPLETED", result, plan, goal });
+
+  const invalid = createParlanceApi(vi.fn().mockResolvedValue(json({ state: "COMPLETED", result, plan, goal, goalBundle: {} })) as typeof fetch);
+  await expect(invalid.executionDetail("execution-1")).rejects.toThrow("INVALID_API_RESPONSE");
+
+  const wrongGoal = createParlanceApi(vi.fn().mockResolvedValue(json({ state: "COMPLETED", result, plan, goal: { ...goal, id: "goal-2" } })) as typeof fetch);
+  await expect(wrongGoal.executionDetail("execution-1")).rejects.toThrow("INVALID_API_RESPONSE");
+
+  const goalBundle = {
+    schemaVersion: "1", bundleId: "bundle-1", bundleVersion: 2, contractHash: "b".repeat(64),
+    items: [{ itemId: "item-1", goal: { type: "PAY_BILL", billerId: "biller-1" }, constraints: [], preferences: [], bindings: [] }], globalConstraints: [], explicitDependencies: [],
+  };
+  const bundlePlan = { ...plan, goalContractId: "bundle-1", goalContractVersion: 1 };
+  const wrongBundle = createParlanceApi(vi.fn().mockResolvedValue(json({ state: "COMPLETED", result, plan: bundlePlan, goalBundle })) as typeof fetch);
+  await expect(wrongBundle.executionDetail("execution-1")).rejects.toThrow("INVALID_API_RESPONSE");
+});

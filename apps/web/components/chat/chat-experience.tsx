@@ -1,12 +1,13 @@
 "use client";
 
 import type { CustomerFlowState } from "../../lib/customer-flow";
-import Link from "next/link";
 import { presentBundle, presentBundlePlan, presentGoal, presentPlan, type PlanPresentation } from "../../lib/customer-presentation";
 import { customerExecutionMessage } from "../../lib/customer-safety-copy";
 import { useCustomerFlow } from "../../hooks/use-customer-flow";
 import { ExecutionTimeline, type TimelineItem } from "../execution/execution-timeline";
+import { PartialCompletionCard } from "../execution/partial-completion-card";
 import { ReapprovalCard } from "../execution/reapproval-card";
+import { RecoveryStatusCard } from "../execution/recovery-status-card";
 import { SafeStopCard } from "../execution/safe-stop-card";
 import { ClarificationCard } from "../goal/clarification-card";
 import { UnderstoodGoalCard } from "../goal/understood-goal-card";
@@ -38,13 +39,15 @@ function executionTimeline(presentation: PlanPresentation, state: CustomerFlowSt
 
 export function ChatExperience() {
   const flow = useCustomerFlow(); const { state } = flow; const message = requestText(state); const isInitial = state.phase === "COMPOSE";
+  const unresolved = state.phase === "RECOVERY_PENDING" || state.phase === "EXECUTING" || state.phase === "PAUSED" || state.phase === "AUTHORIZED";
   const planPresentation = "plan" in state ? ("bundle" in state ? presentBundlePlan(state.bundle, state.plan) : "goal" in state ? presentPlan(state.goal, state.plan) : undefined) : undefined;
   return <div className={`parlance-workspace ${isInitial ? "is-initial" : "is-active"}`}>
     <header className="workspace-header"><div className="workspace-title"><div><p>{isInitial ? "Good evening, Alex." : "Pay & Transfer"}</p><h1>{isInitial ? "What would you like to do?" : "Your payment request"}</h1></div></div></header>
     <div className="workspace-body">
+      {state.phase === "RESTORING_EXECUTION" && <WorkingState title="Checking your latest transaction status…" detail="Please wait while we check whether a recent transaction still needs your attention." />}
       {isInitial && <ConversationComposer onSubmit={(text, input) => void flow.submitMessage(text, input)} />}
       {message && <div className="conversation-stream">
-        <div className="request-context"><span className="request-context-icon"><Icon name="transfer" /></span><div><small>Your request</small><strong>“{message}”</strong></div><button type="button" onClick={flow.reset}>Start over <Icon name="arrow" /></button></div>
+        <div className="request-context"><span className="request-context-icon"><Icon name="transfer" /></span><div><small>Your request</small><strong>“{message}”</strong></div>{!unresolved && state.phase !== "PARTIALLY_COMPLETED" && <button type="button" onClick={flow.reset}>Start over <Icon name="arrow" /></button>}</div>
         {state.phase === "INTERPRETING" && <WorkingState title="Understanding your request…" detail="Checking names and details against your available banking relationships." />}
         {state.phase === "CLARIFICATION" && state.clarifications[0] && <ClarificationCard clarification={state.clarifications[0]} onCancel={flow.reset} onSelect={(option) => void flow.answerClarification(state.clarifications[0]!, option)} onAnswerText={(answer) => void flow.answerClarificationText(state.clarifications[0]!, answer)} />}
         {state.phase === "SEMANTIC_VALIDATION_FAILED" && <OutcomeCard title="Please clarify your request" detail={state.message} onDone={flow.reset} />}
@@ -64,10 +67,13 @@ export function ChatExperience() {
         {planPresentation && state.phase === "APPROVAL_FAILED" && <><FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => void flow.authorizeAndExecute()} /><InlineNotice title="Approval could not be verified" detail="Nothing was executed. Review the plan and try passkey confirmation again." /></>}
         {state.phase === "RISK_REVIEW" && <RiskOutcomeCard decision="REVIEW" onDone={flow.reset} />}
         {state.phase === "RISK_BLOCKED" && <RiskOutcomeCard decision="BLOCK" onDone={flow.reset} />}
-        {planPresentation && state.phase === "EXECUTING" && <ExecutionTimeline items={executionTimeline(planPresentation, state)} steps={planPresentation.steps} scenario={planPresentation} />}
-        {planPresentation && state.phase === "COMPLETED" && <><ExecutionTimeline items={executionTimeline(planPresentation, state)} steps={planPresentation.steps} scenario={planPresentation} /><div className="completion-action"><Link className="button bank-primary" href="/">Done</Link></div></>}
-        {planPresentation && state.phase === "PAUSED" && <SafeStopCard scenario={planPresentation} result={state.result} onDone={flow.reset} onStartOver={flow.reset} />}
-        {planPresentation && state.phase === "REAPPROVAL_REQUIRED" && <ReapprovalCard scenario={planPresentation} onCancel={flow.reset} onStartOver={flow.reset} />}
+        {planPresentation && state.phase === "AUTHORIZED" && <RecoveryCard title="Your approved transaction is ready" detail="This is the same transaction you already approved. Continue when you’re ready." action="Continue transaction" onAction={() => void flow.continueAuthorizedExecution()} />}
+        {planPresentation && state.phase === "EXECUTING" && <><ExecutionTimeline items={executionTimeline(planPresentation, state)} steps={planPresentation.steps} scenario={planPresentation} /><div className="completion-action"><button className="button bank-primary" type="button" onClick={() => void flow.checkExecutionStatus()}>Check status</button></div></>}
+        {planPresentation && state.phase === "COMPLETED" && <><ExecutionTimeline items={executionTimeline(planPresentation, state)} steps={planPresentation.steps} scenario={planPresentation} /><div className="completion-action"><button className="button bank-primary" type="button" onClick={flow.reset}>Done</button></div></>}
+        {planPresentation && state.phase === "PAUSED" && <SafeStopCard scenario={planPresentation} result={state.result} onDone={flow.reset} onStartOver={flow.reset} onCheckStatus={() => void flow.checkExecutionStatus()} />}
+        {planPresentation && state.phase === "PARTIALLY_COMPLETED" && <PartialCompletionCard scenario={planPresentation} result={state.result} onDone={flow.reset} />}
+        {planPresentation && state.phase === "REAPPROVAL_REQUIRED" && <ReapprovalCard scenario={planPresentation} onCancel={flow.reset} onReview={() => void flow.reviewUpdatedPlan()} />}
+        {state.phase === "RECOVERY_PENDING" && <RecoveryStatusCard onCheckStatus={() => void flow.checkExecutionStatus()} />}
         {state.phase === "EXECUTION_ERROR" && <OutcomeCard title="Execution error" detail="Your request did not complete. No further action will be attempted without a new review." onDone={flow.reset} />}
         {state.phase === "ERROR" && <OutcomeCard title="We couldn’t continue this request" detail="No money was moved. Please try again." onDone={flow.reset} />}
       </div>}
@@ -79,3 +85,4 @@ function WorkingState({ title, detail }: { title: string; detail: string }) { re
 function CompilingState() { return <section className="product-card compiling-card" aria-live="polite"><div className="compiler-orbit" aria-hidden="true"><span /><i /></div><p className="eyebrow">Request confirmed</p><h2>Preparing your payment details…</h2><p className="card-description">We’re checking your latest account information before showing you exactly what will happen.</p><div className="compile-checks"><span className="done">✓ <strong>Request understood</strong></span><span className="active"><i /> Checking latest account information</span><span><i /> Preparing payment details</span></div></section>; }
 function InlineNotice({ title, detail }: { title: string; detail: string }) { return <section className="product-card"><h2>{title}</h2><p className="card-description">{detail}</p></section>; }
 function OutcomeCard({ title, detail, onDone }: { title: string; detail: string; onDone(): void }) { return <section className="product-card safe-stop-card"><div className="safe-stop-symbol"><Icon name="shield" /></div><h2>{title}</h2><p className="card-description">{detail}</p><div className="card-actions"><button className="button bank-primary" type="button" onClick={onDone}>Done</button></div></section>; }
+function RecoveryCard({ title, detail, action, onAction }: { title: string; detail: string; action: string; onAction(): void }) { return <section className="product-card safe-stop-card" aria-live="polite"><div className="safe-stop-symbol"><Icon name="shield" /></div><h2>{title}</h2><p className="card-description">{detail}</p><div className="card-actions"><button className="button bank-primary" type="button" onClick={onAction}>{action}</button></div></section>; }

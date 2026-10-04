@@ -8,7 +8,9 @@ import type { PlanPresentation } from "../lib/customer-presentation";
 import { customerDesktopNavigation, customerMobileNavigation } from "./banking/banking-nav";
 import { ConversationComposer } from "./chat/conversation-composer";
 import { ReapprovalCard } from "./execution/reapproval-card";
+import { RecoveryStatusCard } from "./execution/recovery-status-card";
 import { SafeStopCard } from "./execution/safe-stop-card";
+import { PartialCompletionCard } from "./execution/partial-completion-card";
 import { ExecutionTimeline } from "./execution/execution-timeline";
 import { ClarificationCard } from "./goal/clarification-card";
 import { UnderstoodGoalCard } from "./goal/understood-goal-card";
@@ -65,13 +67,21 @@ function stopped(reason: string) {
   });
 }
 
+function pendingConfirmation(status: "ACCEPTED" | "SETTLED", reason: string) {
+  return ExecutionResultV1.parse({
+    schemaVersion: "1", executionId: "execution", planId: "plan", status: "UNKNOWN", startedStateVersion: 7, finalStateVersion: 8,
+    steps: [{ stepId: "send", status, idempotencyKey: "idempotency", bankReference: "bank-reference", errorCode: reason }],
+    goalOutcome: { achieved: false, summary: "Confirmation pending." },
+  });
+}
+
 describe("SafeStopCard", () => {
   it.each([
     ["GOAL_CONSTRAINT_VIOLATION", "Could not verify this step safely"],
     ["QUOTE_EXPIRED", "The exchange quote is no longer valid"],
     ["FX_UNAVAILABLE", "Currency conversion is currently unavailable"],
   ])("renders precise copy for %s", (reason, message) => {
-    const props = { scenario, result: stopped(reason), onDone: vi.fn(), onStartOver: vi.fn(), onShowRouteChange: vi.fn() };
+    const props = { scenario, result: stopped(reason), onDone: vi.fn(), onStartOver: vi.fn(), onCheckStatus: vi.fn(), onShowRouteChange: vi.fn() };
     const html = renderToStaticMarkup(createElement(SafeStopCard, props));
     expect(html).toContain(message);
     expect(html).not.toContain("No longer available");
@@ -79,18 +89,66 @@ describe("SafeStopCard", () => {
     expect(html).toContain("No unapproved action will continue");
   });
   it("does not claim failure or invite retry while the bank outcome is unknown", () => {
-    const html = renderToStaticMarkup(createElement(SafeStopCard, { scenario, result: stopped("BANK_LOOKUP_UNAVAILABLE"), onDone: vi.fn(), onStartOver: vi.fn() }));
+    const html = renderToStaticMarkup(createElement(SafeStopCard, { scenario, result: stopped("BANK_LOOKUP_UNAVAILABLE"), onDone: vi.fn(), onStartOver: vi.fn(), onCheckStatus: vi.fn() }));
     expect(html).toContain("Confirming transaction status"); expect(html).toContain("Please don’t try again yet");
     expect(html).not.toMatch(/Payment failed|Nothing was executed/iu);
+    expect(html).toContain("Check status"); expect(html).not.toContain("Start another request");
+  });
+  it("keeps a bank-accepted effect pending confirmation and never calls it not executed", () => {
+    const html = renderToStaticMarkup(createElement(SafeStopCard, { scenario, result: pendingConfirmation("ACCEPTED", "BANK_ACCEPTED_CONFIRMATION_PENDING"), onDone: vi.fn(), onStartOver: vi.fn(), onCheckStatus: vi.fn() }));
+    expect(html).toContain("The bank accepted this transaction"); expect(html).toContain("Confirming transaction status"); expect(html).toContain("Check status");
+    expect(html).not.toContain("Not executed"); expect(html).not.toContain("Payment stopped safely"); expect(html).not.toContain("Start another request");
+  });
+  it("keeps a settled bank effect completed while final bookkeeping is confirmed", () => {
+    const html = renderToStaticMarkup(createElement(SafeStopCard, { scenario, result: pendingConfirmation("SETTLED", "SETTLED_BOOKKEEPING_PENDING"), onDone: vi.fn(), onStartOver: vi.fn(), onCheckStatus: vi.fn() }));
+    expect(html).toContain("complete at the bank"); expect(html).toContain("is-complete"); expect(html).toContain("Check status");
+    expect(html).not.toContain("Not executed"); expect(html).not.toContain("Start another request");
+  });
+  it("never offers a new request when reconciliation conflicts with the approved effect", () => {
+    const html = renderToStaticMarkup(createElement(SafeStopCard, { scenario, result: stopped("RECONCILIATION_CONFLICT"), onDone: vi.fn(), onStartOver: vi.fn(), onCheckStatus: vi.fn() }));
+    expect(html).toContain("could not safely confirm the bank result"); expect(html).toContain("Done");
+    expect(html).not.toContain("Payment stopped safely"); expect(html).not.toContain("Stopped safely"); expect(html).not.toContain("Start another request");
+  });
+  it("does not call an accepted bank effect safely stopped when its reason is unfamiliar", () => {
+    const html = renderToStaticMarkup(createElement(SafeStopCard, { scenario, result: pendingConfirmation("ACCEPTED", "FUTURE_LOCAL_CONFIRMATION_REASON"), onDone: vi.fn(), onStartOver: vi.fn(), onCheckStatus: vi.fn() }));
+    expect(html).not.toContain("Payment stopped safely"); expect(html).not.toContain("Not executed"); expect(html).not.toContain("Start another request");
+  });
+  it("keeps a settled bank effect visually complete without calling it safely stopped when its reason is unfamiliar", () => {
+    const html = renderToStaticMarkup(createElement(SafeStopCard, { scenario, result: pendingConfirmation("SETTLED", "FUTURE_LOCAL_CONFIRMATION_REASON"), onDone: vi.fn(), onStartOver: vi.fn(), onCheckStatus: vi.fn() }));
+    expect(html).toContain("is-complete"); expect(html).toContain("Payment completed");
+    expect(html).not.toContain("Payment stopped safely"); expect(html).not.toContain("Start another request");
+  });
+  it("continues to call a known deterministic pre-write stop safely stopped", () => {
+    const html = renderToStaticMarkup(createElement(SafeStopCard, { scenario, result: stopped("GOAL_CONSTRAINT_VIOLATION"), onDone: vi.fn(), onStartOver: vi.fn(), onCheckStatus: vi.fn() }));
+    expect(html).toContain("Payment stopped safely");
   });
 });
 
 it("renders reapproval as a distinct route-change outcome", () => {
-  const props = { scenario, onCancel: vi.fn(), onStartOver: vi.fn(), onReview: vi.fn() };
+  const props = { scenario, onCancel: vi.fn(), onReview: vi.fn() };
   const html = renderToStaticMarkup(createElement(ReapprovalCard, props));
   expect(html).toContain("The route changed — approval is required again");
   expect(html).toContain("Your payment details have changed");
+  expect(html).toContain("Review updated plan"); expect(html).toContain("Your previous authorisation was not reused");
   expect(html).not.toContain("No longer available");
+});
+
+it("describes unavailable recovery without claiming failure or inviting a repeat", () => {
+  const html = renderToStaticMarkup(createElement(RecoveryStatusCard, { onCheckStatus: vi.fn() }));
+  expect(html).toContain("couldn’t confirm the latest status yet"); expect(html).toContain("Please don’t repeat this request"); expect(html).toContain("Check status");
+  expect(html).not.toMatch(/No money moved|Start another request|failed/iu);
+});
+
+it("shows each settled and unsettled action in a partial completion warning", () => {
+  const partialScenario = { ...scenario, steps: [...scenario.steps, { id: "buy", kind: "Buy", title: "1 Apple share", summary: "Investment Account", meta: [] }] };
+  const result = ExecutionResultV1.parse({
+    schemaVersion: "1", executionId: "execution", planId: "plan", status: "FAILED", startedStateVersion: 7, finalStateVersion: 8,
+    steps: [{ stepId: "send", status: "SETTLED", idempotencyKey: "send-key", bankReference: "send-ref" }, { stepId: "buy", status: "FAILED", idempotencyKey: "buy-key", errorCode: "QUOTE_EXPIRED" }],
+    goalOutcome: { achieved: false, summary: "Second action stopped." },
+  });
+  const html = renderToStaticMarkup(createElement(PartialCompletionCard, { scenario: partialScenario, result, onDone: vi.fn() }));
+  expect(html).toContain("Some actions completed"); expect(html).toContain("Completed"); expect(html).toContain("Not completed");
+  expect(html).toContain("Do not repeat the whole request"); expect(html).not.toContain("Start another request");
 });
 
 it("keeps meaning confirmation distinct from passkey authorization", () => {

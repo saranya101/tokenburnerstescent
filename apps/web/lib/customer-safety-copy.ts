@@ -8,6 +8,8 @@ const executionReasonMessages: Readonly<Record<string, string>> = {
   TRANSFER_RAIL_UNAVAILABLE: "This transfer route is currently unavailable",
   BANK_RESPONSE_OUTCOME_UNKNOWN: "We’re confirming this transaction’s status. Please don’t try again yet",
   BANK_LOOKUP_UNAVAILABLE: "We’re confirming this transaction’s status. Please don’t try again yet",
+  BANK_ACCEPTED_CONFIRMATION_PENDING: "The bank accepted this transaction. We’re confirming the final status. Please don’t repeat this request",
+  SETTLED_BOOKKEEPING_PENDING: "This transaction is complete at the bank while we finish confirming the final status. Please don’t repeat this request",
   RECONCILIATION_CONFLICT: "We could not safely confirm the bank result. No further action will continue",
 };
 
