@@ -14,6 +14,7 @@ import { ClarificationCard } from "./goal/clarification-card";
 import { UnderstoodGoalCard } from "./goal/understood-goal-card";
 import { UnderstoodBundleCard } from "./goal/understood-bundle-card";
 import { FinancialPlanPreview } from "./plan/financial-plan-preview";
+import { RiskOutcomeCard } from "./risk/risk-outcome-card";
 
 const scenario: PlanPresentation = {
   goal: { eyebrow: "Send money", title: "Send USD 70.00 to Nanyang Technological University", description: "Send money", details: [{ label: "Amount", value: "USD 70.00" }, { label: "To", value: "Nanyang Technological University" }], constraints: [], preferences: [] },
@@ -36,6 +37,17 @@ it("renders a banking task entry instead of an AI prompt gallery", () => {
   expect(html).toContain("Use microphone for voice input");
   expect(html).toContain('aria-live="polite"');
   expect(html).toContain("Voice input");
+});
+
+it.each([
+  ["REVIEW", "Additional review required", "We need to review this transaction before it can continue. No money has moved."],
+  ["BLOCK", "Transaction can’t continue", "We can’t complete this transaction under the current safety checks. No money has moved."],
+] as const)("renders a safe %s outcome without passkey controls or internal codes", (decision, title, detail) => {
+  const html = renderToStaticMarkup(createElement(RiskOutcomeCard, { decision, onDone: vi.fn() }));
+  expect(html).toContain(title);
+  expect(html).toContain(detail);
+  expect(html).toContain("Done");
+  expect(html).not.toMatch(/passkey|RISK_REVIEW_REQUIRED|RISK_BLOCKED|DBS policy/iu);
 });
 
 it("defines distinct tablet and mobile shell behavior", () => {

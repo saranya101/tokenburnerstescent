@@ -12,6 +12,7 @@ import { ClarificationCard } from "../goal/clarification-card";
 import { UnderstoodGoalCard } from "../goal/understood-goal-card";
 import { UnderstoodBundleCard } from "../goal/understood-bundle-card";
 import { FinancialPlanPreview } from "../plan/financial-plan-preview";
+import { RiskOutcomeCard } from "../risk/risk-outcome-card";
 import { PasskeySetupCard } from "../security/passkey-setup-card";
 import { Icon } from "../ui/icon";
 import { ConversationComposer } from "./conversation-composer";
@@ -61,6 +62,8 @@ export function ChatExperience() {
         {planPresentation && state.phase === "AUTHORIZING" && <><FinancialPlanPreview scenario={planPresentation} onCancel={() => undefined} onApprove={() => undefined} busy /><WorkingState title="Confirm with your passkey" detail="Your bank is verifying approval for this exact plan." /></>}
         {planPresentation && state.phase === "PASSKEY_CANCELLED" && <><FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => void flow.authorizeAndExecute()} /><InlineNotice title="Passkey confirmation was cancelled" detail="Nothing was authorized or executed. You can try again when ready." /></>}
         {planPresentation && state.phase === "APPROVAL_FAILED" && <><FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => void flow.authorizeAndExecute()} /><InlineNotice title="Approval could not be verified" detail="Nothing was executed. Review the plan and try passkey confirmation again." /></>}
+        {state.phase === "RISK_REVIEW" && <RiskOutcomeCard decision="REVIEW" onDone={flow.reset} />}
+        {state.phase === "RISK_BLOCKED" && <RiskOutcomeCard decision="BLOCK" onDone={flow.reset} />}
         {planPresentation && state.phase === "EXECUTING" && <ExecutionTimeline items={executionTimeline(planPresentation, state)} steps={planPresentation.steps} scenario={planPresentation} />}
         {planPresentation && state.phase === "COMPLETED" && <><ExecutionTimeline items={executionTimeline(planPresentation, state)} steps={planPresentation.steps} scenario={planPresentation} /><div className="completion-action"><Link className="button bank-primary" href="/">Done</Link></div></>}
         {planPresentation && state.phase === "PAUSED" && <SafeStopCard scenario={planPresentation} result={state.result} onDone={flow.reset} onStartOver={flow.reset} />}

@@ -21,6 +21,8 @@ export type CustomerFlowState =
   | ({ phase: "AUTHORIZING" } & Context)
   | ({ phase: "PASSKEY_CANCELLED" } & Context)
   | ({ phase: "APPROVAL_FAILED"; message: string } & Context)
+  | ({ phase: "RISK_REVIEW" } & Context)
+  | ({ phase: "RISK_BLOCKED" } & Context)
   | ({ phase: "EXECUTING"; executionId: string } & Context)
   | ({ phase: "COMPLETED"; result: ExecutionResultV1 } & Context)
   | ({ phase: "PAUSED"; result: ExecutionResultV1 } & Context)
@@ -130,8 +132,11 @@ export class CustomerFlowController {
       const authorized = await this.api.verifyApproval(context.plan.id, issued.challengeId, credential);
       executionId = authorized.execution.executionId;
     } catch (error) {
-      if (message(error) === "FINANCIAL_PLAN_EXPIRED") { await this.refreshExpiredPlan(context); }
-      else if (message(error) === "PASSKEY_CREDENTIAL_NOT_FOUND") this.transition({ phase: "PASSKEY_REQUIRED", ...context });
+      const code = message(error);
+      if (code === "FINANCIAL_PLAN_EXPIRED") { await this.refreshExpiredPlan(context); }
+      else if (code === "RISK_REVIEW_REQUIRED") this.transition({ phase: "RISK_REVIEW", ...context });
+      else if (code === "RISK_BLOCKED") this.transition({ phase: "RISK_BLOCKED", ...context });
+      else if (code === "PASSKEY_CREDENTIAL_NOT_FOUND") this.transition({ phase: "PASSKEY_REQUIRED", ...context });
       else if (error instanceof PasskeyCancelledError) this.transition({ phase: "PASSKEY_CANCELLED", ...context });
       else this.transition({ phase: "APPROVAL_FAILED", ...context, message: message(error) });
       return;

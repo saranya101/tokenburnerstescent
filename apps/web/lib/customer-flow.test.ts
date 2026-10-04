@@ -76,6 +76,21 @@ it("runs the real multi-step customer sequence through completion", async () => 
   expect(values.api.approvalOptions).toHaveBeenCalledWith(plan.id); expect(values.api.verifyApproval).toHaveBeenCalledWith(plan.id, "challenge-1", credential); expect(values.api.runExecution).toHaveBeenCalledWith("execution-1");
 });
 
+it.each([
+  ["RISK_REVIEW_REQUIRED", "RISK_REVIEW"],
+  ["RISK_BLOCKED", "RISK_BLOCKED"],
+] as const)("maps %s to a safe terminal customer state before passkey or execution", async (code, phase) => {
+  const values = setup({ approvalOptions: vi.fn().mockRejectedValue(new Error(code)) });
+  await reachPlan(values);
+  await values.flow.authorizeAndExecute();
+
+  expect(values.flow.state.phase).toBe(phase);
+  expect(values.passkey.request).not.toHaveBeenCalled();
+  expect(values.api.verifyApproval).not.toHaveBeenCalled();
+  expect(values.api.runExecution).not.toHaveBeenCalled();
+  expect("message" in values.flow.state).toBe(false);
+});
+
 it("continues a backend clarification through its persisted identifier without resending the request", async () => {
   const clarification = { reason: "AMBIGUOUS_ENTITY", field: "recipientReference", originalReference: "John", questionKey: "clarify.entity.ambiguous", options: [{ entityId: "ben-john-tan", entityType: "BENEFICIARY" as const, displayName: "John Tan" }] };
   const values = setup({ sendMessage: vi.fn().mockResolvedValueOnce({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-1", clarifications: [clarification] }) });
