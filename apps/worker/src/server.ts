@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import { randomUUID } from "node:crypto";
 import { getPrismaClient } from "@parlance/db";
 import { logger, resolveTraceId } from "@parlance/observability";
-import { PrismaRecoveryWorkStore, processNextRecovery } from "./jobs/reconciliation.js";
+import { classifyRecoveryResult, PrismaRecoveryWorkStore, processNextRecovery } from "./jobs/reconciliation.js";
 const app = Fastify({ loggerInstance: logger });
 app.addHook("onRequest", async (request, reply) => { const traceId = resolveTraceId(request.headers["x-trace-id"]); reply.header("x-trace-id", traceId); });
 app.get("/health", async () => ({ status: "ok", service: "worker" }));
@@ -12,9 +12,7 @@ const recoveryTimer = setInterval(() => { if (recoveryRunning) return; recoveryR
   async recover(executionId, traceId) {
     const response = await fetch(`${apiUrl}/v1/executions/${encodeURIComponent(executionId)}/run`, { method: "POST", headers: { "x-trace-id": traceId } });
     if (!response.ok) throw new Error(`RECOVERY_API_${response.status}`);
-    const result = await response.json() as { status?: string; steps?: Array<{ status?: string; errorCode?: string }> };
-    const recoveryErrors = new Set(["BANK_RESPONSE_OUTCOME_UNKNOWN", "BANK_LOOKUP_UNAVAILABLE"]);
-    return result.status === "UNKNOWN" && result.steps?.some((step) => step.status === "UNKNOWN" && step.errorCode && recoveryErrors.has(step.errorCode)) ? "RETRY" : "RESOLVED";
+    return classifyRecoveryResult(await response.json());
   },
 }).finally(() => { recoveryRunning = false; }); }, 1_000);
 app.addHook("onClose", async () => { clearInterval(recoveryTimer); await db.$disconnect(); });

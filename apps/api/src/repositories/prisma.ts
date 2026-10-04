@@ -463,11 +463,12 @@ export class PrismaParlanceRepository implements ParlanceRepository, BundlePlanR
       || evidence.authenticatorCounterBefore !== input.expectedCounter || evidence.authenticatorCounterAfter !== input.newCounter
       || approval.approvedAt !== input.now.toISOString() || evidence.verifiedAt !== input.now.toISOString()
       || Date.parse(approval.expiresAt) <= input.now.getTime()) throw new Error("WEBAUTHN_APPROVAL_EVIDENCE_INVALID");
-    await this.db.$transaction(async (tx) => {
+    const authorize = async () => this.db.$transaction(async (tx) => {
       const authoritativePlan = await tx.financialPlan.findUnique({ where: { id: approval.financialPlanId }, select: {
         status: true, planHash: true, goalContractRowId: true, goalBundleRowId: true, goalContractKey: true, goalContractVersion: true, bankStateVersion: true,
       } });
       if (!authoritativePlan || authoritativePlan.status !== "READY") throw new Error("FINANCIAL_PLAN_NOT_READY");
+      if (await tx.executionRun.findUnique({ where: { planId: approval.financialPlanId }, select: { id: true } })) throw new Error("FINANCIAL_PLAN_ALREADY_AUTHORIZED");
       if ((authoritativePlan.goalContractRowId === null) === (authoritativePlan.goalBundleRowId === null)
         || (input.ownerType === "BUNDLE") !== (authoritativePlan.goalBundleRowId !== null)) throw new Error("FINANCIAL_PLAN_OWNER_INVARIANT_VIOLATION");
       const authoritativeOwnerRowId = input.ownerType === "BUNDLE" ? authoritativePlan.goalBundleRowId : authoritativePlan.goalContractRowId;
@@ -505,6 +506,17 @@ export class PrismaParlanceRepository implements ParlanceRepository, BundlePlanR
       await tx.auditEvent.createMany({ data: [verified.audit, authorized.audit] });
       await tx.outboxEvent.createMany({ data: [verified.outbox, authorized.outbox] });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    for (let attempt = 0; ; attempt += 1) {
+      try { await authorize(); break; }
+      catch (error) {
+        if (error instanceof Error && error.message === "FINANCIAL_PLAN_ALREADY_AUTHORIZED") throw error;
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          if (await this.db.executionRun.findUnique({ where: { planId: approval.financialPlanId }, select: { id: true } })) throw new Error("FINANCIAL_PLAN_ALREADY_AUTHORIZED");
+        }
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034" && attempt < 2) continue;
+        throw error;
+      }
+    }
     const stored = await this.getExecution(input.executionId); if (!stored) throw new Error("EXECUTION_NOT_FOUND");
     return { evidence, execution: stored.result };
   }
@@ -527,7 +539,7 @@ export class PrismaParlanceRepository implements ParlanceRepository, BundlePlanR
   }
   async recordStep(input: Parameters<ParlanceRepository["recordStep"]>[0]): Promise<void> {
     const planStep = await this.db.financialPlanStep.findFirstOrThrow({ where: { plan: { executionRuns: { some: { id: input.executionId } } }, stepKey: input.planStepId } });
-    const data = { status: input.status, ...(input.bankReference ? { bankReference: input.bankReference } : {}), ...(input.errorCode ? { errorCode: input.errorCode } : {}), ...(input.resultingStateVersion === undefined ? {} : { resultingStateVersion: input.resultingStateVersion }), traceId: input.traceId };
+    const data = { status: input.status, ...(input.bankReference ? { bankReference: input.bankReference } : {}), errorCode: input.errorCode ?? null, ...(input.resultingStateVersion === undefined ? {} : { resultingStateVersion: input.resultingStateVersion }), traceId: input.traceId };
     const e = event("EXECUTION_STEP_UPDATED", "ExecutionRun", input.executionId, input.traceId, { stepId: input.planStepId, status: input.status, errorCode: input.errorCode, resultingStateVersion: input.resultingStateVersion });
     await this.db.$transaction(async (tx) => { await tx.executionStep.upsert({ where: { executionRunId_planStepId: { executionRunId: input.executionId, planStepId: planStep.id } }, create: { id: input.stepId, executionRunId: input.executionId, planStepId: planStep.id, idempotencyKey: input.idempotencyKey, ...data }, update: data }); await tx.auditEvent.create({ data: e.audit }); await tx.outboxEvent.create({ data: e.outbox }); });
   }

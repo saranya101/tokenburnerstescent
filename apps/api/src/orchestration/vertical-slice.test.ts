@@ -16,11 +16,12 @@ const fixture = (name: string): unknown => JSON.parse(readFileSync(join(process.
 
 class MemoryRepository implements ParlanceRepository {
   goal: StoredGoal; plan?: StoredPlan; approval?: StoredApproval; execution?: StoredExecution; audit: unknown[] = []; snapshot?: BankStateSnapshotV1; idempotency = new Map<string, { hash: string; response?: unknown }>(); settledStateVersions = new Map<string, number>();
+  saveSnapshotCalls = 0; failSaveSnapshotAt?: number; failCompleteIdempotency = false; failAcceptedPersistence = 0; failAuditEventType: string | undefined;
   bundle?: StoredGoalBundle;
   constructor(goal: GoalContractV1) { this.goal = { rowId: "goal-row", contract: goal }; }
   async getConfirmedGoal(id: string) { return id === this.goal.contract.id ? this.goal : null; }
   async getConfirmedGoalBundle(id: string) { return id === this.bundle?.contract.bundleId ? this.bundle : null; }
-  async saveSnapshot(value: BankStateSnapshotV1) { this.snapshot = value; }
+  async saveSnapshot(value: BankStateSnapshotV1) { this.saveSnapshotCalls += 1; if (this.saveSnapshotCalls === this.failSaveSnapshotAt) throw new Error("SNAPSHOT_PERSISTENCE_UNAVAILABLE"); this.snapshot = value; }
   async savePlan(goalRowId: string, plan: FinancialPlanV1) { if (this.plan?.status === "READY") this.plan.status = "SUPERSEDED"; this.plan = { goalRowId, status: "READY", plan }; this.audit.push("PLAN_COMPILED"); }
   async saveCompilationFailure(_row: string, result: Exclude<CompilerResult, { status: "SAT" }>) { this.audit.push(result.status); }
   async getPlan(id: string) { return this.plan?.plan.id === id ? this.plan : null; }
@@ -29,11 +30,11 @@ class MemoryRepository implements ParlanceRepository {
   async getExecution(id: string) { return this.execution?.result.executionId === id ? this.execution : null; }
   async getLatestSettledStateVersion(executionId: string) { return this.settledStateVersions.get(executionId) ?? null; }
   async claimIdempotency(input: { key: string; scope: string; requestHash: string }) { const prior = this.idempotency.get(input.key); if (!prior) { this.idempotency.set(input.key, { hash: input.requestHash }); return { status: "CLAIMED" as const }; } return prior.hash === input.requestHash ? { status: "REPLAY" as const, ...(prior.response === undefined ? {} : { response: prior.response }) } : { status: "CONFLICT" as const }; }
-  async completeIdempotency(key: string, response: unknown) { const prior = this.idempotency.get(key); if (prior) prior.response = response; }
+  async completeIdempotency(key: string, response: unknown) { if (this.failCompleteIdempotency) throw new Error("IDEMPOTENCY_PERSISTENCE_UNAVAILABLE"); const prior = this.idempotency.get(key); if (prior) prior.response = response; }
   async startExecution() { if (this.execution) { this.execution.result = { ...this.execution.result, status: "EXECUTING" }; this.execution.executionState = "EXECUTING"; } this.audit.push("EXECUTION_STARTED"); }
   async blockExecution(input: Parameters<ParlanceRepository["blockExecution"]>[0]) { if (this.execution) { this.execution.result = input.result; this.execution.executionState = input.state; } this.audit.push({ eventType: "EXECUTION_BLOCKED", ...input }); }
-  async recordExecutionAudit(input: Parameters<ParlanceRepository["recordExecutionAudit"]>[0]) { this.audit.push(input); }
-  async recordStep(input: Parameters<ParlanceRepository["recordStep"]>[0]) { if (!this.execution) return; const next = { stepId: input.planStepId, status: input.status, idempotencyKey: input.idempotencyKey, ...(input.bankReference ? { bankReference: input.bankReference } : {}), ...(input.errorCode ? { errorCode: input.errorCode } : {}) }; this.execution.result = { ...this.execution.result, steps: [...this.execution.result.steps.filter((item) => item.stepId !== input.planStepId), next] }; if (input.status === "SETTLED" && input.resultingStateVersion !== undefined) this.settledStateVersions.set(input.executionId, input.resultingStateVersion); this.audit.push(`STEP_${input.status}`); }
+  async recordExecutionAudit(input: Parameters<ParlanceRepository["recordExecutionAudit"]>[0]) { if (input.eventType === this.failAuditEventType) { this.failAuditEventType = undefined; throw new Error("AUDIT_PERSISTENCE_UNAVAILABLE"); } this.audit.push(input); }
+  async recordStep(input: Parameters<ParlanceRepository["recordStep"]>[0]) { if (input.status === "ACCEPTED" && this.failAcceptedPersistence > 0) { this.failAcceptedPersistence -= 1; throw new Error("STEP_PERSISTENCE_UNAVAILABLE"); } if (!this.execution) return; const next = { stepId: input.planStepId, status: input.status, idempotencyKey: input.idempotencyKey, ...(input.bankReference ? { bankReference: input.bankReference } : {}), ...(input.errorCode ? { errorCode: input.errorCode } : {}) }; this.execution.result = { ...this.execution.result, steps: [...this.execution.result.steps.filter((item) => item.stepId !== input.planStepId), next] }; if (input.status === "SETTLED" && input.resultingStateVersion !== undefined) this.settledStateVersions.set(input.executionId, input.resultingStateVersion); this.audit.push(`STEP_${input.status}`); }
   async finishExecution(input: Parameters<ParlanceRepository["finishExecution"]>[0]) { if (this.execution) { this.execution.result = input.result; this.execution.executionState = input.result.status === "COMPLETED" ? "COMPLETED" : "FAILED"; } this.audit.push(`EXECUTION_${input.result.status}`); }
   async listExecutions() { return this.execution ? [this.execution] : []; }
   async listRecoverableExecutions() { return this.execution && !["COMPLETED", "FAILED"].includes(this.execution.executionState) ? [this.execution] : []; }
@@ -52,10 +53,11 @@ async function bankAdapter(): Promise<BankPort> {
 
 class ControlledBank implements BankPort {
   writes = 0;
+  failGetStateAfterWrite = false; advanceStateAfterAcceptance = false;
   lastOperation?: { path: "fx" | "transfer" | "payment" | "buy"; payload: unknown; idempotencyKey: string; traceId: string };
   constructor(public snapshot: BankStateSnapshotV1) {}
-  async getState() { return BankStateSnapshotV1.parse(this.snapshot); }
-  async execute(path: "fx" | "transfer" | "payment" | "buy", payload: unknown, idempotencyKey: string, traceId: string) { this.lastOperation = { path, payload, idempotencyKey, traceId }; this.writes += 1; this.snapshot = { ...this.snapshot, stateVersion: this.snapshot.stateVersion + 1, capturedAt: new Date(Date.parse(this.snapshot.capturedAt) + 1_000).toISOString() }; return { accepted: true as const, bankReference: `controlled-${this.writes}`, stateVersion: this.snapshot.stateVersion }; }
+  async getState() { if (this.failGetStateAfterWrite && this.writes > 0) throw new Error("BANK_STATE_REFRESH_UNAVAILABLE"); return BankStateSnapshotV1.parse(this.snapshot); }
+  async execute(path: "fx" | "transfer" | "payment" | "buy", payload: unknown, idempotencyKey: string, traceId: string) { this.lastOperation = { path, payload, idempotencyKey, traceId }; this.writes += 1; const acceptedStateVersion = this.snapshot.stateVersion + 1; this.snapshot = { ...this.snapshot, stateVersion: acceptedStateVersion + (this.advanceStateAfterAcceptance ? 1 : 0), capturedAt: new Date(Date.parse(this.snapshot.capturedAt) + 1_000).toISOString() }; return { accepted: true as const, bankReference: `controlled-${this.writes}`, stateVersion: acceptedStateVersion }; }
   async lookupByIdempotencyKey(idempotencyKey: string): Promise<BankLookupResult> { return { status: "NOT_FOUND", idempotencyKey }; }
 }
 
@@ -104,6 +106,12 @@ const applePlan = (stateVersion = 7): FinancialPlanV1 => {
   return { ...raw, planHash: hashFinancialPlan(raw) };
 };
 
+const appleBuyOnlyPlan = (stateVersion = 7): FinancialPlanV1 => {
+  const base = applePlan(stateVersion); const buy = base.steps[1]!;
+  const raw = FinancialPlanV1.parse({ ...base, id: "plan-apple-buy-only", steps: [{ ...buy, sequence: 0, dependsOn: [] }], validity: { requiredQuoteIds: ["asset-quote-aapl-usd-v1"] }, planHash: "0".repeat(64) });
+  return FinancialPlanV1.parse({ ...raw, planHash: hashFinancialPlan(raw) });
+};
+
 const planWithExpiry = (plan: FinancialPlanV1, validUntil: Date): FinancialPlanV1 => {
   const unhashed = FinancialPlanV1.parse({ ...plan, validity: { ...plan.validity, validUntil: validUntil.toISOString() }, planHash: "0".repeat(64) });
   return FinancialPlanV1.parse({ ...unhashed, planHash: hashFinancialPlan(unhashed) });
@@ -114,6 +122,16 @@ const appleState = (investments: boolean, stateVersion = 7): BankStateSnapshotV1
   assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: investments, settlementCurrency: "USD" }],
   assetQuotes: [{ quoteId: "asset-quote-aapl-usd-v1", assetId: "asset-aapl", settlementCurrency: "USD", unitPriceMinor: "20000", feeMinor: "100", expiresAt: "2099-01-01T00:00:00.000Z" }],
   serviceAvailability: { transfers: true, fx: true, billPayments: true, investments } });
+
+const appleBuyOnlyState = (stateVersion = 7): BankStateSnapshotV1 => {
+  const state = appleState(true, stateVersion);
+  return BankStateSnapshotV1.parse({
+    ...state,
+    accounts: state.accounts.map((account) => account.id === "acc-usd"
+      ? { ...account, ledgerMinorUnits: "500000", availableMinorUnits: "500000" }
+      : account),
+  });
+};
 
 async function authorize(repository: MemoryRepository, plan: FinancialPlanV1) {
   repository.plan = { goalRowId: repository.goal.rowId, status: "READY", plan };
@@ -411,6 +429,59 @@ describe("NTU transfer vertical slice", () => {
     const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: applePlan(state.stateVersion) }); } };
     const result = await new ExecutionService(repository, bank, compiler).run(approved.execution.executionId, "trace-rejected");
     expect(result.status).toBe("FAILED"); expect(result.steps[0]).toMatchObject({ status: "FAILED", errorCode: "INSUFFICIENT_FUNDS" }); expect(bank.writes).toBe(0);
+  });
+
+  it("pauses with accepted evidence when bank state refresh fails after acceptance", async () => {
+    const goal = appleGoal(); const plan = applePlan(); const repository = new MemoryRepository(goal); const bank = new RecoveringBank(appleState(true)); bank.failGetStateAfterWrite = true; const approved = await authorize(repository, plan);
+    const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: applePlan(state.stateVersion) }); } };
+    const service = new ExecutionService(repository, bank, compiler); const result = await service.run(approved.execution.executionId, "trace-refresh-failure");
+    expect(result).toMatchObject({ status: "UNKNOWN", steps: [{ stepId: "fx-for-aapl", status: "ACCEPTED", bankReference: "recovering-1", errorCode: "BANK_ACCEPTED_CONFIRMATION_PENDING" }] });
+    expect(repository.execution?.executionState).toBe("PAUSED"); expect(bank.writes).toBe(1);
+    bank.failGetStateAfterWrite = false;
+    const retried = await service.run(approved.execution.executionId, "trace-refresh-failure-retry"); expect(retried.status).toBe("COMPLETED"); expect(bank.writes).toBe(2); expect(bank.attempts.map((attempt) => attempt.path)).toEqual(["fx", "buy"]);
+  });
+
+  it("pauses with accepted evidence when snapshot persistence fails after acceptance", async () => {
+    const goal = appleGoal(); const plan = applePlan(); const repository = new MemoryRepository(goal); repository.failSaveSnapshotAt = 3; const bank = new RecoveringBank(appleState(true)); const approved = await authorize(repository, plan);
+    const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: applePlan(state.stateVersion) }); } };
+    const service = new ExecutionService(repository, bank, compiler); const result = await service.run(approved.execution.executionId, "trace-snapshot-failure");
+    expect(result.steps[0]).toMatchObject({ status: "ACCEPTED", bankReference: "recovering-1", errorCode: "BANK_ACCEPTED_CONFIRMATION_PENDING" }); expect(result.status).not.toBe("FAILED"); expect(bank.writes).toBe(1);
+    const retried = await service.run(approved.execution.executionId, "trace-snapshot-failure-retry"); expect(retried.status).toBe("COMPLETED"); expect(bank.writes).toBe(2); expect(bank.attempts.map((attempt) => attempt.path)).toEqual(["fx", "buy"]);
+  });
+
+  it("pauses with accepted evidence when local idempotency completion fails", async () => {
+    const goal = appleGoal(); const plan = applePlan(); const repository = new MemoryRepository(goal); repository.failCompleteIdempotency = true; const bank = new RecoveringBank(appleState(true)); const approved = await authorize(repository, plan);
+    const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: applePlan(state.stateVersion) }); } };
+    const service = new ExecutionService(repository, bank, compiler); const result = await service.run(approved.execution.executionId, "trace-idempotency-failure");
+    expect(result.steps[0]).toMatchObject({ status: "ACCEPTED", bankReference: "recovering-1", errorCode: "BANK_ACCEPTED_CONFIRMATION_PENDING" }); expect(result.status).not.toBe("FAILED"); expect(bank.writes).toBe(1);
+    repository.failCompleteIdempotency = false;
+    const retried = await service.run(approved.execution.executionId, "trace-idempotency-failure-retry"); expect(retried.status).toBe("COMPLETED"); expect(bank.writes).toBe(2); expect(bank.attempts.map((attempt) => attempt.path)).toEqual(["fx", "buy"]);
+  });
+
+  it("never regresses a durably settled step when a later audit fails", async () => {
+    const goal = appleGoal(); const plan = appleBuyOnlyPlan(); const repository = new MemoryRepository(goal); repository.failAuditEventType = "EXECUTION_RECONCILIATION_RESULT"; const bank = new RecoveringBank(appleBuyOnlyState()); const approved = await authorize(repository, plan);
+    const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: appleBuyOnlyPlan(state.stateVersion) }); } };
+    const service = new ExecutionService(repository, bank, compiler); const paused = await service.run(approved.execution.executionId, "trace-settled-audit-failure");
+    expect(paused).toMatchObject({ status: "UNKNOWN", steps: [{ stepId: "buy-aapl", status: "SETTLED", bankReference: "recovering-1", errorCode: "SETTLED_BOOKKEEPING_PENDING" }] }); expect(paused.steps).toHaveLength(1);
+    expect(repository.execution?.result.steps).toEqual(paused.steps); expect(repository.execution?.executionState).toBe("PAUSED"); expect(bank.writes).toBe(1);
+    const recovered = await service.run(approved.execution.executionId, "trace-settled-audit-recovery");
+    expect(recovered).toMatchObject({ status: "COMPLETED", steps: [{ stepId: "buy-aapl", status: "SETTLED", bankReference: "recovering-1" }] }); expect(recovered.steps).toHaveLength(1); expect(recovered.steps[0]).not.toHaveProperty("errorCode"); expect(bank.writes).toBe(1);
+  });
+
+  it("recovers a stale PENDING marker after acceptance persistence fails without a second bank effect", async () => {
+    const goal = appleGoal(); const plan = appleBuyOnlyPlan(); const repository = new MemoryRepository(goal); repository.failAcceptedPersistence = 2; const bank = new RecoveringBank(appleBuyOnlyState()); const approved = await authorize(repository, plan);
+    const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: appleBuyOnlyPlan(state.stateVersion) }); } };
+    const service = new ExecutionService(repository, bank, compiler); await expect(service.run(approved.execution.executionId, "trace-accepted-db-outage")).rejects.toThrow("STEP_PERSISTENCE_UNAVAILABLE");
+    expect(repository.execution?.result.steps).toEqual([expect.objectContaining({ stepId: "buy-aapl", status: "PENDING" })]); expect(bank.writes).toBe(1); expect(bank.attempts).toHaveLength(1);
+    const recovered = await service.run(approved.execution.executionId, "trace-stale-pending-recovery");
+    expect(recovered).toMatchObject({ status: "COMPLETED", steps: [{ stepId: "buy-aapl", status: "SETTLED", bankReference: "recovering-1" }] }); expect(recovered.steps).toHaveLength(1); expect(bank.writes).toBe(1); expect(bank.attempts).toHaveLength(1);
+  });
+
+  it("does not fail an accepted effect when refreshed authoritative state is newer", async () => {
+    const goal = appleGoal(); const plan = appleBuyOnlyPlan(); const repository = new MemoryRepository(goal); const bank = new ControlledBank(appleBuyOnlyState()); bank.advanceStateAfterAcceptance = true; const approved = await authorize(repository, plan);
+    const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: appleBuyOnlyPlan(state.stateVersion) }); } };
+    const result = await new ExecutionService(repository, bank, compiler).run(approved.execution.executionId, "trace-newer-state");
+    expect(result).toMatchObject({ status: "COMPLETED", finalStateVersion: 9, steps: [{ stepId: "buy-aapl", status: "SETTLED", bankReference: "controlled-1" }] }); expect(repository.settledStateVersions.get(approved.execution.executionId)).toBe(8); expect(bank.writes).toBe(1);
   });
 
   it("keeps a pre-receipt network failure unknown with zero writes when lookup is unavailable", async () => {

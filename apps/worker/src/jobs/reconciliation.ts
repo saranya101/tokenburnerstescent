@@ -9,6 +9,8 @@ export interface RecoveryWorkStore {
   release(id: string, claimToken: string, error: string): Promise<boolean>;
 }
 export interface ExecutionRecoveryPort { recover(executionId: string, traceId: string): Promise<"RESOLVED" | "RETRY"> }
+export interface RecoveryExecutionResult { status?: string; steps?: Array<{ status?: string; errorCode?: string }> }
+export const STALE_PENDING_RECOVERY_AGE_MS = 60_000;
 interface RecoverySqlClient {
   $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T>;
   $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<number>;
@@ -36,13 +38,15 @@ export async function reconcilePersistedExecution(executionId: string, store: Re
 export class PrismaRecoveryWorkStore implements RecoveryWorkStore {
   constructor(private readonly db: RecoverySqlClient, private readonly newClaimToken: () => string) {}
   async claimNext(now: Date, leaseMs: number): Promise<ClaimedRecoveryWork | null> {
-    const expiredBefore = new Date(now.getTime() - leaseMs); const claimToken = this.newClaimToken();
+    const expiredBefore = new Date(now.getTime() - leaseMs); const pendingBefore = new Date(now.getTime() - STALE_PENDING_RECOVERY_AGE_MS); const claimToken = this.newClaimToken();
     const rows = await this.db.$queryRaw<Array<{ id: string; executionId: string; traceId: string }>>`
       WITH candidate AS (
         SELECT id FROM "OutboxEvent"
         WHERE topic = 'EXECUTION_STEP_UPDATED'
-          AND payload->>'status' = 'UNKNOWN'
-          AND payload->>'errorCode' IN ('BANK_RESPONSE_OUTCOME_UNKNOWN', 'BANK_LOOKUP_UNAVAILABLE')
+          AND ((payload->>'status' = 'UNKNOWN' AND payload->>'errorCode' IN ('BANK_RESPONSE_OUTCOME_UNKNOWN', 'BANK_LOOKUP_UNAVAILABLE'))
+            OR (payload->>'status' = 'ACCEPTED' AND payload->>'errorCode' = 'BANK_ACCEPTED_CONFIRMATION_PENDING')
+            OR (payload->>'status' = 'SETTLED' AND payload->>'errorCode' = 'SETTLED_BOOKKEEPING_PENDING')
+            OR (payload->>'status' = 'PENDING' AND "createdAt" < ${pendingBefore}))
           AND (status = 'PENDING' OR (status = 'PROCESSING' AND ("claimedAt" IS NULL OR "claimedAt" < ${expiredBefore})))
         ORDER BY "createdAt" ASC FOR UPDATE SKIP LOCKED LIMIT 1
       )
@@ -59,6 +63,15 @@ export class PrismaRecoveryWorkStore implements RecoveryWorkStore {
   async release(id: string, claimToken: string, error: string): Promise<boolean> {
     const now = new Date(); return await this.db.$executeRaw`UPDATE "OutboxEvent" SET status = 'PENDING', "claimToken" = NULL, "claimedAt" = NULL, "lastError" = ${error.slice(0, 2_000)}, "updatedAt" = ${now} WHERE id = ${id} AND status = 'PROCESSING' AND "claimToken" = ${claimToken}` === 1;
   }
+}
+
+export function classifyRecoveryResult(result: RecoveryExecutionResult): "RESOLVED" | "RETRY" {
+  if (result.status !== "UNKNOWN") return "RESOLVED";
+  const unknownReasons = new Set(["BANK_RESPONSE_OUTCOME_UNKNOWN", "BANK_LOOKUP_UNAVAILABLE"]);
+  return result.steps?.some((step) =>
+    (step.status === "UNKNOWN" && step.errorCode !== undefined && unknownReasons.has(step.errorCode))
+    || (step.status === "ACCEPTED" && step.errorCode === "BANK_ACCEPTED_CONFIRMATION_PENDING")
+    || (step.status === "SETTLED" && step.errorCode === "SETTLED_BOOKKEEPING_PENDING")) ? "RETRY" : "RESOLVED";
 }
 
 export async function processNextRecovery(store: RecoveryWorkStore, recovery: ExecutionRecoveryPort, options: { now?: Date; leaseMs?: number } = {}): Promise<"EMPTY" | "RESOLVED" | "RETRY"> {

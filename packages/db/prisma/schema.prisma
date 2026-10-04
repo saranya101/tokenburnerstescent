@@ -517,7 +517,7 @@ model ExecutionRun {
   id                  String             @id @default(cuid())
   userId              String
   user                User               @relation(fields: [userId], references: [id])
-  planId              String
+  planId              String             @unique
   plan                FinancialPlan      @relation(fields: [planId], references: [id])
   approvalId          String             @unique
   approval            Approval           @relation(fields: [approvalId], references: [id])

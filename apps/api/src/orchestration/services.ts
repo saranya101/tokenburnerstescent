@@ -211,8 +211,11 @@ export class ExecutionService {
   async run(executionId: string, traceId: string) {
     const execution = await this.repository.getExecution(executionId); if (!execution) throw new Error("EXECUTION_NOT_FOUND");
     const recoveryErrors = new Set(["BANK_RESPONSE_OUTCOME_UNKNOWN", "BANK_LOOKUP_UNAVAILABLE"]);
-    const hasUnknownBankOutcome = execution.result.steps.some((step) => step.status === "UNKNOWN" && step.errorCode !== undefined && recoveryErrors.has(step.errorCode));
-    if (["COMPLETED", "FAILED", "REAPPROVAL_REQUIRED"].includes(execution.executionState) || (execution.executionState === "PAUSED" && !hasUnknownBankOutcome)) return execution.result;
+    const hasRecoverableBankOutcome = execution.result.steps.some((step) =>
+      (step.status === "UNKNOWN" && step.errorCode !== undefined && recoveryErrors.has(step.errorCode))
+      || (step.status === "ACCEPTED" && step.errorCode === "BANK_ACCEPTED_CONFIRMATION_PENDING")
+      || (step.status === "SETTLED" && step.errorCode === "SETTLED_BOOKKEEPING_PENDING"));
+    if (["COMPLETED", "FAILED", "REAPPROVAL_REQUIRED"].includes(execution.executionState) || (execution.executionState === "PAUSED" && !hasRecoverableBankOutcome)) return execution.result;
     const approval = await this.repository.getApproval(execution.approvalId); if (!approval) throw new Error("APPROVAL_NOT_FOUND");
     const storedPlan = await this.repository.getPlan(execution.result.planId); if (!storedPlan) throw new Error("PLAN_NOT_FOUND");
     const storedGoal = storedPlan.ownerType === "BUNDLE" ? null : await this.repository.getConfirmedGoal(storedPlan.plan.goalContractId);
@@ -339,6 +342,11 @@ export class ExecutionService {
     let expectedStateVersion = persistedSettledStateVersion ?? approval.approval.bankStateVersion;
     let executionStarted = execution.executionState === "EXECUTING";
     const executionGateway = new ExecutionGateway(this.bank);
+    const replaceStepResult = (next: ExecutionResultV1["steps"][number]) => {
+      const index = stepResults.findIndex((item) => item.stepId === next.stepId);
+      if (index === -1) stepResults.push(next);
+      else stepResults[index] = next;
+    };
 
     const stop = async (index: number, outcome: RevalidationOutcome, state: "PAUSED" | "REAPPROVAL_REQUIRED", reason: string, explanation: string) => {
       const step = storedPlan.plan.steps[index]!; const idempotencyKey = canonicalHash({ executionId, stepId: step.id });
@@ -362,32 +370,72 @@ export class ExecutionService {
       return result;
     };
 
+    const pauseAcceptedForReconciliation = async (step: FinancialPlanV1["steps"][number], idempotencyKey: string, accepted: { bankReference: string; stateVersion?: number }, cause: unknown) => {
+      const reason = "BANK_ACCEPTED_CONFIRMATION_PENDING";
+      const explanation = "The bank accepted this transaction, but Parlance is still confirming the final local record. No further step will continue yet.";
+      const acceptedStep = { stepId: step.id, status: "ACCEPTED" as const, idempotencyKey, bankReference: accepted.bankReference, errorCode: reason };
+      await this.repository.recordStep({ executionId, planStepId: step.id, stepId: `${executionId}:${step.id}`, idempotencyKey, status: "ACCEPTED", bankReference: accepted.bankReference, errorCode: reason, ...(accepted.stateVersion === undefined ? {} : { resultingStateVersion: accepted.stateVersion }), traceId });
+      await audit("BANK_ACCEPTED_CONFIRMATION_PENDING", { category: "RECONCILIATION", outcome: "PAUSED", stepKey: step.id, idempotencyKey, bankReference: accepted.bankReference, ...(accepted.stateVersion === undefined ? {} : { bankStateVersion: accepted.stateVersion }), reason: cause instanceof Error ? cause.message : "LOCAL_POST_ACCEPTANCE_FAILURE", explanation, severity: "WARNING" });
+      const finalStateVersion = accepted.stateVersion === undefined ? snapshot.stateVersion : Math.max(snapshot.stateVersion, accepted.stateVersion);
+      const result = ExecutionResultV1.parse({ schemaVersion: "1", executionId, planId: storedPlan.plan.id, status: "UNKNOWN", startedStateVersion: execution.result.startedStateVersion, finalStateVersion, steps: [...stepResults.filter((item) => item.stepId !== step.id), acceptedStep], goalOutcome: { achieved: false, summary: explanation } });
+      await this.repository.blockExecution({ executionId, state: "PAUSED", reason, explanation, result, traceId });
+      return result;
+    };
+
+    const pauseSettledBookkeeping = async (step: FinancialPlanV1["steps"][number], idempotencyKey: string, settled: BankWriteResult, cause: unknown) => {
+      const reason = "SETTLED_BOOKKEEPING_PENDING";
+      const explanation = "The financial effect is settled at the bank, but final local bookkeeping is still being completed.";
+      const settledStep = { stepId: step.id, status: "SETTLED" as const, idempotencyKey, bankReference: settled.bankReference, errorCode: reason };
+      await this.repository.recordStep({ executionId, planStepId: step.id, stepId: `${executionId}:${step.id}`, idempotencyKey, status: "SETTLED", bankReference: settled.bankReference, errorCode: reason, resultingStateVersion: settled.stateVersion, traceId });
+      replaceStepResult(settledStep);
+      await audit("SETTLED_BOOKKEEPING_PENDING", { category: "RECONCILIATION", outcome: "PAUSED", stepKey: step.id, idempotencyKey, bankReference: settled.bankReference, resultingStateVersion: settled.stateVersion, reason: cause instanceof Error ? cause.message : "LOCAL_POST_SETTLEMENT_FAILURE", explanation, severity: "WARNING" });
+      const result = ExecutionResultV1.parse({ schemaVersion: "1", executionId, planId: storedPlan.plan.id, status: "UNKNOWN", startedStateVersion: execution.result.startedStateVersion, finalStateVersion: snapshot.stateVersion, steps: stepResults, goalOutcome: { achieved: false, summary: explanation } });
+      await this.repository.blockExecution({ executionId, state: "PAUSED", reason, explanation, result, traceId });
+      return result;
+    };
+
     for (const [index, step] of storedPlan.plan.steps.entries()) {
-      if (stepResults.some((item) => item.stepId === step.id && item.status === "SETTLED")) continue;
+      const settledResult = stepResults.find((item) => item.stepId === step.id && item.status === "SETTLED");
+      if (settledResult) {
+        if (settledResult.errorCode === "SETTLED_BOOKKEEPING_PENDING") {
+          await this.repository.recordStep({ executionId, planStepId: step.id, stepId: `${executionId}:${step.id}`, idempotencyKey: settledResult.idempotencyKey, status: "SETTLED", ...(settledResult.bankReference ? { bankReference: settledResult.bankReference } : {}), traceId });
+          replaceStepResult({ stepId: step.id, status: "SETTLED", idempotencyKey: settledResult.idempotencyKey, ...(settledResult.bankReference ? { bankReference: settledResult.bankReference } : {}) });
+        }
+        continue;
+      }
       if (financialPlanExpired(storedPlan.plan, this.now())) return stop(index, "REPLAN_REQUIRED", "REAPPROVAL_REQUIRED", "FINANCIAL_PLAN_EXPIRED", "The approved plan expired before this step and must be refreshed and approved again.");
       const idempotencyKey = canonicalHash({ executionId, stepId: step.id }); const stepId = `${executionId}:${step.id}`;
       const operation = bankOperation(userId, step); const operationRequestHash = canonicalHash(operation.payload);
-      const persistedUnknown = execution.result.steps.find((item) => item.stepId === step.id && item.status === "UNKNOWN" && item.errorCode !== undefined && recoveryErrors.has(item.errorCode));
-      if (persistedUnknown) {
+      const persistedRecoverable = execution.result.steps.find((item) => item.stepId === step.id && (
+        (item.status === "UNKNOWN" && item.errorCode !== undefined && recoveryErrors.has(item.errorCode))
+        || (item.status === "ACCEPTED" && item.errorCode === "BANK_ACCEPTED_CONFIRMATION_PENDING")));
+      if (persistedRecoverable) {
         try {
           await audit("RECONCILIATION_STARTED", { category: "RECONCILIATION", outcome: "STARTED", stepKey: step.id, idempotencyKey });
           const found = await this.bank.lookupByIdempotencyKey(idempotencyKey, traceId);
           if (found.status === "COMPLETED") {
             await audit("BANK_IDEMPOTENCY_RESULT_FOUND", { category: "RECONCILIATION", outcome: "FOUND", stepKey: step.id, idempotencyKey, bankReference: found.bankReference });
-            if (found.idempotencyKey !== idempotencyKey || found.operation !== operation.path || found.requestHash !== operationRequestHash) return await pauseForReconciliation(step, idempotencyKey, "RECONCILIATION_CONFLICT");
+            if (found.idempotencyKey !== idempotencyKey || found.operation !== operation.path || found.requestHash !== operationRequestHash) {
+              if (persistedRecoverable.status === "ACCEPTED" && persistedRecoverable.bankReference) return await pauseAcceptedForReconciliation(step, idempotencyKey, { bankReference: persistedRecoverable.bankReference }, new Error("RECONCILIATION_CONFLICT"));
+              return await pauseForReconciliation(step, idempotencyKey, "RECONCILIATION_CONFLICT");
+            }
             const recovered = { accepted: true as const, bankReference: found.bankReference, stateVersion: found.stateVersion };
             await this.repository.completeIdempotency(idempotencyKey, recovered);
             await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "ACCEPTED", bankReference: found.bankReference, resultingStateVersion: found.stateVersion, traceId });
             await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "SETTLED", bankReference: found.bankReference, resultingStateVersion: found.stateVersion, traceId });
-            stepResults.push({ stepId: step.id, status: "SETTLED", idempotencyKey, bankReference: found.bankReference }); expectedStateVersion = found.stateVersion;
+            replaceStepResult({ stepId: step.id, status: "SETTLED", idempotencyKey, bankReference: found.bankReference }); expectedStateVersion = found.stateVersion;
             await settleRiskAfterBankConfirmation(step.id);
             await audit("RECONCILIATION_MATCHED", { category: "RECONCILIATION", outcome: "MATCHED", stepKey: step.id, idempotencyKey, bankReference: found.bankReference, resultingStateVersion: found.stateVersion });
             await audit("EXECUTION_RESUMED", { category: "RECONCILIATION", outcome: "RESUMED", stepKey: step.id, idempotencyKey });
             continue;
           }
           await audit("RECONCILIATION_NOT_FOUND", { category: "RECONCILIATION", outcome: "NOT_FOUND", stepKey: step.id, idempotencyKey });
+          if (persistedRecoverable.status === "ACCEPTED" && persistedRecoverable.bankReference) return await pauseAcceptedForReconciliation(step, idempotencyKey, { bankReference: persistedRecoverable.bankReference }, new Error("BANK_LOOKUP_NOT_FOUND_AFTER_ACCEPTANCE"));
         } catch (error) {
-          if (error instanceof Error && error.message === "BANK_LOOKUP_UNAVAILABLE") return await pauseForReconciliation(step, idempotencyKey, "BANK_LOOKUP_UNAVAILABLE");
+          if (error instanceof Error && error.message === "BANK_LOOKUP_UNAVAILABLE") {
+            if (persistedRecoverable.status === "ACCEPTED" && persistedRecoverable.bankReference) return await pauseAcceptedForReconciliation(step, idempotencyKey, { bankReference: persistedRecoverable.bankReference }, error);
+            return await pauseForReconciliation(step, idempotencyKey, "BANK_LOOKUP_UNAVAILABLE");
+          }
           throw error;
         }
       }
@@ -443,6 +491,8 @@ export class ExecutionService {
       const claim = await this.repository.claimIdempotency({ key: idempotencyKey, scope: "BANK_EXECUTION_STEP", requestHash: operationRequestHash });
       if (claim.status === "CONFLICT") throw new Error("IDEMPOTENCY_CONFLICT");
       await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "PENDING", traceId });
+      let lifecycle: "PRE_ACCEPTANCE" | "ACCEPTED" | "SETTLED" = "PRE_ACCEPTANCE";
+      let acceptedResult: BankWriteResult | undefined;
       try {
         const lookup = async () => {
           await audit("RECONCILIATION_STARTED", { category: "RECONCILIATION", outcome: "STARTED", stepKey: step.id, idempotencyKey });
@@ -481,16 +531,21 @@ export class ExecutionService {
           }
         }
         if (!result) return await pauseForReconciliation(step, idempotencyKey, "BANK_RESPONSE_OUTCOME_UNKNOWN");
-        await this.repository.completeIdempotency(idempotencyKey, result);
+        acceptedResult = result;
+        lifecycle = "ACCEPTED";
         await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "ACCEPTED", bankReference: result.bankReference, resultingStateVersion: result.stateVersion, traceId });
+        await this.repository.completeIdempotency(idempotencyKey, result);
         await audit("EXECUTION_BANK_OPERATION_EXECUTED", { category: "EXECUTION", outcome: "EXECUTED", stepKey: step.id, idempotencyKey, bankReference: result.bankReference });
-        snapshot = await this.bank.getState(userId, traceId); if (snapshot.stateVersion !== result.stateVersion) throw new Error("BANK_STATE_VERSION_MISMATCH");
+        snapshot = await this.bank.getState(userId, traceId); if (snapshot.stateVersion < result.stateVersion) throw new Error("BANK_STATE_VERSION_REGRESSION");
         await this.repository.saveSnapshot(snapshot, traceId); await audit("EXECUTION_STATE_REFRESHED", { category: "STATE_CHECK", outcome: "REFRESHED", stepKey: step.id, observedStateVersion: snapshot.stateVersion });
         await this.repository.recordStep({ executionId, planStepId: step.id, stepId, idempotencyKey, status: "SETTLED", bankReference: result.bankReference, resultingStateVersion: result.stateVersion, traceId });
-        stepResults.push({ stepId: step.id, status: "SETTLED", idempotencyKey, bankReference: result.bankReference });
+        lifecycle = "SETTLED";
+        replaceStepResult({ stepId: step.id, status: "SETTLED", idempotencyKey, bankReference: result.bankReference });
         await settleRiskAfterBankConfirmation(step.id);
         expectedStateVersion = result.stateVersion; await audit("EXECUTION_RECONCILIATION_RESULT", { category: "RECONCILIATION", outcome: "MATCHED", stepKey: step.id, bankReference: result.bankReference, expectedStateVersion: result.stateVersion, observedStateVersion: snapshot.stateVersion });
       } catch (error) {
+        if (lifecycle === "SETTLED" && acceptedResult) return await pauseSettledBookkeeping(step, idempotencyKey, acceptedResult, error);
+        if (lifecycle === "ACCEPTED" && acceptedResult) return await pauseAcceptedForReconciliation(step, idempotencyKey, acceptedResult, error);
         if (
           error instanceof Error &&
           error.message.startsWith("RISK_")
@@ -515,7 +570,7 @@ export class ExecutionService {
         await this.repository.finishExecution({ executionId, result: failed, traceId }); return failed;
       }
     }
-    const completed = ExecutionResultV1.parse({ schemaVersion: "1", executionId, planId: storedPlan.plan.id, status: "COMPLETED", startedStateVersion: execution.result.startedStateVersion, finalStateVersion: expectedStateVersion, steps: stepResults, goalOutcome: storedBundle ? { achieved: true, summary: "All confirmed actions in the combined request were completed." } : outcome(storedGoal!.contract, storedPlan.plan) });
+    const completed = ExecutionResultV1.parse({ schemaVersion: "1", executionId, planId: storedPlan.plan.id, status: "COMPLETED", startedStateVersion: execution.result.startedStateVersion, finalStateVersion: snapshot.stateVersion, steps: stepResults, goalOutcome: storedBundle ? { achieved: true, summary: "All confirmed actions in the combined request were completed." } : outcome(storedGoal!.contract, storedPlan.plan) });
     await this.repository.finishExecution({ executionId, result: completed, traceId }); return completed;
   }
   get(id: string) { return this.repository.getExecution(id); }
