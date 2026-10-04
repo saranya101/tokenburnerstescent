@@ -1,10 +1,17 @@
-import { IntentBundleDraftV1, type IntentBundleDraftV1 as IntentBundleDraft } from "@parlance/contracts";
+import { IntentBundleDraftV1, type IntentBundleDraftV1 as IntentBundleDraft, type MoneyV1 } from "@parlance/contracts";
 import {
+  sourceActionClause,
+  sourceActionSignals,
+  sourceContainsReference,
   sourceLockInDays,
   sourceSignalsMinimumBalance,
   sourceSupportsExcludedReference,
   sourceSupportsMaxTotalCost,
   sourceSupportsMinimumBalance,
+  sourceSupportsMoney,
+  sourceSupportsQuantity,
+  type SourceActionGoalType,
+  type SourceActionSignal,
 } from "../validation/evidence.js";
 import type {
   IndependentIntentValidationResult,
@@ -17,14 +24,8 @@ export interface IntentBundleCoverageValidationInput {
   readonly bundle: unknown;
 }
 
-export type SourceActionGoalType = IntentBundleDraft["items"][number]["goal"]["type"];
 type MismatchDetail = Omit<IntentValidationMismatch, "code" | "field">;
-
-interface ActionSignal {
-  readonly type: SourceActionGoalType;
-  readonly start: number;
-  readonly end: number;
-}
+export type { SourceActionGoalType } from "../validation/evidence.js";
 
 interface ExpectedDependency {
   readonly beforeIndex: number;
@@ -47,7 +48,7 @@ export class DeterministicIntentBundleCoverageValidator {
     const parsed = IntentBundleDraftV1.safeParse(input.bundle);
     if (!parsed.success) return fail([{ code: "INVALID_INTENT_BUNDLE", field: "bundle" }]);
     const bundle = parsed.data;
-    const signals = actionSignals(input.sourceText);
+    const signals = sourceActionSignals(input.sourceText);
 
     if (signals.length > bundle.items.length) {
       add("MISSING_INTENT", "items", { expected: String(signals.length), observed: String(bundle.items.length) });
@@ -63,6 +64,8 @@ export class DeterministicIntentBundleCoverageValidator {
       }
     }
 
+    validateItemClauseEvidence(input.sourceText, bundle, signals, add);
+
     validateDependencies(input.sourceText, bundle, signals, add);
     validateGlobalConstraints(input.sourceText, bundle, signals, add);
     return mismatches.length === 0 ? pass() : fail(mismatches);
@@ -72,7 +75,7 @@ export class DeterministicIntentBundleCoverageValidator {
 function validateDependencies(
   sourceText: string,
   bundle: IntentBundleDraft,
-  signals: readonly ActionSignal[],
+  signals: readonly SourceActionSignal[],
   add: AddMismatch,
 ): void {
   const expected = sourceSupportedExplicitDependencies(sourceText, bundle, signals);
@@ -97,7 +100,7 @@ function validateDependencies(
 export function sourceSupportedExplicitDependencies(
   sourceText: string,
   bundle: Pick<IntentBundleDraft, "items">,
-  signals: readonly ActionSignal[] = actionSignals(sourceText),
+  signals: readonly SourceActionSignal[] = sourceActionSignals(sourceText),
 ): readonly SourceSupportedExplicitDependency[] {
   return explicitOrderSignals(sourceText, signals).flatMap(({ beforeIndex, afterIndex }) => {
     const before = bundle.items[beforeIndex];
@@ -112,13 +115,13 @@ export function sourceSupportedExplicitDependencies(
 
 /** Ordered goal types detected by the same deterministic source scanner used for coverage. */
 export function sourceActionGoalTypes(sourceText: string): readonly SourceActionGoalType[] {
-  return actionSignals(sourceText).map(({ type }) => type);
+  return sourceActionSignals(sourceText).map(({ type }) => type);
 }
 
 function validateGlobalConstraints(
   sourceText: string,
   bundle: IntentBundleDraft,
-  signals: readonly ActionSignal[],
+  signals: readonly SourceActionSignal[],
   add: AddMismatch,
 ): void {
   bundle.globalConstraints.forEach((constraint, index) => {
@@ -140,27 +143,7 @@ function validateGlobalConstraints(
   }
 }
 
-function actionSignals(sourceText: string): readonly ActionSignal[] {
-  const pattern = /\b(send(?:ing)?|deliver(?:ing)?|remit(?:ting)?|wire|transfer(?:ring)?|buy(?:ing)?|acquir(?:e|ing)|purchas(?:e|ing)|get(?:ting)?|invest(?:ing)?\s+in|pay(?:ing)?|settl(?:e|ing)|mov(?:e|ing))\b/giu;
-  const signals: ActionSignal[] = [];
-  for (const match of sourceText.matchAll(pattern)) {
-    const verb = match[1]?.toLocaleLowerCase();
-    if (verb === undefined || match.index === undefined) continue;
-    const type = goalTypeForVerb(verb, sourceText.slice(match.index, match.index + 140));
-    signals.push({ type, start: match.index, end: match.index + match[0].length });
-  }
-  return signals;
-}
-
-function goalTypeForVerb(verb: string, followingText: string): SourceActionGoalType {
-  if (/^(?:buy|buying|acquir|purchas|get|getting|invest)/u.test(verb)) return "ACQUIRE_ASSET";
-  if (/^(?:pay|sett)/u.test(verb)) return "PAY_BILL";
-  if (/^mov/u.test(verb)) return "MOVE_FUNDS";
-  if (/^transfer/u.test(verb) && /\bfrom\b[\s\S]{0,80}\bto\b/iu.test(followingText)) return "MOVE_FUNDS";
-  return "DELIVER_MONEY";
-}
-
-function explicitOrderSignals(sourceText: string, signals: readonly ActionSignal[]): readonly ExpectedDependency[] {
+function explicitOrderSignals(sourceText: string, signals: readonly SourceActionSignal[]): readonly ExpectedDependency[] {
   const dependencies: ExpectedDependency[] = [];
   const first = signals[0];
   if (first !== undefined && signals[1] !== undefined) {
@@ -182,11 +165,53 @@ function explicitOrderSignals(sourceText: string, signals: readonly ActionSignal
   return dependencies;
 }
 
-function minimumBalanceAppearsAfterLastGoal(sourceText: string, signals: readonly ActionSignal[]): boolean {
+function minimumBalanceAppearsAfterLastGoal(sourceText: string, signals: readonly SourceActionSignal[]): boolean {
   const lastSignal = signals.at(-1);
   if (lastSignal === undefined) return false;
   const cue = /\b(?:keep|maintain|leave)\b[\s\S]{0,80}\b(?:at\s+least|minimum)\b/giu;
   return [...sourceText.matchAll(cue)].some((match) => (match.index ?? -1) > lastSignal.start);
+}
+
+function validateItemClauseEvidence(
+  sourceText: string,
+  bundle: IntentBundleDraft,
+  signals: readonly SourceActionSignal[],
+  add: AddMismatch,
+): void {
+  for (let index = 0; index < Math.min(signals.length, bundle.items.length); index += 1) {
+    const item = bundle.items[index];
+    const clause = sourceActionClause(sourceText, signals, index);
+    if (item === undefined || clause === undefined || item.goal.type !== signals[index]?.type) continue;
+    const field = `items[${index}].goal`;
+    switch (item.goal.type) {
+      case "DELIVER_MONEY":
+        validateClauseMoney(clause, `${field}.amount`, item.goal.amount, add);
+        validateClauseReference(clause, `${field}.recipientReference`, item.goal.recipientReference, add);
+        break;
+      case "ACQUIRE_ASSET":
+        if (item.goal.budget !== undefined) validateClauseMoney(clause, `${field}.budget`, item.goal.budget, add);
+        if (item.goal.quantity !== undefined && !sourceSupportsQuantity(clause, item.goal.quantity)) add("QUANTITY_NOT_SUPPORTED_BY_SOURCE", `${field}.quantity`, { observed: item.goal.quantity });
+        validateClauseReference(clause, `${field}.assetReference`, item.goal.assetReference, add);
+        break;
+      case "PAY_BILL":
+        if (item.goal.amount !== undefined) validateClauseMoney(clause, `${field}.amount`, item.goal.amount, add);
+        validateClauseReference(clause, `${field}.billerReference`, item.goal.billerReference, add);
+        break;
+      case "MOVE_FUNDS":
+        validateClauseMoney(clause, `${field}.amount`, item.goal.amount, add);
+        if (item.goal.sourceAccountReference !== undefined) validateClauseReference(clause, `${field}.sourceAccountReference`, item.goal.sourceAccountReference, add);
+        validateClauseReference(clause, `${field}.destinationAccountReference`, item.goal.destinationAccountReference, add);
+        break;
+    }
+  }
+}
+
+function validateClauseMoney(clause: string, field: string, money: MoneyV1, add: AddMismatch): void {
+  if (!sourceSupportsMoney(clause, money)) add("MONEY_NOT_SUPPORTED_BY_SOURCE", field, { observed: `${money.currency}:${money.minorUnits}` });
+}
+
+function validateClauseReference(clause: string, field: string, reference: string, add: AddMismatch): void {
+  if (!sourceContainsReference(clause, reference)) add("REFERENCE_NOT_SUPPORTED_BY_SOURCE", field, { observed: reference });
 }
 
 type AddMismatch = (code: IntentValidationMismatchCode, field: string, detail?: MismatchDetail) => void;

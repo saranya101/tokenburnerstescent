@@ -9,7 +9,7 @@ import { CompilationService, MessageOrchestrationService } from "./services.js";
 
 const snapshot = BankStateSnapshotV1.parse(JSON.parse(readFileSync(join(process.cwd(), "../../packages/contracts/fixtures/01-ntu-transfer/bank-state.json"), "utf8")));
 const transferDraft: IntentDraftV1 = {
-  schemaVersion: "1", originalText: "send $500 to NTU",
+  schemaVersion: "1", originalText: "send USD 500 to NTU",
   goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "NTU" },
   constraints: [], preferences: [], references: [],
 };
@@ -180,7 +180,7 @@ describe("Person B to Person A confirmation boundary", () => {
   it("grounds a typed clarification server-side and makes duplicate answers side-effect free", async () => {
     const draft: IntentDraftV1 = {
       ...transferDraft,
-      originalText: "send $500 to NTU using my SGD account",
+      originalText: "send USD 500 to NTU using my SGD account",
       preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
     };
     const repository = new CandidateRepository();

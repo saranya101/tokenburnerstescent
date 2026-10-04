@@ -12,12 +12,15 @@ import {
   sourceSignalsMinimumBalance,
   sourceSignalsPreference,
   sourceSignalsPreferredAccount,
+  sourceActionClause,
+  sourceActionSignals,
   sourceSupportsExcludedReference,
   sourceSupportsGoalType,
   sourceSupportsMaxTotalCost,
   sourceSupportsMinimumBalance,
   sourceSupportsMoney,
   sourceSupportsPreference,
+  sourceSupportsQuantity,
 } from "./evidence.js";
 import type {
   IndependentIntentValidationInput,
@@ -82,11 +85,26 @@ function validateGoal(
     add("GOAL_TYPE_NOT_SUPPORTED_BY_SOURCE", "goal.type", { observed: draft.goal.type });
   }
 
+  const actionSignals = sourceActionSignals(sourceText);
+  const soleActionClause = actionSignals.length === 1
+    ? sourceActionClause(sourceText, actionSignals, 0)
+    : undefined;
+  if (actionSignals.length !== 1) {
+    add("GOAL_CLAUSE_NOT_UNAMBIGUOUS", "goal", {
+      expected: "exactly one positive financial action",
+      observed: String(actionSignals.length),
+    });
+  }
+  // For a genuine single intent, every executable goal field is proved only from its one positive
+  // action clause. Multi-action bundle callers retain full evidence for consistency checks, but
+  // must separately pass the authoritative clause-local bundle coverage validator.
+  const goalEvidenceText = soleActionClause ?? (actionSignals.length > 1 ? sourceText : "");
+
   switch (draft.goal.type) {
     case "DELIVER_MONEY": {
       if (candidate.goal.type !== "DELIVER_MONEY") return;
-      validateMoney(sourceText, "goal.amount", draft.goal.amount, candidate.goal.amount, add);
-      validateSemanticReference(sourceText, candidate, "goal.recipientReference", draft.goal.recipientReference, "BENEFICIARY", candidate.goal.recipientId, add);
+      validateMoney(goalEvidenceText, "goal.amount", draft.goal.amount, candidate.goal.amount, add);
+      validateSemanticReference(goalEvidenceText, candidate, "goal.recipientReference", draft.goal.recipientReference, "BENEFICIARY", candidate.goal.recipientId, add);
       return;
     }
     case "ACQUIRE_ASSET": {
@@ -94,12 +112,15 @@ function validateGoal(
       if (draft.goal.budget === undefined !== (candidate.goal.budget === undefined)) {
         add("MONEY_MISMATCH", "goal.budget", { expected: describeMoney(draft.goal.budget), observed: describeMoney(candidate.goal.budget) });
       } else if (draft.goal.budget !== undefined && candidate.goal.budget !== undefined) {
-        validateMoney(sourceText, "goal.budget", draft.goal.budget, candidate.goal.budget, add);
+        validateMoney(goalEvidenceText, "goal.budget", draft.goal.budget, candidate.goal.budget, add);
       }
       if (draft.goal.quantity !== candidate.goal.quantity) {
         add("QUANTITY_MISMATCH", "goal.quantity", { expected: draft.goal.quantity ?? "absent", observed: candidate.goal.quantity ?? "absent" });
       }
-      validateSemanticReference(sourceText, candidate, "goal.assetReference", draft.goal.assetReference, "ASSET", candidate.goal.assetId, add);
+      if (draft.goal.quantity !== undefined && !sourceSupportsQuantity(goalEvidenceText, draft.goal.quantity)) {
+        add("QUANTITY_NOT_SUPPORTED_BY_SOURCE", "goal.quantity", { observed: draft.goal.quantity });
+      }
+      validateSemanticReference(goalEvidenceText, candidate, "goal.assetReference", draft.goal.assetReference, "ASSET", candidate.goal.assetId, add);
       return;
     }
     case "PAY_BILL": {
@@ -107,20 +128,20 @@ function validateGoal(
       if (draft.goal.amount === undefined !== (candidate.goal.amount === undefined)) {
         add("MONEY_MISMATCH", "goal.amount", { expected: describeMoney(draft.goal.amount), observed: describeMoney(candidate.goal.amount) });
       } else if (draft.goal.amount !== undefined && candidate.goal.amount !== undefined) {
-        validateMoney(sourceText, "goal.amount", draft.goal.amount, candidate.goal.amount, add);
+        validateMoney(goalEvidenceText, "goal.amount", draft.goal.amount, candidate.goal.amount, add);
       }
-      validateSemanticReference(sourceText, candidate, "goal.billerReference", draft.goal.billerReference, "BILLER", candidate.goal.billerId, add);
+      validateSemanticReference(goalEvidenceText, candidate, "goal.billerReference", draft.goal.billerReference, "BILLER", candidate.goal.billerId, add);
       return;
     }
     case "MOVE_FUNDS": {
       if (candidate.goal.type !== "MOVE_FUNDS") return;
-      validateMoney(sourceText, "goal.amount", draft.goal.amount, candidate.goal.amount, add);
+      validateMoney(goalEvidenceText, "goal.amount", draft.goal.amount, candidate.goal.amount, add);
       if (draft.goal.sourceAccountReference === undefined !== (candidate.goal.sourceAccountId === undefined)) {
         add("BINDING_MISSING", "goal.sourceAccountReference");
       } else if (draft.goal.sourceAccountReference !== undefined && candidate.goal.sourceAccountId !== undefined) {
-        validateSemanticReference(sourceText, candidate, "goal.sourceAccountReference", draft.goal.sourceAccountReference, "ACCOUNT", candidate.goal.sourceAccountId, add);
+        validateSemanticReference(goalEvidenceText, candidate, "goal.sourceAccountReference", draft.goal.sourceAccountReference, "ACCOUNT", candidate.goal.sourceAccountId, add);
       }
-      validateSemanticReference(sourceText, candidate, "goal.destinationAccountReference", draft.goal.destinationAccountReference, "ACCOUNT", candidate.goal.destinationAccountId, add);
+      validateSemanticReference(goalEvidenceText, candidate, "goal.destinationAccountReference", draft.goal.destinationAccountReference, "ACCOUNT", candidate.goal.destinationAccountId, add);
     }
   }
 }

@@ -13,6 +13,160 @@ function codes(result: ReturnType<DeterministicReadOnlyIntentValidator["validate
 }
 
 describe("independent read-only intent validation", () => {
+  it.each(["USD", "SGD"] as const)("rejects a model-invented %s currency for a bare dollar amount", (currency) => {
+    const sourceText = "Send John $100";
+    const draft = {
+      schemaVersion: "1", originalText: sourceText,
+      goal: { type: "DELIVER_MONEY", amount: { currency, minorUnits: "10000" }, recipientReference: "John" },
+      constraints: [], preferences: [], references: [],
+    };
+    const result = validator.validate({
+      sourceText,
+      draft,
+      candidate: candidate({
+        goal: { type: "DELIVER_MONEY", amount: { currency, minorUnits: "10000" }, recipientId: "ben-john" },
+        constraints: [], preferences: [],
+        entityBindings: [{ schemaVersion: "1", reference: "John", entityType: "BENEFICIARY", entityId: "ben-john", resolutionMethod: "EXACT", confirmed: false }],
+      }),
+    });
+    expect(result.status).toBe("FAIL");
+    expect(result.mismatches).toContainEqual(expect.objectContaining({ code: "MONEY_NOT_SUPPORTED_BY_SOURCE", field: "goal.amount" }));
+  });
+
+  it.each([
+    "Don't buy Apple. Send John USD 10.",
+    "I told you not to buy Apple. Send John USD 10.",
+    "I don't want to buy Apple. Send John USD 10.",
+  ])("does not let a negated buy support an ACQUIRE_ASSET candidate: %s", (sourceText) => {
+    const result = validator.validate({
+      sourceText,
+      draft: {
+        schemaVersion: "1", originalText: sourceText,
+        goal: { type: "ACQUIRE_ASSET", assetReference: "Apple", quantity: "1" },
+        constraints: [], preferences: [], references: [],
+      },
+      candidate: candidate({
+        goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [],
+        entityBindings: [{ schemaVersion: "1", reference: "Apple", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "EXACT", confirmed: false }],
+      }),
+    });
+    expect(result.mismatches).toContainEqual(expect.objectContaining({ code: "GOAL_TYPE_NOT_SUPPORTED_BY_SOURCE", field: "goal.type" }));
+  });
+
+  it.each([
+    ["Buy one Apple share", "1", "PASS"],
+    ["Buy one Apple share", "2", "FAIL"],
+    ["Buy Apple", "10", "FAIL"],
+    ["Buy 2 Apple shares", "2", "PASS"],
+  ] as const)("independently proves acquisition quantity for: %s as %s", (sourceText, quantity, expectedStatus) => {
+    const result = validator.validate({
+      sourceText,
+      draft: {
+        schemaVersion: "1", originalText: sourceText,
+        goal: { type: "ACQUIRE_ASSET", assetReference: "Apple", quantity },
+        constraints: [], preferences: [], references: [],
+      },
+      candidate: candidate({
+        goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity }, constraints: [], preferences: [],
+        entityBindings: [{ schemaVersion: "1", reference: "Apple", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "EXACT", confirmed: false }],
+      }),
+    });
+    expect(result.status).toBe(expectedStatus);
+    if (expectedStatus === "FAIL") expect(result.mismatches).toContainEqual(expect.objectContaining({ code: "QUANTITY_NOT_SUPPORTED_BY_SOURCE", field: "goal.quantity" }));
+  });
+
+  it("proves transfer amount and recipient only from the positive action clause", () => {
+    const sourceText = "Don't send John USD 100. Send Sarah USD 20.";
+    const validate = (recipientReference: string, recipientId: string, minorUnits: string) => validator.validate({
+      sourceText,
+      draft: {
+        schemaVersion: "1", originalText: sourceText,
+        goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits }, recipientReference },
+        constraints: [], preferences: [], references: [],
+      },
+      candidate: candidate({
+        goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits }, recipientId }, constraints: [], preferences: [],
+        entityBindings: [{ schemaVersion: "1", reference: recipientReference, entityType: "BENEFICIARY", entityId: recipientId, resolutionMethod: "EXACT", confirmed: false }],
+      }),
+    });
+
+    const negated = validate("John", "ben-john", "10000");
+    expect(negated.status).toBe("FAIL");
+    expect(codes(negated)).toEqual(expect.arrayContaining(["MONEY_NOT_SUPPORTED_BY_SOURCE", "REFERENCE_NOT_SUPPORTED_BY_SOURCE"]));
+    expect(validate("Sarah", "ben-sarah", "2000")).toEqual({ status: "PASS", mismatches: [] });
+  });
+
+  it("does not let a later negated clause supply fields to an earlier positive action", () => {
+    const sourceText = "Send Sarah USD 20. Don't send John USD 100.";
+    const result = validator.validate({
+      sourceText,
+      draft: {
+        schemaVersion: "1", originalText: sourceText,
+        goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "10000" }, recipientReference: "John" },
+        constraints: [], preferences: [], references: [],
+      },
+      candidate: candidate({
+        goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "10000" }, recipientId: "ben-john" }, constraints: [], preferences: [],
+        entityBindings: [{ schemaVersion: "1", reference: "John", entityType: "BENEFICIARY", entityId: "ben-john", resolutionMethod: "EXACT", confirmed: false }],
+      }),
+    });
+    expect(result.status).toBe("FAIL");
+    expect(codes(result)).toEqual(expect.arrayContaining(["MONEY_NOT_SUPPORTED_BY_SOURCE", "REFERENCE_NOT_SUPPORTED_BY_SOURCE"]));
+  });
+
+  it("does not use a negated bill clause to prove biller or amount", () => {
+    const sourceText = "Never pay Example Power USD 100. Pay Example Water USD 20.";
+    const result = validator.validate({
+      sourceText,
+      draft: {
+        schemaVersion: "1", originalText: sourceText,
+        goal: { type: "PAY_BILL", billerReference: "Example Power", amount: { currency: "USD", minorUnits: "10000" } },
+        constraints: [], preferences: [], references: [],
+      },
+      candidate: candidate({
+        goal: { type: "PAY_BILL", billerId: "biller-power", amount: { currency: "USD", minorUnits: "10000" } }, constraints: [], preferences: [],
+        entityBindings: [{ schemaVersion: "1", reference: "Example Power", entityType: "BILLER", entityId: "biller-power", resolutionMethod: "EXACT", confirmed: false }],
+      }),
+    });
+    expect(result.status).toBe("FAIL");
+    expect(codes(result)).toEqual(expect.arrayContaining(["MONEY_NOT_SUPPORTED_BY_SOURCE", "REFERENCE_NOT_SUPPORTED_BY_SOURCE"]));
+  });
+
+  it("does not use a negated move clause to prove amount or destination", () => {
+    const sourceText = "Don't move USD 500 to Savings. Move USD 20 to Checking.";
+    const result = validator.validate({
+      sourceText,
+      draft: {
+        schemaVersion: "1", originalText: sourceText,
+        goal: { type: "MOVE_FUNDS", amount: { currency: "USD", minorUnits: "50000" }, destinationAccountReference: "Savings" },
+        constraints: [], preferences: [], references: [],
+      },
+      candidate: candidate({
+        goal: { type: "MOVE_FUNDS", amount: { currency: "USD", minorUnits: "50000" }, destinationAccountId: "acc-savings" }, constraints: [], preferences: [],
+        entityBindings: [{ schemaVersion: "1", reference: "Savings", entityType: "ACCOUNT", entityId: "acc-savings", resolutionMethod: "EXACT", confirmed: false }],
+      }),
+    });
+    expect(result.status).toBe("FAIL");
+    expect(codes(result)).toEqual(expect.arrayContaining(["MONEY_NOT_SUPPORTED_BY_SOURCE", "REFERENCE_NOT_SUPPORTED_BY_SOURCE"]));
+  });
+
+  it("fails closed when a single-intent validation contains multiple positive actions", () => {
+    const sourceText = "Send John USD 10 and send Sarah USD 20.";
+    const result = validator.validate({
+      sourceText,
+      draft: {
+        schemaVersion: "1", originalText: sourceText,
+        goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "1000" }, recipientReference: "John" },
+        constraints: [], preferences: [], references: [],
+      },
+      candidate: candidate({
+        goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "1000" }, recipientId: "ben-john" }, constraints: [], preferences: [],
+        entityBindings: [{ schemaVersion: "1", reference: "John", entityType: "BENEFICIARY", entityId: "ben-john", resolutionMethod: "EXACT", confirmed: false }],
+      }),
+    });
+    expect(result.mismatches).toContainEqual(expect.objectContaining({ code: "GOAL_CLAUSE_NOT_UNAMBIGUOUS", field: "goal" }));
+  });
+
   it("passes the exact NTU transfer with the semantic beneficiary role authoritative", () => {
     const sourceText = "Send USD 7000.00 to Nanyang Technological University";
     const draft = {

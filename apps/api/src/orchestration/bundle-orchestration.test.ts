@@ -9,7 +9,7 @@ import { ModelBackedIntentBundleInterpreter, type EntityGrounder, type IntentBun
 import { describe, expect, it, vi } from "vitest";
 import { hashFinancialPlan } from "../security/canonical-hash.js";
 import { BundleCompilationService, verifyBundleCompilerResult } from "./bundle-compilation.js";
-import { BundleMessageOrchestrationService } from "./bundle-services.js";
+import { BundleMessageOrchestrationService, isPotentialBundleRequest } from "./bundle-services.js";
 import type {
   BundleClarificationProgress, BundleConfirmationRepository, BundlePlanRepository, GoalBundleCandidate, ParlanceRepository,
   StoredBundleCandidate, StoredBundleClarification, StoredGoalBundle,
@@ -72,6 +72,28 @@ const exactCases = [
   [acceptanceText, true, false],
 ] as const;
 
+describe("deterministic bundle routing", () => {
+  it.each([
+    "Send John USD 10 and get one Apple share.",
+    "Send John USD 10 and buy one Apple share.",
+    "Send John USD 10, then purchase one Apple share.",
+  ])("routes multiple supported financial actions through the bundle path: %s", (text) => {
+    expect(isPotentialBundleRequest(text)).toBe(true);
+  });
+
+  it.each([
+    "Get John to send me the document.",
+    "Get John to send USD 10 to Sarah.",
+    "Get Sarah to transfer SGD 20.",
+    "Get the USD statement from John.",
+    "Get me the payment receipt.",
+    "I need to get the document from John.",
+    "Don't buy Apple. Send John USD 10.",
+  ])("does not create a bundle from non-financial or negated language: %s", (text) => {
+    expect(isPotentialBundleRequest(text)).toBe(false);
+  });
+});
+
 describe("production bundle message orchestration", () => {
   it.each(exactCases)("creates one confirmation candidate for %s", async (text, ordered, reversed) => {
     const repository = new MemoryBundleRepository();
@@ -85,7 +107,7 @@ describe("production bundle message orchestration", () => {
   });
 
   it("clarifies only John, preserves Apple and stable IDs, then confirms one authoritative hash", async () => {
-    const text = "Send John USD 300 and buy Apple."; const repository = new MemoryBundleRepository();
+    const text = "Send John USD 300 and buy one Apple share."; const repository = new MemoryBundleRepository();
     const service = new BundleMessageOrchestrationService(repository, interpreter(draft(text)), () => grounder(true), undefined, undefined, undefined, undefined, () => new Date("2026-10-02T12:00:00Z"), (() => { let id = 0; return () => `server-${++id}`; })());
     const pending = await service.receive({ userId: "user-1", text }, "trace-clarify");
     expect(pending).toMatchObject({ status: "NEEDS_BUNDLE_CLARIFICATION", clarifications: [{ field: "items[0].goal.recipientReference", originalReference: "John" }] });

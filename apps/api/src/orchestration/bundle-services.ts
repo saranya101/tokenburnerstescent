@@ -7,7 +7,7 @@ import { hashGoalBundleContract } from "@parlance/contracts/server";
 import {
   DeterministicGoalContractBuilder, DeterministicIntentBundleAmbiguityDetector, DeterministicIntentBundleCoverageValidator,
   DeterministicReadOnlyIntentValidator, GoalContractCandidateV1, groundingRequirementsForIntentBundle, intentDraftForBundleItem,
-  replaceClarifiedIntentBundleItem,
+  replaceClarifiedIntentBundleItem, sourceActionSignals,
   type ClarificationItem, type EntityGrounder, type EntityGroundingResult, type GoalContractBuilder,
   type GroundableEntityType, type IndependentIntentValidationResult, type IndependentIntentValidator,
   type IntentBundleAmbiguityDetector, type IntentBundleInterpreter, type IntentBundleItemGroundingResults,
@@ -27,8 +27,7 @@ const ClarificationAnswerInput = z.union([
 export type BundleEntityGrounderFactory = (userId: string) => EntityGrounder;
 
 export function isPotentialBundleRequest(text: string): boolean {
-  const actions = text.match(/\b(?:send(?:ing)?|deliver(?:ing)?|remit(?:ting)?|wire|transfer(?:ring)?|buy(?:ing)?|acquir(?:e|ing)|purchas(?:e|ing)|invest(?:ing)?\s+in|pay(?:ing)?|settl(?:e|ing)|mov(?:e|ing))\b/giu) ?? [];
-  return actions.length > 1;
+  return sourceActionSignals(text).length > 1;
 }
 
 export class BundleMessageOrchestrationService {
@@ -177,7 +176,10 @@ function requiredEntityId(results: readonly EntityGroundingResult[], reference: 
 }
 
 function validateCandidate(sourceText: string, bundle: IntentBundleDraft, candidate: GoalBundleCandidate, answers: readonly BundleClarificationAnswer[], coverageValidator: DeterministicIntentBundleCoverageValidator, itemValidator: IndependentIntentValidator): IndependentIntentValidationResult {
-  const mismatches = [...coverageValidator.validate({ sourceText, bundle }).mismatches];
+  const clarifiedFields = new Set(answers.map(({ field }) => field));
+  const mismatches = coverageValidator.validate({ sourceText, bundle }).mismatches.filter((mismatch) =>
+    mismatch.code !== "REFERENCE_NOT_SUPPORTED_BY_SOURCE" || !clarifiedFields.has(mismatch.field)
+  );
   const actualEvidence = [sourceText, ...answers.map(({ answer }) => answer)].join("\n");
   const globalBindings = globalConstraintBindings(bundle, candidate, answers);
   bundle.items.forEach((item, index) => {
@@ -188,9 +190,10 @@ function validateCandidate(sourceText: string, bundle: IntentBundleDraft, candid
       entityBindings: [...grounded.bindings, ...globalBindings],
     });
     const result = itemValidator.validate({ sourceText: actualEvidence, draft, candidate: validationCandidate });
-    // Bundle coverage is authoritative for multi-clause action verbs, including Person B's
-    // supported gerunds ("sending"/"buying") that the legacy single-intent evidence matcher lacks.
-    mismatches.push(...result.mismatches.filter(({ code }) => code !== "GOAL_TYPE_NOT_SUPPORTED_BY_SOURCE").map((mismatch) => ({ ...mismatch, field: `items[${index}].${mismatch.field}` })));
+    // Bundle coverage is authoritative for multi-clause action types and clause-local goal fields.
+    // The item validator still checks draft/candidate equality, bindings, constraints, and preferences.
+    const bundleHandledCodes = new Set(["GOAL_TYPE_NOT_SUPPORTED_BY_SOURCE", "GOAL_CLAUSE_NOT_UNAMBIGUOUS"]);
+    mismatches.push(...result.mismatches.filter(({ code }) => !bundleHandledCodes.has(code)).map((mismatch) => ({ ...mismatch, field: `items[${index}].${mismatch.field}` })));
   });
   return mismatches.length === 0 ? { status: "PASS", mismatches: [] } : { status: "FAIL", mismatches };
 }

@@ -7,6 +7,14 @@ interface MoneyEvidence {
   readonly end: number;
 }
 
+export type SourceActionGoalType = "DELIVER_MONEY" | "ACQUIRE_ASSET" | "PAY_BILL" | "MOVE_FUNDS";
+
+export interface SourceActionSignal {
+  readonly type: SourceActionGoalType;
+  readonly start: number;
+  readonly end: number;
+}
+
 const PREFIX_MONEY = /(?:\b(USD|SGD)\b\s*|\b(US\$|S\$)\s*|(\$)\s*)([0-9][0-9,]*(?:\.[0-9]{1,2})?)/giu;
 const SUFFIX_MONEY = /\b([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(USD|SGD)\b/giu;
 
@@ -15,13 +23,46 @@ export function sourceSupportsMoney(sourceText: string, money: MoneyV1): boolean
 }
 
 export function sourceSupportsGoalType(sourceText: string, goalType: string): boolean {
-  switch (goalType) {
-    case "DELIVER_MONEY": return /\b(?:send|deliver|remit|wire|transfer)\b/iu.test(sourceText);
-    case "ACQUIRE_ASSET": return /\b(?:acquire|buy|purchase|get|invest\s+in)\b/iu.test(sourceText);
-    case "PAY_BILL": return /\b(?:pay|settle)\b/iu.test(sourceText);
-    case "MOVE_FUNDS": return /\b(?:move|transfer)\b/iu.test(sourceText);
-    default: return false;
+  return sourceActionSignals(sourceText).some(({ type }) => type === goalType);
+}
+
+/** Requires an explicit quantity next to an asset unit within a positive acquisition clause. */
+export function sourceSupportsQuantity(sourceText: string, quantity: string): boolean {
+  const expected = canonicalQuantity(quantity);
+  if (expected === undefined) return false;
+  const signals = sourceActionSignals(sourceText);
+  return signals.some((signal, index) => {
+    if (signal.type !== "ACQUIRE_ASSET") return false;
+    const clause = sourceActionClause(sourceText, signals, index);
+    return clause !== undefined && quantityEvidence(acquisitionInstructionSpan(clause)).some((observed) => observed === expected);
+  });
+}
+
+/** Positive financial action signals shared by routing and independent semantic validation. */
+export function sourceActionSignals(sourceText: string): readonly SourceActionSignal[] {
+  if (hasUnsafeInstructionFraming(sourceText)) return [];
+  const pattern = /\b(send(?:ing)?|deliver(?:ing)?|remit(?:ting)?|wire|transfer(?:ring)?|buy(?:ing)?|acquir(?:e|ing)|purchas(?:e|ing)|get(?:ting)?|invest(?:ing)?\s+in|pay(?:ing)?|settl(?:e|ing)|mov(?:e|ing))\b/giu;
+  const quoted = quotedRanges(sourceText);
+  const signals: SourceActionSignal[] = [];
+  for (const match of sourceText.matchAll(pattern)) {
+    const verb = match[1]?.toLocaleLowerCase();
+    if (verb === undefined || match.index === undefined || insideRange(match.index, quoted)) continue;
+    if (isLocallyNegated(sourceText, match.index) || isExplicitlyNonInstructionAction(sourceText, match.index) || isNominalAction(sourceText, match.index, verb)) continue;
+    const followingText = sourceText.slice(match.index, match.index + 140);
+    if (/^get/u.test(verb) && !financialGetContext(followingText)) continue;
+    signals.push({ type: goalTypeForVerb(verb, followingText), start: match.index, end: match.index + match[0].length });
   }
+  return signals;
+}
+
+export function sourceActionClause(sourceText: string, signals: readonly SourceActionSignal[], index: number): string | undefined {
+  const signal = signals[index];
+  if (signal === undefined) return undefined;
+  const nextActionStart = signals[index + 1]?.start ?? sourceText.length;
+  const remainder = sourceText.slice(signal.end, nextActionStart);
+  const sentenceBoundary = remainder.search(/[;!?\n]|\.(?=\s|$)/u);
+  const clauseEnd = sentenceBoundary < 0 ? nextActionStart : signal.end + sentenceBoundary;
+  return sourceText.slice(signal.start, clauseEnd);
 }
 
 export function sourceSupportsMaxTotalCost(sourceText: string, money: MoneyV1): boolean {
@@ -165,8 +206,101 @@ function normalizeForEvidence(value: string): string {
 function matchingMoneyEvidence(sourceText: string, money: MoneyV1): readonly MoneyEvidence[] {
   return moneyEvidence(sourceText).filter((evidence) =>
     evidence.minorUnits === money.minorUnits
-    && (evidence.currency === undefined || evidence.currency === money.currency)
+    && evidence.currency === money.currency
   );
+}
+
+function goalTypeForVerb(verb: string, followingText: string): SourceActionGoalType {
+  if (/^(?:buy|buying|acquir|purchas|get|getting|invest)/u.test(verb)) return "ACQUIRE_ASSET";
+  if (/^(?:pay|sett)/u.test(verb)) return "PAY_BILL";
+  if (/^mov/u.test(verb)) return "MOVE_FUNDS";
+  if (/^transfer/u.test(verb) && /\bfrom\b[\s\S]{0,80}\bto\b/iu.test(followingText)) return "MOVE_FUNDS";
+  return "DELIVER_MONEY";
+}
+
+function isLocallyNegated(sourceText: string, actionStart: number): boolean {
+  const before = sourceText.slice(Math.max(0, actionStart - 100), actionStart);
+  return /(?:\bdon['’]?t|\bdo\s+not|\bnever|\bmust\s+not|\bshould\s+not|\bnot)(?:\s+(?:want|try|attempt)\s+to|\s+to)?\s+(?:(?:ever|actually|really)\s+)?$/iu.test(before);
+}
+
+function isExplicitlyNonInstructionAction(sourceText: string, actionStart: number): boolean {
+  const before = sourceText.slice(Math.max(0, actionStart - 50), actionStart);
+  const sentenceEnd = sourceText.slice(actionStart).search(/[.;!?\n]/u);
+  const sentence = sourceText.slice(actionStart, sentenceEnd < 0 ? sourceText.length : actionStart + sentenceEnd);
+  return /\bignore\s+(?:the\s+)?(?:phrase|words?)\s*$/iu.test(before)
+    || /\b(?:as\s+an?\s+example|not\s+an?\s+instruction)\b/iu.test(sentence);
+}
+
+function isNominalAction(sourceText: string, actionStart: number, verb: string): boolean {
+  if (!/^(?:purchase|transfer|payment)/u.test(verb)) return false;
+  return /\b(?:the|this|that|a)\s+$/iu.test(sourceText.slice(Math.max(0, actionStart - 20), actionStart));
+}
+
+function financialGetContext(followingText: string): boolean {
+  return /^get(?:ting)?\s+(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+(?:\.[0-9]+)?)\s+(?:[\p{L}\p{N}.&'’_-]+\s+){0,4}(?:shares?|stocks?|funds?|bonds?|assets?|units?|etfs?)\b/iu.test(followingText);
+}
+
+function quotedRanges(sourceText: string): readonly { start: number; end: number }[] {
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const match of sourceText.matchAll(/(["“])[\s\S]*?(?:["”])/gu)) {
+    if (match.index !== undefined) ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  return ranges;
+}
+
+function insideRange(index: number, ranges: readonly { start: number; end: number }[]): boolean {
+  return ranges.some(({ start, end }) => index > start && index < end);
+}
+
+function hasUnsafeInstructionFraming(sourceText: string): boolean {
+  return /(?:^|\n)\s*(?:SYSTEM|ASSISTANT|DEVELOPER)\s*:/iu.test(sourceText)
+    || /\{\s*["']items["']\s*:/iu.test(sourceText)
+    || /\bignore\s+(?:the\s+)?(?:first|second|previous|prior|above|last)\s+action\b/iu.test(sourceText)
+    || /\beven\s+though\s+i\s+said\b/iu.test(sourceText);
+}
+
+function quantityEvidence(sourceText: string): readonly string[] {
+  const quantities: string[] = [];
+  const pattern = /\b(a|an|one|two|three|four|five|six|seven|eight|nine|ten|[0-9]+(?:\.[0-9]+)?)\s+(?:[\p{L}\p{N}.&'’_-]+\s+){0,4}(?:shares?|units?|stocks?|assets?)\b/giu;
+  for (const match of sourceText.matchAll(pattern)) {
+    const token = match[1];
+    if (token === undefined) continue;
+    const numeric = quantityWord(token) ?? canonicalQuantity(token);
+    if (numeric !== undefined) quantities.push(numeric);
+  }
+  return quantities;
+}
+
+/**
+ * Quantity evidence must occur in the acquisition instruction itself, before a new sentence or
+ * an explicit background/reason clause. This deliberately rejects uncommon ambiguous wording.
+ */
+function acquisitionInstructionSpan(clause: string): string {
+  const boundaries = [
+    /[;!?\n]/u,
+    /\.(?=\s|$)/u,
+    /\b(?:because|since|given\s+that)\b/iu,
+    /\b(?:and\s+)?i\s+(?:already|currently)\s+(?:own|hold|have)\b/iu,
+    /\b(?:and\s+)?my\s+current\s+(?:holding|position|portfolio)\b/iu,
+    /\b(?:and\s+)?the\s+portfolio\s+(?:shows?|contains?|has)\b/iu,
+  ];
+  const boundary = boundaries
+    .map((pattern) => clause.search(pattern))
+    .filter((index) => index >= 0)
+    .reduce((earliest, index) => Math.min(earliest, index), clause.length);
+  return clause.slice(0, boundary);
+}
+
+function quantityWord(value: string): string | undefined {
+  return ({ a: "1", an: "1", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10" } as Record<string, string>)[value.toLocaleLowerCase()];
+}
+
+function canonicalQuantity(value: string): string | undefined {
+  if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u.test(value)) return undefined;
+  const [integer, fraction] = value.split(".");
+  if (integer === undefined) return undefined;
+  const trimmedFraction = fraction?.replace(/0+$/u, "") ?? "";
+  return trimmedFraction.length === 0 ? integer : `${integer}.${trimmedFraction}`;
 }
 
 function moneyHasMaxCostContext(sourceText: string, evidence: MoneyEvidence): boolean {

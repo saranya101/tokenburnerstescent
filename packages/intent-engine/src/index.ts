@@ -28,6 +28,8 @@ export type { GoalContractBuildInput, GoalContractBuilder, GoalContractCandidate
 export { DeterministicGoalContractBuilder } from "./goal-contract/builder.js";
 export { GoalContractBuilderError } from "./goal-contract/errors.js";
 export { DeterministicReadOnlyIntentValidator } from "./validation/validator.js";
+export { sourceActionSignals } from "./validation/evidence.js";
+export type { SourceActionGoalType, SourceActionSignal } from "./validation/evidence.js";
 export type { IndependentIntentValidationInput, IndependentIntentValidationResult, IndependentIntentValidator, IntentValidationMismatch, IntentValidationMismatchCode } from "./validation/types.js";
 export { ModelBackedIntentBundleInterpreter, replaceClarifiedIntentBundleItem } from "./bundle/interpreter.js";
 export { groundingRequirementsForIntentBundle, intentDraftForBundleItem } from "./bundle/grounding.js";
