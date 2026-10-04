@@ -118,6 +118,24 @@ def _goal_contract(
     )
 
 
+def _item_goal_contract(item: GoalBundleItemV1, snapshot: BankStateSnapshotV1) -> GoalContractV1:
+    """Constraint-evaluation contract containing only this item's private constraints."""
+    return GoalContractV1(
+        schemaVersion="1",
+        id=f"bundle-item:{item.item_id}",
+        userId=snapshot.user_id,
+        version=1,
+        goal=item.goal,
+        constraints=item.constraints,
+        preferences=item.preferences,
+        entityBindings=item.bindings,
+        status="CONFIRMED",
+        contractHash="0" * 64,
+        createdAt=snapshot.captured_at,
+        confirmedAt=snapshot.captured_at,
+    )
+
+
 def _operation_from_step(step) -> InternalOperation:
     parameters = step.parameters
     if step.action == "TRANSFER":
@@ -250,16 +268,13 @@ def _compile_acquire(
         if preference.type == "PREFER_ACCOUNT"
     ]
     eligible_accounts.sort(key=lambda account: (account.id not in preferred, account.id))
-    account = next(
-        (
-            candidate
-            for candidate in eligible_accounts
-            if int(candidate.available_minor_units) >= authorized_total
-            and int(candidate.ledger_minor_units) >= authorized_total
-        ),
-        None,
-    )
-    if account is None:
+    funded_accounts = [
+        candidate
+        for candidate in eligible_accounts
+        if int(candidate.available_minor_units) >= authorized_total
+        and int(candidate.ledger_minor_units) >= authorized_total
+    ]
+    if not funded_accounts:
         return _unsat(
             "INSUFFICIENT_FUNDS",
             itemId=item.item_id,
@@ -267,16 +282,37 @@ def _compile_acquire(
             currency=quote.settlement_currency,
         )
     maximum_spend = budget if budget is not None else authorized_total
-    return BuyAsset(
-        source_account_id=account.id,
-        asset_id=asset.id,
-        quantity=quantity,
-        quote_id=quote.quote_id,
-        unit_price_minor=unit_price,
-        price=Money(quote.settlement_currency, int(quoted_price)),
-        fee=Money(quote.settlement_currency, fee),
-        maximum_spend=Money(quote.settlement_currency, maximum_spend),
-    )
+    first_violation = None
+    for account in funded_accounts:
+        operation = BuyAsset(
+            source_account_id=account.id,
+            asset_id=asset.id,
+            quantity=quantity,
+            quote_id=quote.quote_id,
+            unit_price_minor=unit_price,
+            price=Money(quote.settlement_currency, int(quoted_price)),
+            fee=Money(quote.settlement_currency, fee),
+            maximum_spend=Money(quote.settlement_currency, maximum_spend),
+        )
+        projected = SimulatedState.from_snapshot(snapshot)
+        applied = apply_operation(projected, operation)
+        if not applied.success:
+            continue
+        evaluation = evaluate_constraints(
+            _item_goal_contract(item, snapshot), snapshot, applied.state, (operation,)
+        )
+        if evaluation.valid:
+            return operation
+        if first_violation is None:
+            first_violation = evaluation.violations[0]
+    if first_violation is not None:
+        return _unsat(
+            first_violation.code,
+            scope="ITEM",
+            itemId=item.item_id,
+            **first_violation.details,
+        )
+    return _unsat("COMPOSITE_SIMULATION_FAILED", itemId=item.item_id)
 
 
 def _global_constraint_result(
@@ -418,7 +454,12 @@ def _build_bundle_plan(
         itemCoverage=[
             BundleItemCoverageV1(
                 itemId=item.item_id,
-                satisfiedByStepIds=[f"{plan_id}:{item_ranges[item.item_id][1]}"],
+                satisfiedByStepIds=[
+                    f"{plan_id}:{index}"
+                    for index in range(
+                        item_ranges[item.item_id][0], item_ranges[item.item_id][1] + 1
+                    )
+                ],
             )
             for item in bundle.items
         ],
@@ -522,7 +563,11 @@ def validate_bundle_plan(
         step_ids = coverage[item.item_id]
         if not step_ids or any(step_id not in steps for step_id in step_ids):
             return False
-        if not all(_step_satisfies_item(item, steps[step_id]) for step_id in step_ids):
+        if len(set(step_ids)) != len(step_ids):
+            return False
+        if step_ids != sorted(step_ids, key=lambda step_id: steps[step_id].sequence):
+            return False
+        if not _step_satisfies_item(item, steps[step_ids[-1]]):
             return False
         direct_steps.update(step_ids)
 
@@ -560,18 +605,27 @@ def validate_bundle_plan(
     item_predecessors: dict[str, set[str]] = {item.item_id: set() for item in bundle.items}
     for dependency in bundle.explicit_dependencies:
         item_predecessors[dependency.after_item_id].add(dependency.before_item_id)
-    coverage_owner = {
-        step_id: item_id for item_id, step_ids in coverage.items() for step_id in step_ids
+    coverage_owners: dict[str, set[str]] = {step_id: set() for step_id in steps}
+    for item_id, step_ids in coverage.items():
+        for step_id in step_ids:
+            coverage_owners[step_id].add(item_id)
+    if any(not owners for owners in coverage_owners.values()):
+        return False
+    item_initial_states: dict[str, BankStateSnapshotV1] = {}
+    item_operations: dict[str, list[InternalOperation]] = {
+        item.item_id: [] for item in bundle.items
     }
     try:
         for step in sorted(plan.steps, key=lambda candidate: candidate.sequence):
             operation = _operation_from_step(step)
+            owner_ids = coverage_owners[step.id]
             active_items = [
-                item
-                for item in bundle.items
-                if item.item_id not in completed_items
-                and item_predecessors[item.item_id] <= completed_items
+                item_by_id[item_id]
+                for item_id in owner_ids
+                if item_id not in completed_items and item_predecessors[item_id] <= completed_items
             ]
+            if len(active_items) != len(owner_ids):
+                return False
             supported = False
             for item in active_items:
                 if isinstance(item.goal, AcquireAssetGroundedGoalV1):
@@ -587,14 +641,25 @@ def validate_bundle_plan(
                     break
             if not supported:
                 return False
+            for owner_id in owner_ids:
+                item_initial_states.setdefault(owner_id, simulated.to_snapshot())
             result = apply_operation(simulated, operation)
             if not result.success:
                 return False
             simulated = result.state
             operations.append(operation)
-            owner = coverage_owner.get(step.id)
-            if owner is not None:
-                completed_items.add(item_by_id[owner].item_id)
+            for owner_id in owner_ids:
+                item_operations[owner_id].append(operation)
+                if coverage[owner_id][-1] == step.id:
+                    evaluation = evaluate_constraints(
+                        _item_goal_contract(item_by_id[owner_id], item_initial_states[owner_id]),
+                        item_initial_states[owner_id],
+                        simulated,
+                        tuple(item_operations[owner_id]),
+                    )
+                    if not evaluation.valid:
+                        return False
+                    completed_items.add(owner_id)
     except (AttributeError, TypeError, ValueError):
         return False
     global_result = _global_constraint_result(bundle, initial_state, simulated, tuple(operations))

@@ -469,7 +469,7 @@ export class ExecutionService {
       await audit("GOAL_PRESERVATION_SIMULATION_STARTED", { category: "GOAL_PRESERVATION", outcome: "STARTED", stepKey: step.id, observedStateVersion: snapshot.stateVersion });
       const simulation = simulateFinancialStep(snapshot, step);
       if (simulation.outcome === "POLICY_BLOCKED") { await audit("GOAL_PRESERVATION_SIMULATION_RESULT", { category: "GOAL_PRESERVATION", outcome: simulation.outcome, stepKey: step.id, reason: simulation.reason, explanation: simulation.explanation }); return stop(index, simulation.outcome, "PAUSED", simulation.reason, simulation.explanation); }
-      const constraintsPreserved = storedBundle ? bundleStepPreservesConstraints(storedBundle.contract, step, simulation.snapshot, userId) : stepPreservesConstraints(storedGoal!.contract, step, simulation.snapshot);
+      const constraintsPreserved = storedBundle ? bundleStepPreservesConstraints(storedBundle.contract, storedPlan.satisfactionProof, step, simulation.snapshot, userId) : stepPreservesConstraints(storedGoal!.contract, step, simulation.snapshot);
       if (!constraintsPreserved) { const explanation = "Executing this step would violate or cannot prove a confirmed goal constraint."; await audit("GOAL_PRESERVATION_SIMULATION_RESULT", { category: "GOAL_PRESERVATION", outcome: "POLICY_BLOCKED", stepKey: step.id, reason: "GOAL_CONSTRAINT_VIOLATION", explanation }); return stop(index, "POLICY_BLOCKED", "PAUSED", "GOAL_CONSTRAINT_VIOLATION", explanation); }
       const remainingSteps = storedPlan.plan.steps.slice(index + 1);
       const terminalSatisfied = storedBundle ? bundleCoveredGoalsSatisfied(storedBundle.contract, storedPlan.satisfactionProof, step, simulation.snapshot, userId) : terminalStepSatisfiesGoal(storedGoal!.contract, step, simulation.snapshot);
@@ -596,20 +596,30 @@ function bundleItemGoal(bundle: GoalBundleContractV1, item: GoalBundleContractV1
   });
 }
 
-function bundleStepPreservesConstraints(bundle: GoalBundleContractV1, step: FinancialPlanStepV1, snapshot: BankStateSnapshotV1, userId: string): boolean {
-  return bundle.items.every((item) => {
-    const goal = bundleItemGoal(bundle, item, userId);
-    const stateDependent = goal.constraints.filter((constraint) => constraint.type === "EXCLUDED_ACCOUNT" || constraint.type === "MIN_AVAILABLE_BALANCE");
-    return stepPreservesConstraints({ ...goal, constraints: stateDependent }, step, snapshot);
-  });
+export function bundleStepPreservesConstraints(bundle: GoalBundleContractV1, proof: BundleSatisfactionProofV1 | undefined, step: FinancialPlanStepV1, snapshot: BankStateSnapshotV1, userId: string): boolean {
+  if (!proof || !proof.allHardConstraintsSatisfied) return false;
+  const coverage = proof.itemCoverage.filter((entry) => entry.satisfiedByStepIds.includes(step.id));
+  if (coverage.length === 0 || new Set(coverage.map(({ itemId }) => itemId)).size !== coverage.length) return false;
+  const coveredItems = coverage.map(({ itemId }) => bundle.items.find((item) => item.itemId === itemId));
+  if (coveredItems.some((item) => item === undefined)) return false;
+  const stateDependent = [
+    ...bundle.globalConstraints,
+    ...coveredItems.flatMap((item) => item?.constraints ?? []),
+  ].filter((constraint) => constraint.type === "EXCLUDED_ACCOUNT" || constraint.type === "MIN_AVAILABLE_BALANCE");
+  const goal = bundleItemGoal(bundle, coveredItems[0]!, userId);
+  return stepPreservesConstraints({ ...goal, constraints: stateDependent }, step, snapshot);
 }
 
 function bundleCoveredGoalsSatisfied(bundle: GoalBundleContractV1, proof: BundleSatisfactionProofV1 | undefined, step: FinancialPlanStepV1, snapshot: BankStateSnapshotV1, userId: string): boolean {
   if (!proof || !proof.allHardConstraintsSatisfied) return false;
+  const coveredItems = proof.itemCoverage.filter((coverage) => coverage.satisfiedByStepIds.includes(step.id));
+  if (coveredItems.length === 0) return false;
   const terminalItems = proof.itemCoverage.filter((coverage) => coverage.satisfiedByStepIds.at(-1) === step.id);
   return terminalItems.every((coverage) => {
     const item = bundle.items.find((candidate) => candidate.itemId === coverage.itemId);
-    return item !== undefined && terminalStepSatisfiesGoal(bundleItemGoal(bundle, item, userId), step, snapshot);
+    if (item === undefined) return false;
+    const goal = bundleItemGoal(bundle, item, userId);
+    return terminalStepSatisfiesGoal({ ...goal, constraints: [] }, step, snapshot);
   });
 }
 
@@ -618,7 +628,7 @@ function simulateRemainingBundle(bundle: GoalBundleContractV1, proof: BundleSati
   let snapshot = initialSnapshot;
   for (const step of steps) {
     const simulation = simulateFinancialStep(snapshot, step);
-    if (simulation.outcome !== "SAFE_TO_EXECUTE" || !bundleStepPreservesConstraints(bundle, step, simulation.snapshot, userId)
+    if (simulation.outcome !== "SAFE_TO_EXECUTE" || !bundleStepPreservesConstraints(bundle, proof, step, simulation.snapshot, userId)
       || !bundleCoveredGoalsSatisfied(bundle, proof, step, simulation.snapshot, userId)) return false;
     snapshot = simulation.snapshot;
   }

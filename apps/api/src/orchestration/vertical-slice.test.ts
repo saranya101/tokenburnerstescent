@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import { BankOutcomeUnknownError, type BankLookupResult, type BankPort, type ParlanceRepository, type StoredApproval, type StoredExecution, type StoredGoal, type StoredGoalBundle, type StoredPlan } from "./ports.js";
-import { CompilationService, ExecutionService } from "./services.js";
+import { bundleStepPreservesConstraints, CompilationService, ExecutionService } from "./services.js";
 import type { StoredApprovalEvidence } from "../webauthn/types.js";
 import { canonicalHash, hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
 import { ExecutionGateway, verifyExecutionApproval } from "../execution/gateway.js";
@@ -389,6 +389,44 @@ describe("NTU transfer vertical slice", () => {
     } });
   });
 
+  it("executes item 2 without inheriting item 1's private account constraints", async () => {
+    const values = executableBundle();
+    const scopedRaw = GoalBundleContractV1.parse({
+      ...values.bundle,
+      items: values.bundle.items.map((item) => item.itemId === "item-transfer" ? {
+        ...item,
+        constraints: [
+          { type: "EXCLUDED_ACCOUNT", accountId: "acc-usd" },
+          { type: "MIN_AVAILABLE_BALANCE", accountId: "acc-usd-transfer", money: { currency: "USD", minorUnits: "50000" } },
+        ],
+      } : item),
+    });
+    const scopedBundle = GoalBundleContractV1.parse({ ...scopedRaw, contractHash: hashGoalBundleContract(scopedRaw) });
+    const transfer = values.plan.steps[0]!;
+    if (transfer.action !== "TRANSFER") throw new Error("Expected transfer");
+    const rawPlan = FinancialPlanV1.parse({
+      ...values.plan,
+      planHash: "0".repeat(64),
+      steps: [{ ...transfer, parameters: { ...transfer.parameters, sourceAccountId: "acc-usd-transfer" } }, values.plan.steps[1]!],
+    });
+    const plan = FinancialPlanV1.parse({ ...rawPlan, planHash: hashFinancialPlan(rawPlan) });
+    const repository = new MemoryRepository(appleGoal());
+    repository.bundle = { rowId: "bundle-row", userId: "user-1", contract: scopedBundle };
+    const baseState = appleState(true);
+    const bank = new ControlledBank(BankStateSnapshotV1.parse({
+      ...baseState,
+      accounts: [
+        ...baseState.accounts.map((account) => account.id === "acc-usd" ? { ...account, ledgerMinorUnits: "1000000", availableMinorUnits: "1000000" } : account),
+        { id: "acc-usd-transfer", type: "CHECKING", currency: "USD", ledgerMinorUnits: "100000", availableMinorUnits: "100000", status: "ACTIVE", capabilities: ["SEND_TRANSFER"] },
+      ],
+      beneficiaries: [...baseState.beneficiaries, { id: "ben-john", name: "John Tan", supportedCurrencies: ["USD"], status: "ACTIVE" }],
+    }));
+    const execution = await authorizeBundle(repository, plan, values.proof);
+    const result = await new ExecutionService(repository, bank, { compile: async () => { throw new Error("single compiler must not run"); } }).run(execution.executionId, "trace-item-constraint-scope");
+    expect(result.status).toBe("COMPLETED");
+    expect(bank.writes).toBe(2);
+  });
+
   it("stops the bundle before any write when the approved asset quote has changed", async () => {
     const values = executableBundle(); const repository = new MemoryRepository(appleGoal()); repository.bundle = { rowId: "bundle-row", userId: "user-1", contract: values.bundle };
     const baseState = appleState(true); const bank = new ControlledBank(BankStateSnapshotV1.parse({ ...baseState, accounts: baseState.accounts.map((account) => account.id === "acc-usd" ? { ...account, ledgerMinorUnits: "1000000", availableMinorUnits: "1000000" } : account), beneficiaries: [...baseState.beneficiaries, { id: "ben-john", name: "John Tan", supportedCurrencies: ["USD"], status: "ACTIVE" }], assetQuotes: baseState.assetQuotes.map((quote) => ({ ...quote, unitPriceMinor: "20001" })) }));
@@ -607,5 +645,59 @@ describe("NTU transfer vertical slice", () => {
     const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan: applePlan(state.stateVersion) }); } };
     const result = await new ExecutionService(repository, bank, compiler).run(approved.execution.executionId, "trace-unsupported-constraint");
     expect(result.status).toBe("UNKNOWN"); expect(result.steps[0]?.errorCode).toBe("GOAL_CONSTRAINT_VIOLATION"); expect(bank.writes).toBe(0);
+  });
+});
+
+describe("bundle constraint coverage scoping", () => {
+  const constraintState = () => {
+    const state = appleState(true);
+    return BankStateSnapshotV1.parse({
+      ...state,
+      accounts: state.accounts.map((account) => ({ ...account, availableMinorUnits: "100000", ledgerMinorUnits: "100000" })),
+    });
+  };
+
+  it("does not apply item 1's excluded account or minimum balance to an item 2-only step", () => {
+    const { bundle, plan, proof } = executableBundle(); const buy = plan.steps[1]!;
+    const scoped = GoalBundleContractV1.parse({
+      ...bundle,
+      items: bundle.items.map((item) => item.itemId === "item-transfer" ? {
+        ...item,
+        constraints: [
+          { type: "EXCLUDED_ACCOUNT", accountId: "acc-usd" },
+          { type: "MIN_AVAILABLE_BALANCE", accountId: "acc-usd", money: { currency: "USD", minorUnits: "999999" } },
+        ],
+      } : item),
+    });
+    expect(bundleStepPreservesConstraints(scoped, proof, buy, constraintState(), "user-1")).toBe(true);
+  });
+
+  it("applies global excluded-account and minimum-balance constraints to item 2", () => {
+    const { bundle, plan, proof } = executableBundle(); const buy = plan.steps[1]!;
+    const excluded = GoalBundleContractV1.parse({ ...bundle, globalConstraints: [{ type: "EXCLUDED_ACCOUNT", accountId: "acc-usd" }] });
+    const minimum = GoalBundleContractV1.parse({ ...bundle, globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", accountId: "acc-usd", money: { currency: "USD", minorUnits: "999999" } }] });
+    expect(bundleStepPreservesConstraints(excluded, proof, buy, constraintState(), "user-1")).toBe(false);
+    expect(bundleStepPreservesConstraints(minimum, proof, buy, constraintState(), "user-1")).toBe(false);
+  });
+
+  it("unions constraints when one step is covered by multiple items", () => {
+    const { bundle, plan, proof } = executableBundle(); const buy = plan.steps[1]!;
+    const scoped = GoalBundleContractV1.parse({
+      ...bundle,
+      items: bundle.items.map((item) => item.itemId === "item-transfer" ? { ...item, constraints: [{ type: "EXCLUDED_ACCOUNT", accountId: "acc-usd" }] } : item),
+    });
+    const multiCoverage: BundleSatisfactionProofV1 = {
+      ...proof,
+      itemCoverage: proof.itemCoverage.map((entry) => entry.itemId === "item-transfer" ? { ...entry, satisfiedByStepIds: ["transfer-john", "buy-apple"] } : entry),
+    };
+    expect(bundleStepPreservesConstraints(scoped, multiCoverage, buy, constraintState(), "user-1")).toBe(false);
+  });
+
+  it("fails closed when proof coverage for a step is missing or malformed", () => {
+    const { bundle, plan, proof } = executableBundle(); const buy = plan.steps[1]!;
+    const missing: BundleSatisfactionProofV1 = { ...proof, itemCoverage: proof.itemCoverage.filter(({ itemId }) => itemId !== "item-buy") };
+    const malformed: BundleSatisfactionProofV1 = { ...proof, itemCoverage: [...proof.itemCoverage, { itemId: "item-buy", satisfiedByStepIds: ["buy-apple"] }] };
+    expect(bundleStepPreservesConstraints(bundle, missing, buy, constraintState(), "user-1")).toBe(false);
+    expect(bundleStepPreservesConstraints(bundle, malformed, buy, constraintState(), "user-1")).toBe(false);
   });
 });
