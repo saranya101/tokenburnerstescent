@@ -27,26 +27,26 @@ describe("demo control", () => {
   });
 
   it("generates the exact supported mock-bank scenario request", () => {
-    expect(buildScenarioRequest("user-1", ["ASSET_UNAVAILABLE"])).toEqual({
+    expect(buildScenarioRequest(["ASSET_UNAVAILABLE"])).toEqual({
       url: "/api/demo/mock-bank",
-      init: { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId: "user-1", scenarios: ["ASSET_UNAVAILABLE"] }) },
+      init: { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scenarios: ["ASSET_UNAVAILABLE"] }) },
     });
   });
 
   it("reset submits an empty scenario set and uses the refreshed response", async () => {
     const resetState = { ...state, scenarios: [] };
     const fetcher = vi.fn(() => response(resetState)) as unknown as typeof fetch;
-    await expect(updateDemoScenarios("user-1", [], fetcher)).resolves.toEqual(resetState);
-    expect(JSON.parse(String((fetcher as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body))).toEqual({ userId: "user-1", scenarios: [] });
+    await expect(updateDemoScenarios([], fetcher)).resolves.toEqual(resetState);
+    expect(JSON.parse(String((fetcher as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body))).toEqual({ scenarios: [] });
   });
 
   it("returns the refreshed mock-bank state", async () => {
     const fetcher = vi.fn(() => response(state)) as unknown as typeof fetch;
-    await expect(fetchDemoBankState("user-1", fetcher)).resolves.toEqual(state);
-    expect(fetcher).toHaveBeenCalledWith("/api/demo/mock-bank?userId=user-1", { cache: "no-store" });
+    await expect(fetchDemoBankState(fetcher)).resolves.toEqual(state);
+    expect(fetcher).toHaveBeenCalledWith("/api/demo/mock-bank", { cache: "no-store" });
   });
 
   it("cannot submit unsupported scenario names", () => {
-    expect(() => buildScenarioRequest("user-1", ["NOT_A_SCENARIO" as DemoScenarioName])).toThrow("UNSUPPORTED_SCENARIO");
+    expect(() => buildScenarioRequest(["NOT_A_SCENARIO" as DemoScenarioName])).toThrow("UNSUPPORTED_SCENARIO");
   });
 });

@@ -61,15 +61,14 @@ export function isValidDemoUserId(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
 }
 
-export function buildScenarioRequest(userId: string, scenarios: readonly DemoScenarioName[]): { url: string; init: RequestInit } {
-  if (!isValidDemoUserId(userId)) throw new Error("INVALID_USER_ID");
+export function buildScenarioRequest(scenarios: readonly DemoScenarioName[]): { url: string; init: RequestInit } {
   if (!scenarios.every(isSupportedScenario)) throw new Error("UNSUPPORTED_SCENARIO");
   return {
     url: "/api/demo/mock-bank",
     init: {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ userId, scenarios }),
+      body: JSON.stringify({ scenarios }),
     },
   };
 }
@@ -78,16 +77,15 @@ async function responseBody(response: Response): Promise<unknown> {
   try { return await response.json(); } catch { return undefined; }
 }
 
-export async function fetchDemoBankState(userId: string, fetcher: typeof fetch = fetch): Promise<DemoBankState> {
-  if (!isValidDemoUserId(userId)) throw new Error("INVALID_USER_ID");
-  const response = await fetcher(`/api/demo/mock-bank?userId=${encodeURIComponent(userId)}`, { cache: "no-store" });
+export async function fetchDemoBankState(fetcher: typeof fetch = fetch): Promise<DemoBankState> {
+  const response = await fetcher("/api/demo/mock-bank", { cache: "no-store" });
   const body = await responseBody(response);
   if (!response.ok) throw new Error(typeof body === "object" && body && "code" in body ? String(body.code) : "MOCK_BANK_UNAVAILABLE");
   return body as DemoBankState;
 }
 
-export async function updateDemoScenarios(userId: string, scenarios: readonly DemoScenarioName[], fetcher: typeof fetch = fetch): Promise<DemoBankState> {
-  const request = buildScenarioRequest(userId, scenarios);
+export async function updateDemoScenarios(scenarios: readonly DemoScenarioName[], fetcher: typeof fetch = fetch): Promise<DemoBankState> {
+  const request = buildScenarioRequest(scenarios);
   const response = await fetcher(request.url, request.init);
   const body = await responseBody(response);
   if (!response.ok) throw new Error(typeof body === "object" && body && "code" in body ? String(body.code) : "SCENARIO_REQUEST_REJECTED");
