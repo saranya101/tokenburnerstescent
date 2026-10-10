@@ -44,11 +44,11 @@ class MemoryRepository implements ParlanceRepository {
 
 async function bankAdapter(): Promise<BankPort> {
   const modulePath = join(process.cwd(), "../../services/mock-bank/src/app.ts");
-  const { buildApp } = await import(modulePath) as { buildApp(): FastifyInstance }; const app = buildApp();
+  const { buildApp } = await import(modulePath) as { buildApp(options: { bankApiToken: string }): FastifyInstance }; const app = buildApp({ bankApiToken: "vertical-bank-token" });
   const WriteResult = z.object({ accepted: z.literal(true), bankReference: z.string(), stateVersion: z.number().int() });
-  return { async getState(userId, traceId) { const response = await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: { "x-trace-id": traceId } }); const state = BankStateSnapshotV1.parse(response.json()); return BankStateSnapshotV1.parse({ ...state, fxQuotes: state.fxQuotes.map((quote, index) => index === 0 ? { ...quote, id: "quote-sgd-usd-1" } : quote) }); },
-    async execute(path, payload, key, traceId) { const response = await app.inject({ method: "POST", url: `/v1/execute/${path}`, headers: { "idempotency-key": key, "x-trace-id": traceId, "content-type": "application/json" }, body: JSON.stringify(payload) }); if (response.statusCode >= 400) throw new Error(response.json().code); return WriteResult.parse(response.json()); },
-    async lookupByIdempotencyKey(key, traceId) { const response = await app.inject({ method: "GET", url: `/v1/executions/idempotency/${key}`, headers: { "x-trace-id": traceId } }); return response.json(); } };
+  return { async getState(userId, traceId) { const response = await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: { "x-trace-id": traceId, "x-parlance-bank-token": "vertical-bank-token" } }); const state = BankStateSnapshotV1.parse(response.json()); return BankStateSnapshotV1.parse({ ...state, fxQuotes: state.fxQuotes.map((quote, index) => index === 0 ? { ...quote, id: "quote-sgd-usd-1" } : quote) }); },
+    async execute(path, payload, key, traceId) { const response = await app.inject({ method: "POST", url: `/v1/execute/${path}`, headers: { "idempotency-key": key, "x-trace-id": traceId, "x-parlance-bank-token": "vertical-bank-token", "content-type": "application/json" }, body: JSON.stringify(payload) }); if (response.statusCode >= 400) throw new Error(response.json().code); return WriteResult.parse(response.json()); },
+    async lookupByIdempotencyKey(key, traceId) { const response = await app.inject({ method: "GET", url: `/v1/executions/idempotency/${key}`, headers: { "x-trace-id": traceId, "x-parlance-bank-token": "vertical-bank-token" } }); return response.json(); } };
 }
 
 class ControlledBank implements BankPort {

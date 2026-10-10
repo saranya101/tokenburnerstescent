@@ -6,6 +6,7 @@ import { formatMinorUnits } from "../../lib/banking-state";
 import { AccountsView } from "./accounts-view";
 import { BankingHomeView } from "./banking-home";
 import { customerDesktopNavigation } from "./banking-nav";
+import { ChatBankingSidebarView } from "../chat/chat-banking-sidebar";
 import { InvestmentView } from "./investment-view";
 
 const bankState = BankStateSnapshotV1.parse({
@@ -58,6 +59,24 @@ describe("authoritative customer banking presentation", () => {
     expect(html).toContain("AAPL"); expect(html).toContain("1 share"); expect(html).toContain("US$200.00");
     expect(html).toContain("Transfer to John Tan"); expect(html).toContain("−US$300.00"); expect(html).toContain("−US$201.00");
     expect(html).not.toMatch(/24,830\.40|4,750\.00|S\$24,499\.00|Total balance|Monthly cashflow|Illustrative/u);
+  });
+
+  it("renders the chat banking rail only from authoritative account and activity data", () => {
+    const html = renderToStaticMarkup(createElement(ChatBankingSidebarView, { state: bankState, activity, loading: false }));
+    expect(html).toContain("Your accounts"); expect(html).toContain("S$20,000.00"); expect(html).toContain("US$4,499.00");
+    expect(html).toContain("Recent transactions"); expect(html).toContain("Transfer to John Tan"); expect(html).toContain("−US$300.00");
+    expect(html).not.toMatch(/Insights for you|Move money with confidence|Try asking about/iu);
+  });
+
+  it("renders honest loading, empty, and error states in the chat banking rail", () => {
+    const loading = renderToStaticMarkup(createElement(ChatBankingSidebarView, { loading: true }));
+    expect(loading).toContain('aria-label="Loading your accounts"'); expect(loading).toContain('aria-label="Loading recent transactions"');
+    const emptyState = BankStateSnapshotV1.parse({ ...bankState, accounts: [] });
+    const emptyActivity = CustomerActivityV1.parse({ items: [] });
+    const empty = renderToStaticMarkup(createElement(ChatBankingSidebarView, { state: emptyState, activity: emptyActivity, loading: false }));
+    expect(empty).toContain("No accounts are available"); expect(empty).toContain("No completed transactions yet");
+    const error = renderToStaticMarkup(createElement(ChatBankingSidebarView, { loading: false, error: "CUSTOMER_STATE_UNAVAILABLE" }));
+    expect(error).toContain("Your accounts are temporarily unavailable"); expect(error).toContain("Recent transactions are temporarily unavailable");
   });
 
   it("renders Accounts from live state with separate balances and account details", () => {

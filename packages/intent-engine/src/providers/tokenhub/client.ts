@@ -185,23 +185,26 @@ export class TokenHubIntentModelClient implements IntentModelClient {
 /** Projects explicit provider slots and otherwise removes only null-valued object fields. */
 export function projectTokenHubTransportCandidate(value: unknown, originalText?: string): unknown {
   if (!isRecord(value)) return stripNullFields(value);
-  if (originalText !== undefined && !hasOnlyGroundableHumanReferences(value, originalText)) {
+  if (originalText !== undefined && !hasOnlyGroundableAuthoritativeReferences(value, originalText)) {
     return stripNullFields(value);
   }
   const projected = stripNullFields(value) as Record<string, unknown>;
   if (Object.hasOwn(value, "goal")) projected.goal = projectGoalSlots(value.goal);
   if (Object.hasOwn(value, "constraints")) projected.constraints = projectConstraintSlots(value.constraints, originalText);
-  if (Object.hasOwn(value, "preferences")) projected.preferences = projectPreferenceSlots(value.preferences);
+  if (Object.hasOwn(value, "preferences")) projected.preferences = projectPreferenceSlots(value.preferences, originalText);
+  if (Object.hasOwn(value, "references") && originalText !== undefined) projected.references = projectSupplementalReferences(value.references, originalText);
   return projected;
 }
 
-function hasOnlyGroundableHumanReferences(value: Record<string, unknown>, originalText: string): boolean {
-  return transportHumanReferences(value).every((referenceValue) =>
-    originalText.includes(referenceValue) && !looksLikeCanonicalIdentifier(referenceValue)
-  );
+function isGroundableHumanReference(referenceValue: string, originalText: string): boolean {
+  return originalText.includes(referenceValue) && !looksLikeCanonicalIdentifier(referenceValue);
 }
 
-function transportHumanReferences(value: Record<string, unknown>): string[] {
+function hasOnlyGroundableAuthoritativeReferences(value: Record<string, unknown>, originalText: string): boolean {
+  return authoritativeTransportHumanReferences(value).every((referenceValue) => isGroundableHumanReference(referenceValue, originalText));
+}
+
+function authoritativeTransportHumanReferences(value: Record<string, unknown>): string[] {
   const references: string[] = [];
   const add = (candidate: unknown): void => {
     if (typeof candidate === "string") references.push(candidate);
@@ -223,19 +226,16 @@ function transportHumanReferences(value: Record<string, unknown>): string[] {
         if (isRecord(balance)) add(balance.accountReference);
       }
     }
-    if (Array.isArray(value.constraints.excludedAccounts)) {
-      value.constraints.excludedAccounts.forEach(add);
-    }
-  }
-  if (isRecord(value.preferences) && Array.isArray(value.preferences.preferredAccounts)) {
-    value.preferences.preferredAccounts.forEach(add);
-  }
-  if (Array.isArray(value.references)) {
-    for (const referenceValue of value.references) {
-      if (isRecord(referenceValue)) add(referenceValue.reference);
-    }
   }
   return references;
+}
+
+function projectSupplementalReferences(value: unknown, originalText: string): unknown {
+  if (!Array.isArray(value)) return stripNullFields(value);
+  return value.flatMap((entry) => {
+    if (!isRecord(entry) || typeof entry.reference !== "string") return [stripNullFields(entry)];
+    return isGroundableHumanReference(entry.reference, originalText) ? [stripNullFields(entry)] : [];
+  });
 }
 
 function looksLikeCanonicalIdentifier(value: string): boolean {
@@ -316,7 +316,7 @@ function explicitlyExcludesAccount(originalText: string, accountReference: strin
   return false;
 }
 
-function projectPreferenceSlots(value: unknown): unknown {
+function projectPreferenceSlots(value: unknown, originalText?: string): unknown {
   if (!isCompleteSlotObject(value, preferenceSlotNames) || !Array.isArray(value.preferredAccounts)) return stripNullFields(value);
   if (typeof value.minimizeTotalCost !== "boolean" || typeof value.minimizeFx !== "boolean" || typeof value.fastest !== "boolean") return stripNullFields(value);
 
@@ -325,7 +325,9 @@ function projectPreferenceSlots(value: unknown): unknown {
   if (value.minimizeFx) preferences.push({ type: "MINIMIZE_FX" });
   if (value.fastest) preferences.push({ type: "FASTEST" });
   for (const accountReference of value.preferredAccounts) {
-    preferences.push({ type: "PREFER_ACCOUNT", accountReference: stripNullFields(accountReference) });
+    if (typeof accountReference !== "string" || originalText === undefined || isGroundableHumanReference(accountReference, originalText)) {
+      preferences.push({ type: "PREFER_ACCOUNT", accountReference: stripNullFields(accountReference) });
+    }
   }
   return preferences;
 }

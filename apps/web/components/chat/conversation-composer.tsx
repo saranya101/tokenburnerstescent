@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Icon } from "../ui/icon";
-import { suggestions } from "./demo-data";
 import { VoiceInputController, type SpeechTranscript } from "../../lib/speech-recognition";
 
 export type ComposerInput = { inputMode: "VOICE"; voice: SpeechTranscript } | { inputMode: "TYPED" };
@@ -27,7 +26,7 @@ export function ConversationComposer({ initialValue = "", compact = false, onSub
   return <form className={`composer ${compact ? "composer-compact" : ""}`} onSubmit={submit}>
     <label className="sr-only" htmlFor="goal-message">Describe your financial goal</label>
     <div className="composer-field">
-      <textarea id="goal-message" value={value} onChange={(event) => setValue(event.target.value)} onKeyDown={onKeyDown} rows={compact ? 2 : 3} placeholder="Tell us what you’d like to do…" autoFocus={compact} />
+      <textarea id="goal-message" value={value} onChange={(event) => setValue(event.target.value)} onKeyDown={onKeyDown} rows={compact ? 2 : 3} placeholder="Describe a payment, transfer or investment…" autoFocus={compact} />
       <button className="send-button" type="submit" disabled={!value.trim()} aria-label="Send message">
         <Icon name="send" />
       </button>
@@ -40,9 +39,6 @@ export function ConversationComposer({ initialValue = "", compact = false, onSub
       {active && <button className="voice-action" type="button" onClick={() => voiceController.cancel()}>Cancel</button>}
       <span className={`voice-status voice-status-${voice.status.toLowerCase()}`} role="status" aria-live="polite">{voiceStatusText(voice.status, voice.message)}</span>
     </div>
-    {!compact && <div className="suggestion-row" aria-label="Example goals">
-      {suggestions.map((suggestion) => <button key={suggestion.label} type="button" className="suggestion-chip" onClick={() => { voiceController.cancel(); setValue(suggestion.example); }}><Icon name={suggestion.label === "Send money" ? "transfer" : suggestion.label === "Pay a bill" ? "card" : suggestion.label === "Buy an investment" ? "invest" : "fx"} /><span><strong>{suggestion.label}</strong><small>{suggestion.example}</small></span></button>)}
-    </div>}
     <p className="composer-hint">Press Enter to continue · Nothing moves without your approval</p>
   </form>;
 }

@@ -40,6 +40,24 @@ it("rejects an executable action that is not exactly in the approved plan", () =
 });
 
 it.each([
+  ["asset", { assetId: "asset-msft" }],
+  ["quantity", { quantity: "2", authorizedTotalMinor: "40100" }],
+  ["unit price", { quotedUnitPriceMinor: "20001", authorizedTotalMinor: "20101" }],
+  ["fee", { quotedFeeMinor: "101", authorizedTotalMinor: "20101" }],
+  ["funding account", { sourceAccountId: "acc-usd-other" }],
+] as const)("rejects a post-approval BUY_ASSET %s change with zero bank writes", async (_label, mutation) => {
+  const goal = GoalContractV1.parse({ schemaVersion: "1", id: "goal-buy", userId: "user-1", version: 1, goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [], entityBindings: [], status: "CONFIRMED", contractHash: "a".repeat(64), createdAt: "2026-09-20T00:00:00Z", confirmedAt: "2026-09-20T00:01:00Z" });
+  const plan = FinancialPlanV1.parse({ schemaVersion: "1", id: "plan-buy", goalContractId: goal.id, goalContractVersion: goal.version, bankStateVersion: 7, compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test", steps: [{ id: "buy", sequence: 0, action: "BUY_ASSET", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "20100" }, quoteId: "asset-quote-aapl-usd-v1", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } }], validity: { requiredQuoteIds: ["asset-quote-aapl-usd-v1"], validUntil: new Date(Date.now() + 60_000).toISOString() }, projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] }, planHash: "b".repeat(64) });
+  const approval = ApprovalV1.parse({ schemaVersion: "1", id: "approval-buy", userId: goal.userId, goalContractId: goal.id, goalContractVersion: goal.version, goalContractHash: goal.contractHash, financialPlanId: plan.id, financialPlanHash: plan.planHash, bankStateVersion: plan.bankStateVersion, method: "PASSKEY", approvedAt: new Date(Date.now() - 1_000).toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString(), signatureReference: "evidence-buy" });
+  const approvedStep = plan.steps[0]!;
+  if (approvedStep.action !== "BUY_ASSET") throw new Error("Expected BUY_ASSET");
+  let writes = 0;
+  const gateway = new ExecutionGateway({ getState: async () => { throw new Error("unused"); }, execute: async () => { writes += 1; return { accepted: true, bankReference: "unexpected", stateVersion: 8 }; }, lookupByIdempotencyKey: async () => ({ status: "NOT_FOUND", idempotencyKey: "unused" }) });
+  await expect(gateway.execute({ goal, plan, planStatus: "READY", approval, approvalEvidence: evidence(goal, plan, approval), executionState: "AUTHORIZED", expectedStateVersion: 7, currentStateVersion: 7, revalidationSucceeded: false, idempotencyKey: "buy-mutated", proposedStep: { ...approvedStep, parameters: { ...approvedStep.parameters, ...mutation } } }, "trace-buy-mutation")).rejects.toThrow("UNAPPROVED_EXECUTABLE_ACTION");
+  expect(writes).toBe(0);
+});
+
+it.each([
   ["missing", undefined],
   ["binding mismatch", { financialPlanHash: "tampered-plan-hash" }],
 ])("blocks execution with zero bank writes when cryptographic evidence is %s", async (_label, mutation) => {

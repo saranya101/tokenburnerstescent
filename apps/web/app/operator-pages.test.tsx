@@ -18,7 +18,7 @@ afterEach(() => { state.cookie = undefined; vi.unstubAllGlobals(); for (const ke
 describe("operator pages", () => {
   it("does not load ops data or demo controls without a session", async () => {
     configure(); const upstream = vi.fn(); vi.stubGlobal("fetch", upstream);
-    expect(renderToStaticMarkup(await OpsPage())).toContain("Operator login is required");
+    expect(renderToStaticMarkup(await OpsPage())).toContain("Operator sign-in required");
     expect(renderToStaticMarkup(await DemoPage())).toContain("Demo controls unavailable"); expect(upstream).not.toHaveBeenCalled();
   });
   it("uses the server ops token only upstream after a valid session", async () => {

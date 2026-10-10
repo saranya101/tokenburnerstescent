@@ -4,14 +4,17 @@ import { Icon } from "../ui/icon";
 import { customerDesktopNavigation, customerMobileNavigation, type BankingSection } from "./banking-nav";
 
 export function BankingShell({ active, children }: { active: BankingSection; children: ReactNode }) {
-  return <div className="banking-shell">
+  return <div className={`banking-shell ${active === "parlance" ? "is-parlance-shell" : ""}`}>
     <header className="banking-header">
-      <Link className="bank-brand" href="/" aria-label="DBS digibank home"><span className="bank-wordmark"><b>DBS</b><span>digibank</span></span></Link>
+      <Link className="bank-brand" href="/" aria-label="DBS digibank home"><span className="bank-wordmark"><b>DBS</b><span>digibank</span></span>{active === "parlance" && <span className="concept-label">Parlance</span>}</Link>
       <div className="header-actions">
         <button type="button" className="icon-button search-button" aria-label="Search"><Icon name="search" /></button>
         <button type="button" className="icon-button" aria-label="Help"><Icon name="help" /></button>
         <button type="button" className="icon-button notification-button" aria-label="Notifications"><Icon name="bell" /><span /></button>
-        <button type="button" className="profile-button" aria-label="Customer profile"><span>AT</span><b>Alex Tan</b><i>⌄</i></button>
+        <button type="button" className="profile-button" aria-label="Customer profile">
+          <span>{active === "parlance" ? <Icon name="recipient" /> : "AT"}</span>
+          {active !== "parlance" && <><b>Alex Tan</b><i>⌄</i></>}
+        </button>
       </div>
     </header>
 

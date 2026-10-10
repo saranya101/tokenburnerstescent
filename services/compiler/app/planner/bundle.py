@@ -8,7 +8,7 @@ the deterministic tie-breaker between otherwise independent items.
 import hashlib
 import json
 from collections import deque
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from app.constraints.evaluator import evaluate_constraints
 from app.models.contracts import (
@@ -33,6 +33,7 @@ from app.models.contracts import (
 )
 from app.operations.library import operation_sort_key
 from app.operations.models import BuyAsset, FxConvert, InternalOperation, Money, MoveFunds, Transfer
+from app.planner.acquire import compile_acquire_operation
 from app.planner.candidates import enumerate_candidates
 from app.planner.compiler import (
     COMPILER_VERSION,
@@ -178,141 +179,12 @@ def _operation_from_step(step) -> InternalOperation:
 def _compile_acquire(
     item: GoalBundleItemV1, snapshot: BankStateSnapshotV1, policy: PolicyEngine
 ) -> BuyAsset | CompilerUnsatV1 | CompilerPolicyBlockedV1:
-    goal = item.goal
-    assert isinstance(goal, AcquireAssetGroundedGoalV1)
-    if goal.quantity is not None and Decimal(goal.quantity) <= 0:
-        return _unsat("INVALID_QUANTITY", itemId=item.item_id, quantity=goal.quantity)
-    if goal.budget is not None and int(goal.budget.minor_units) <= 0:
-        return _unsat(
-            "INVALID_AMOUNT",
-            itemId=item.item_id,
-            currency=goal.budget.currency,
-            minorUnits=goal.budget.minor_units,
-        )
-    if "BUY_ASSET" not in policy.allowed_operations:
-        return _blocked("OPERATION_NOT_ALLOWED", itemId=item.item_id, action="BUY_ASSET")
-    asset = next(
-        (candidate for candidate in snapshot.assets if candidate.id == goal.asset_id), None
+    return compile_acquire_operation(
+        _item_goal_contract(item, snapshot),
+        snapshot,
+        policy,
+        context={"scope": "ITEM", "itemId": item.item_id},
     )
-    if asset is None:
-        return _unsat("ASSET_NOT_FOUND", itemId=item.item_id, assetId=goal.asset_id)
-    if not asset.tradable:
-        return _blocked("ASSET_NOT_TRADABLE", itemId=item.item_id, assetId=goal.asset_id)
-    if not snapshot.service_availability.investments:
-        return _blocked("REQUIRED_SERVICE_UNAVAILABLE", itemId=item.item_id, service="investments")
-    eligible_accounts = [
-        account
-        for account in snapshot.accounts
-        if account.status == "ACTIVE"
-        and account.currency == asset.settlement_currency
-        and "TRADE_ASSET" in account.capabilities
-    ]
-    if not eligible_accounts:
-        return _unsat(
-            "NO_ELIGIBLE_SETTLEMENT_ACCOUNT",
-            itemId=item.item_id,
-            assetId=goal.asset_id,
-            settlementCurrency=asset.settlement_currency,
-        )
-    quotes = sorted(
-        (
-            quote
-            for quote in snapshot.asset_quotes
-            if quote.asset_id == asset.id
-            and quote.settlement_currency == asset.settlement_currency
-            and quote.expires_at > snapshot.captured_at
-        ),
-        key=lambda quote: (quote.expires_at, quote.quote_id),
-    )
-    if not quotes:
-        return _unsat("ASSET_PRICE_UNAVAILABLE", itemId=item.item_id, assetId=goal.asset_id)
-    quote = quotes[0]
-    unit_price = int(quote.unit_price_minor)
-    fee = int(quote.fee_minor)
-    if unit_price <= 0:
-        return _unsat("ASSET_PRICE_INVALID", itemId=item.item_id, quoteId=quote.quote_id)
-    budget = int(goal.budget.minor_units) if goal.budget is not None else None
-    if goal.budget is not None and goal.budget.currency != quote.settlement_currency:
-        return _unsat(
-            "CURRENCY_MISMATCH",
-            itemId=item.item_id,
-            expected=quote.settlement_currency,
-            actual=goal.budget.currency,
-        )
-    try:
-        quantity = (
-            Decimal(goal.quantity)
-            if goal.quantity is not None
-            else Decimal((budget - fee) // unit_price)
-        )
-        quoted_price = quantity * Decimal(unit_price)
-    except (InvalidOperation, TypeError):
-        return _unsat("INVALID_QUANTITY", itemId=item.item_id, quantity=goal.quantity)
-    if quantity <= 0 or not quantity.is_finite():
-        return _unsat("BUDGET_BELOW_MINIMUM_PURCHASE", itemId=item.item_id)
-    if quoted_price != quoted_price.to_integral_value():
-        return _unsat(
-            "ASSET_QUOTE_NOT_MINOR_UNIT_EXACT", itemId=item.item_id, quoteId=quote.quote_id
-        )
-    authorized_total = int(quoted_price) + fee
-    if budget is not None and authorized_total > budget:
-        return _unsat(
-            "MAXIMUM_SPEND_EXCEEDED",
-            itemId=item.item_id,
-            requiredMinorUnits=authorized_total,
-            maximumMinorUnits=budget,
-        )
-    preferred = [
-        preference.account_id
-        for preference in item.preferences
-        if preference.type == "PREFER_ACCOUNT"
-    ]
-    eligible_accounts.sort(key=lambda account: (account.id not in preferred, account.id))
-    funded_accounts = [
-        candidate
-        for candidate in eligible_accounts
-        if int(candidate.available_minor_units) >= authorized_total
-        and int(candidate.ledger_minor_units) >= authorized_total
-    ]
-    if not funded_accounts:
-        return _unsat(
-            "INSUFFICIENT_FUNDS",
-            itemId=item.item_id,
-            requiredMinorUnits=authorized_total,
-            currency=quote.settlement_currency,
-        )
-    maximum_spend = budget if budget is not None else authorized_total
-    first_violation = None
-    for account in funded_accounts:
-        operation = BuyAsset(
-            source_account_id=account.id,
-            asset_id=asset.id,
-            quantity=quantity,
-            quote_id=quote.quote_id,
-            unit_price_minor=unit_price,
-            price=Money(quote.settlement_currency, int(quoted_price)),
-            fee=Money(quote.settlement_currency, fee),
-            maximum_spend=Money(quote.settlement_currency, maximum_spend),
-        )
-        projected = SimulatedState.from_snapshot(snapshot)
-        applied = apply_operation(projected, operation)
-        if not applied.success:
-            continue
-        evaluation = evaluate_constraints(
-            _item_goal_contract(item, snapshot), snapshot, applied.state, (operation,)
-        )
-        if evaluation.valid:
-            return operation
-        if first_violation is None:
-            first_violation = evaluation.violations[0]
-    if first_violation is not None:
-        return _unsat(
-            first_violation.code,
-            scope="ITEM",
-            itemId=item.item_id,
-            **first_violation.details,
-        )
-    return _unsat("COMPOSITE_SIMULATION_FAILED", itemId=item.item_id)
 
 
 def _global_constraint_result(

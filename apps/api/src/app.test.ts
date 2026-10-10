@@ -1,11 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BankStateSnapshotV1 } from "@parlance/contracts";
+import { IntentInterpreterError } from "@parlance/intent-engine";
 import { buildApp, type ApiServices } from "./app.js";
+
+const authorization = { internalApiToken: "test-internal-token", opsApiToken: "test-ops-token", bankApiToken: "test-bank-token" };
+const customerHeaders = { "x-parlance-internal-token": authorization.internalApiToken, "x-parlance-customer-id": "user-1" };
+const operatorHeaders = { "x-parlance-ops-token": authorization.opsApiToken };
+
+function appFor(injected: ApiServices = services()) { return buildApp(injected, authorization); }
+function asCustomer(app: ReturnType<typeof buildApp>, input: { method: "GET" | "POST"; url: string; payload?: object; headers?: Record<string, string> }) {
+  return app.inject({ ...input, headers: { ...customerHeaders, ...input.headers } });
+}
 
 function services(input: { databaseReady?: boolean; compilerReady?: boolean; mockBankReady?: boolean; compileError?: string } = {}): ApiServices {
   const compile = input.compileError ? async () => { throw new Error(input.compileError); } : async () => ({ status: "UNSAT" });
   return {
-    repository: { isReady: async () => input.databaseReady ?? true },
+    repository: {
+      isReady: async () => input.databaseReady ?? true,
+      getClarification: async () => ({ userId: "user-1" }), getBundleClarification: async () => ({ userId: "user-1" }),
+      getGoalCandidate: async () => ({ userId: "user-1" }), getBundleCandidate: async () => ({ userId: "user-1" }),
+      getConfirmedGoal: async (id: string) => ({ contract: { id, userId: "user-1" } }), getConfirmedGoalBundle: async (id: string) => ({ userId: "user-1", contract: { bundleId: id } }),
+    },
     messages: { receive: async () => ({}), answerClarification: async () => ({}), confirm: async () => ({}) }, compilation: { compile }, execution: {}, webauthn: {},
     dependencies: { compiler: { isReady: async () => input.compilerReady ?? true }, bank: { isReady: async () => input.mockBankReady ?? true } },
   } as unknown as ApiServices;
@@ -22,34 +37,50 @@ describe("API status handling", () => {
       serviceAvailability: { transfers: true, fx: true, billPayments: true, investments: true }, fxQuotes: [], assetQuotes: [],
     }));
     const injected = services(); injected.dependencies.bank = { ...injected.dependencies.bank, getState } as unknown as ApiServices["dependencies"]["bank"];
-    const app = buildApp(injected);
-    const response = await app.inject({ method: "GET", url: "/v1/customer/state?userId=attacker-selected" });
+    const app = appFor(injected);
+    const response = await asCustomer(app, { method: "GET", url: "/v1/customer/state?userId=attacker-selected", headers: { "x-parlance-customer-id": "configured-user" } });
     expect(response.statusCode).toBe(200); expect(response.json().userId).toBe("configured-user");
     expect(getState).toHaveBeenCalledWith("configured-user", expect.any(String));
     expect(getState).not.toHaveBeenCalledWith("attacker-selected", expect.anything()); await app.close();
   });
 
-  it("fails closed when the customer identity is not configured", async () => {
-    vi.stubEnv("PARLANCE_CUSTOMER_USER_ID", ""); const injected = services(); const getState = vi.fn();
+  it("fails closed when the internal customer credential is not configured", async () => {
+    const injected = services(); const getState = vi.fn();
     injected.dependencies.bank = { ...injected.dependencies.bank, getState } as unknown as ApiServices["dependencies"]["bank"];
-    const app = buildApp(injected); const response = await app.inject({ method: "GET", url: "/v1/customer/state" });
-    expect(response.statusCode).toBe(503); expect(response.json()).toEqual({ code: "CUSTOMER_IDENTITY_NOT_CONFIGURED" });
+    const app = buildApp(injected, { opsApiToken: authorization.opsApiToken }); const response = await app.inject({ method: "GET", url: "/v1/customer/state", headers: customerHeaders });
+    expect(response.statusCode).toBe(503); expect(response.json()).toEqual({ code: "SERVICE_UNAVAILABLE" });
     expect(getState).not.toHaveBeenCalled(); await app.close();
   });
 
   it("returns bounded customer-safe activity only for the configured identity", async () => {
     vi.stubEnv("PARLANCE_CUSTOMER_USER_ID", "configured-user"); const list = vi.fn().mockResolvedValue({ items: [] });
     const injected = services(); injected.customerActivity = { list };
-    const app = buildApp(injected); const response = await app.inject({ method: "GET", url: "/v1/customer/activity?userId=attacker-selected" });
+    const app = appFor(injected); const response = await asCustomer(app, { method: "GET", url: "/v1/customer/activity?userId=attacker-selected", headers: { "x-parlance-customer-id": "configured-user" } });
     expect(response.statusCode).toBe(200); expect(response.json()).toEqual({ items: [] });
     expect(list).toHaveBeenCalledWith("configured-user"); expect(list).not.toHaveBeenCalledWith("attacker-selected"); await app.close();
   });
 
-  it("exposes health and trace ID", async () => { const app = buildApp(services()); const response = await app.inject({ method: "GET", url: "/health" }); expect(response.statusCode).toBe(200); expect(response.headers["x-trace-id"]).toBeTruthy(); await app.close(); });
+  it("exposes health and trace ID", async () => { const app = appFor(); const response = await app.inject({ method: "GET", url: "/health" }); expect(response.statusCode).toBe(200); expect(response.headers["x-trace-id"]).toBeTruthy(); await app.close(); });
 
   it.each(["COMPILER_UNAVAILABLE", "MOCK_BANK_UNAVAILABLE"])("returns 503 without changing the %s error code", async (code) => {
-    const app = buildApp(services({ compileError: code })); const response = await app.inject({ method: "POST", url: "/v1/goals/goal-1/compile" });
+    const app = appFor(services({ compileError: code })); const response = await asCustomer(app, { method: "POST", url: "/v1/goals/goal-1/compile" });
     expect(response.statusCode).toBe(503); expect(response.json()).toEqual({ code }); await app.close();
+  });
+
+  it("does not expose repository or SQL error details", async () => {
+    const injected = services(); injected.compilation = { compile: async () => { throw new Error("SQL connection failed for secret-host"); } } as unknown as ApiServices["compilation"];
+    const app = appFor(injected); const response = await asCustomer(app, { method: "POST", url: "/v1/goals/goal-1/compile" });
+    expect(response.statusCode).toBe(500); expect(response.json()).toEqual({ code: "INTERNAL_ERROR" }); await app.close();
+  });
+
+  it.each([
+    { error: new IntentInterpreterError("INVALID_MODEL_OUTPUT", "provider detail"), status: 422, code: "INTENT_INTERPRETATION_FAILED" },
+    { error: new IntentInterpreterError("MODEL_ERROR", "provider detail"), status: 503, code: "INTERPRETER_UNAVAILABLE" },
+  ])("returns a controlled customer-safe response for $code", async ({ error, status, code }) => {
+    const injected = services(); injected.messages = { receive: async () => { throw error; } } as unknown as ApiServices["messages"];
+    injected.bundles = { handles: () => false } as unknown as ApiServices["bundles"];
+    const app = appFor(injected); const response = await asCustomer(app, { method: "POST", url: "/v1/messages", payload: { text: "Buy 1 share of Apple (AAPL)." } });
+    expect(response.statusCode).toBe(status); expect(response.json()).toEqual({ code }); await app.close();
   });
 
   it.each([
@@ -57,29 +88,42 @@ describe("API status handling", () => {
     { compilerReady: true, mockBankReady: false },
   ])("returns 503 when a dependency is unavailable", async (readiness) => {
     vi.stubEnv("DATABASE_URL", "configured"); vi.stubEnv("DIRECT_URL", "configured"); vi.stubEnv("COMPILER_URL", "configured"); vi.stubEnv("MOCK_BANK_URL", "configured");
-    const app = buildApp(services(readiness)); const response = await app.inject({ method: "GET", url: "/ready" });
+    const app = appFor(services(readiness)); const response = await app.inject({ method: "GET", url: "/ready" });
     expect(response.statusCode).toBe(503); expect(response.json()).toEqual(expect.objectContaining({ status: "not_ready" })); await app.close();
   });
 
   it("returns 200 when the database, compiler, and mock bank are ready", async () => {
     vi.stubEnv("DATABASE_URL", "configured"); vi.stubEnv("DIRECT_URL", "configured"); vi.stubEnv("COMPILER_URL", "configured"); vi.stubEnv("MOCK_BANK_URL", "configured");
-    const app = buildApp(services()); const response = await app.inject({ method: "GET", url: "/ready" });
+    const app = appFor(); const response = await app.inject({ method: "GET", url: "/ready" });
     expect(response.statusCode).toBe(200); expect(response.json()).toEqual({ status: "ready", database: "ready", dependencies: { compiler: "ready", mockBank: "ready" } }); await app.close();
+  });
+
+  it.each([
+    { internalApiToken: "shared", opsApiToken: "ops", bankApiToken: "shared" },
+    { internalApiToken: "internal", opsApiToken: "shared", bankApiToken: "shared" },
+    { internalApiToken: "shared", opsApiToken: "shared", bankApiToken: "bank" },
+  ])("fails readiness and authorization closed for colliding API credentials", async (colliding) => {
+    vi.stubEnv("DATABASE_URL", "configured"); vi.stubEnv("DIRECT_URL", "configured"); vi.stubEnv("COMPILER_URL", "configured"); vi.stubEnv("MOCK_BANK_URL", "configured");
+    const app = buildApp(services(), colliding);
+    expect((await app.inject({ method: "GET", url: "/ready" })).json()).toEqual({ status: "not_ready" });
+    expect((await app.inject({ method: "GET", url: "/v1/customer/state", headers: { "x-parlance-internal-token": colliding.internalApiToken, "x-parlance-customer-id": "user-1" } })).statusCode).toBe(503);
+    expect((await app.inject({ method: "GET", url: "/v1/ops/runs", headers: { "x-parlance-ops-token": colliding.opsApiToken } })).statusCode).toBe(503);
+    await app.close();
   });
 
   it("rejects caller-supplied confirmation authority fields before invoking confirmation", async () => {
     const confirm = vi.fn(); const injected = services(); injected.messages = { receive: async () => ({}), confirm } as unknown as ApiServices["messages"];
-    const app = buildApp(injected); const response = await app.inject({ method: "POST", url: "/v1/goal-candidates/candidate-1/confirm", payload: { contractHash: "caller", status: "CONFIRMED", confirmedAt: "2026-09-25T00:00:00Z", recipientId: "ben-other" } });
+    const app = appFor(injected); const response = await asCustomer(app, { method: "POST", url: "/v1/goal-candidates/candidate-1/confirm", payload: { contractHash: "caller", status: "CONFIRMED", confirmedAt: "2026-09-25T00:00:00Z", recipientId: "ben-other" } });
     expect(response.statusCode).toBe(400); expect(confirm).not.toHaveBeenCalled(); await app.close();
   });
 
   it("rejects caller-supplied bundle authority and accepts only server-side confirmation", async () => {
     const confirm = vi.fn().mockResolvedValue({ status: "CONFIRMED" }); const injected = services();
     injected.bundles = { handles: () => true, receive: async () => ({}), answerClarification: async () => ({}), confirm } as unknown as ApiServices["bundles"];
-    const app = buildApp(injected);
-    const invalid = await app.inject({ method: "POST", url: "/v1/goal-bundle-candidates/candidate-1/confirm", payload: { bundleId: "caller", contractHash: "caller", items: [] } });
+    const app = appFor(injected);
+    const invalid = await asCustomer(app, { method: "POST", url: "/v1/goal-bundle-candidates/candidate-1/confirm", payload: { bundleId: "caller", contractHash: "caller", items: [] } });
     expect(invalid.statusCode).toBe(400); expect(confirm).not.toHaveBeenCalled();
-    const valid = await app.inject({ method: "POST", url: "/v1/goal-bundle-candidates/candidate-1/confirm", payload: {} });
+    const valid = await asCustomer(app, { method: "POST", url: "/v1/goal-bundle-candidates/candidate-1/confirm", payload: {} });
     expect(valid.statusCode).toBe(200); expect(confirm).toHaveBeenCalledOnce(); await app.close();
   });
 
@@ -87,9 +131,9 @@ describe("API status handling", () => {
     const receiveSingle = vi.fn().mockResolvedValue({ path: "single" }); const receiveBundle = vi.fn().mockResolvedValue({ path: "bundle" }); const injected = services();
     injected.messages = { receive: receiveSingle } as unknown as ApiServices["messages"];
     injected.bundles = { handles: (text: string) => text.includes(" and buy "), receive: receiveBundle } as unknown as ApiServices["bundles"];
-    const app = buildApp(injected);
-    expect((await app.inject({ method: "POST", url: "/v1/messages", payload: { userId: "user-1", text: "Send John USD 350." } })).json()).toEqual({ path: "single" });
-    expect((await app.inject({ method: "POST", url: "/v1/messages", payload: { userId: "user-1", text: "Send John USD 300 and buy one Apple share." } })).json()).toEqual({ path: "bundle" });
+    const app = appFor(injected);
+    expect((await asCustomer(app, { method: "POST", url: "/v1/messages", payload: { text: "Send John USD 350." } })).json()).toEqual({ path: "single" });
+    expect((await asCustomer(app, { method: "POST", url: "/v1/messages", payload: { text: "Send John USD 300 and buy one Apple share." } })).json()).toEqual({ path: "bundle" });
     expect(receiveSingle).toHaveBeenCalledOnce(); expect(receiveBundle).toHaveBeenCalledOnce(); await app.close();
   });
 
@@ -97,9 +141,9 @@ describe("API status handling", () => {
     const receive = vi.fn().mockResolvedValue({ status: "AWAITING_GOAL_CONFIRMATION" }); const injected = services();
     injected.messages = { receive } as unknown as ApiServices["messages"];
     injected.bundles = { handles: () => false } as unknown as ApiServices["bundles"];
-    const app = buildApp(injected); const voice = { rawTranscript: "Send John USD 300", provider: "browser-web-speech", transcribedAt: "2026-10-03T10:00:00.000Z" };
-    const valid = await app.inject({ method: "POST", url: "/v1/messages", payload: { userId: "user-1", text: "Send John USD 3000", inputMode: "VOICE", voice } });
-    const forged = await app.inject({ method: "POST", url: "/v1/messages", payload: { userId: "user-1", text: "Send John USD 3000", inputMode: "VOICE", voice, edited: false } });
+    const app = appFor(injected); const voice = { rawTranscript: "Send John USD 300", provider: "browser-web-speech", transcribedAt: "2026-10-03T10:00:00.000Z" };
+    const valid = await asCustomer(app, { method: "POST", url: "/v1/messages", payload: { text: "Send John USD 3000", inputMode: "VOICE", voice } });
+    const forged = await asCustomer(app, { method: "POST", url: "/v1/messages", payload: { text: "Send John USD 3000", inputMode: "VOICE", voice, edited: false } });
     expect(valid.statusCode).toBe(200); expect(forged.statusCode).toBe(400);
     expect(receive).toHaveBeenCalledOnce(); expect(receive).toHaveBeenCalledWith({ userId: "user-1", text: "Send John USD 3000", inputMode: "VOICE", voice }, expect.any(String));
     await app.close();
@@ -108,19 +152,57 @@ describe("API status handling", () => {
   it("accepts only a candidate choice or typed text for clarification continuation", async () => {
     const answerClarification = vi.fn().mockResolvedValue({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-1", clarifications: [] });
     const injected = services(); injected.messages = { receive: async () => ({}), answerClarification, confirm: async () => ({}) } as unknown as ApiServices["messages"];
-    const app = buildApp(injected);
-    const valid = await app.inject({ method: "POST", url: "/v1/clarifications/clarification-1/answer", payload: { selectedCandidateId: "acc-1" } });
-    const invalid = await app.inject({ method: "POST", url: "/v1/clarifications/clarification-1/answer", payload: { selectedCandidateId: "acc-1", entityBinding: { entityId: "acc-1", confirmed: true }, goalContractHash: "caller" } });
+    const app = appFor(injected);
+    const valid = await asCustomer(app, { method: "POST", url: "/v1/clarifications/clarification-1/answer", payload: { selectedCandidateId: "acc-1" } });
+    const invalid = await asCustomer(app, { method: "POST", url: "/v1/clarifications/clarification-1/answer", payload: { selectedCandidateId: "acc-1", entityBinding: { entityId: "acc-1", confirmed: true }, goalContractHash: "caller" } });
     expect(valid.statusCode).toBe(200); expect(answerClarification).toHaveBeenCalledOnce(); expect(invalid.statusCode).toBe(400); await app.close();
   });
 
   it("exposes the ops projection as read-only", async () => {
     const injected = services(); injected.ops = { listRuns: async () => [] };
-    const app = buildApp(injected);
-    const read = await app.inject({ method: "GET", url: "/v1/ops/runs" });
+    const app = appFor(injected);
+    const read = await app.inject({ method: "GET", url: "/v1/ops/runs", headers: operatorHeaders });
     const mutation = await app.inject({ method: "POST", url: "/v1/ops/runs", payload: {} });
     expect(read.statusCode).toBe(200); expect(read.json()).toEqual([]);
     expect(mutation.statusCode).toBe(404);
     await app.close();
+  });
+
+  it("rejects missing credentials and a spoofed principal header", async () => {
+    const app = appFor();
+    expect((await app.inject({ method: "GET", url: "/v1/customer/state" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/v1/customer/state", headers: { "x-parlance-customer-id": "user-alice" } })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/v1/customer/state", headers: { ...customerHeaders, "x-parlance-internal-token": "wrong" } })).statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("derives message ownership from the principal and rejects a caller-supplied userId", async () => {
+    const receive = vi.fn().mockResolvedValue({ status: "AWAITING_GOAL_CONFIRMATION" }); const injected = services();
+    injected.messages = { receive } as unknown as ApiServices["messages"];
+    injected.bundles = { handles: () => false } as unknown as ApiServices["bundles"];
+    const app = appFor(injected);
+    const response = await asCustomer(app, { method: "POST", url: "/v1/messages", payload: { userId: "user-alice", text: "Send John USD 10" } });
+    expect(response.statusCode).toBe(400); expect(receive).not.toHaveBeenCalled(); await app.close();
+  });
+
+  it("keeps customer and operator credentials on separate privilege boundaries", async () => {
+    const injected = services(); injected.ops = { listRuns: async () => [] }; const app = appFor(injected);
+    expect((await app.inject({ method: "GET", url: "/v1/ops/runs" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/v1/ops/runs", headers: customerHeaders })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/v1/ops/runs", headers: { authorization: "Bearer human-operator-access-token" } })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/v1/ops/runs", headers: operatorHeaders })).statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("protects operator execution detail and recovery mutation from customer credentials", async () => {
+    const injected = services(); const opsDetail = vi.fn().mockResolvedValue({ state: "PAUSED", audit: [] }); const run = vi.fn().mockResolvedValue({ status: "UNKNOWN" });
+    injected.execution = { opsDetail, run } as unknown as ApiServices["execution"]; const app = appFor(injected);
+    for (const url of ["/v1/ops/executions/execution-1/detail", "/v1/ops/executions/execution-1/run"]) {
+      const method = url.endsWith("/run") ? "POST" as const : "GET" as const;
+      expect((await app.inject({ method, url })).statusCode).toBe(401);
+      expect((await app.inject({ method, url, headers: customerHeaders })).statusCode).toBe(401);
+      expect((await app.inject({ method, url, headers: operatorHeaders })).statusCode).toBe(200);
+    }
+    expect(opsDetail).toHaveBeenCalledOnce(); expect(run).toHaveBeenCalledOnce(); await app.close();
   });
 });

@@ -53,6 +53,15 @@ describe("goal-preservation primitives", () => {
     expect(stepPreservesConstraints(unsupported, transfer, snapshot)).toBe(false);
   });
 
+  it("rechecks an exact BUY_ASSET total-cost constraint at execution", () => {
+    const snapshot = BankStateSnapshotV1.parse(fixture("bank-state.json"));
+    const base = GoalContractV1.parse({ schemaVersion: "1", id: "goal-buy-cost", userId: "user-1", version: 1, goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [{ type: "MAX_TOTAL_COST", money: { currency: "USD", minorUnits: "20100" } }], preferences: [], entityBindings: [], status: "CONFIRMED", contractHash: "0".repeat(64), createdAt: "2026-09-20T00:00:00Z" });
+    const buy = FinancialPlanStepV1.parse({ id: "buy", sequence: 0, action: "BUY_ASSET", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "20100" }, quoteId: "asset-quote-aapl-usd-v1", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } });
+    expect(stepPreservesConstraints(base, buy, snapshot)).toBe(true);
+    expect(stepPreservesConstraints(GoalContractV1.parse({ ...base, constraints: [{ type: "MAX_TOTAL_COST", money: { currency: "USD", minorUnits: "20099" } }] }), buy, snapshot)).toBe(false);
+    expect(stepPreservesConstraints(GoalContractV1.parse({ ...base, constraints: [{ type: "MAX_TOTAL_COST", money: { currency: "SGD", minorUnits: "999999" } }] }), buy, snapshot)).toBe(false);
+  });
+
   it("requires exact acquisition quantity and exact PAY_BILL canonical identity", () => {
     const snapshot = BankStateSnapshotV1.parse(fixture("bank-state.json"));
     const acquire = GoalContractV1.parse({ schemaVersion: "1", id: "goal-quantity", userId: "user-1", version: 1, goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [], entityBindings: [], status: "CONFIRMED", contractHash: "0".repeat(64), createdAt: "2026-09-20T00:00:00Z" });
@@ -87,25 +96,25 @@ describe("goal-preservation primitives", () => {
   });
 
   it("matches the mock bank FX balance transition", async () => {
-    const modulePath = join(process.cwd(), "../../services/mock-bank/src/app.ts"); const { buildApp } = await import(modulePath) as { buildApp(): FastifyInstance }; const app = buildApp();
-    const before = BankStateSnapshotV1.parse((await app.inject({ method: "GET", url: "/v1/state/parity-user" })).json()); const quote = before.fxQuotes[0]!;
+    const modulePath = join(process.cwd(), "../../services/mock-bank/src/app.ts"); const { buildApp } = await import(modulePath) as { buildApp(options: { bankApiToken: string }): FastifyInstance }; const app = buildApp({ bankApiToken: "parity-bank-token" });
+    const before = BankStateSnapshotV1.parse((await app.inject({ method: "GET", url: "/v1/state/parity-user", headers: { "x-parlance-bank-token": "parity-bank-token" } })).json()); const quote = before.fxQuotes[0]!;
     const step = FinancialPlanStepV1.parse({ id: "fx-parity", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", sourceMoney: { currency: "SGD", minorUnits: "100001" }, targetCurrency: "USD", quoteId: quote.id } });
     const simulated = simulateFinancialStep(before, step); expect(simulated.outcome).toBe("SAFE_TO_EXECUTE"); if (simulated.outcome !== "SAFE_TO_EXECUTE") throw new Error("Expected safe simulation");
-    const operation = bankOperation("parity-user", step); const response = await app.inject({ method: "POST", url: `/v1/execute/${operation.path}`, headers: { "idempotency-key": "fx-parity", "content-type": "application/json" }, body: JSON.stringify(operation.payload) }); expect(response.statusCode).toBe(200);
-    const actual = BankStateSnapshotV1.parse((await app.inject({ method: "GET", url: "/v1/state/parity-user" })).json());
+    const operation = bankOperation("parity-user", step); const response = await app.inject({ method: "POST", url: `/v1/execute/${operation.path}`, headers: { "x-parlance-bank-token": "parity-bank-token", "idempotency-key": "fx-parity", "content-type": "application/json" }, body: JSON.stringify(operation.payload) }); expect(response.statusCode).toBe(200);
+    const actual = BankStateSnapshotV1.parse((await app.inject({ method: "GET", url: "/v1/state/parity-user", headers: { "x-parlance-bank-token": "parity-bank-token" } })).json());
     const balances = (state: BankStateSnapshotV1) => state.accounts.map(({ id, ledgerMinorUnits, availableMinorUnits }) => ({ id, ledgerMinorUnits, availableMinorUnits }));
     expect(balances(simulated.snapshot)).toEqual(balances(actual)); await app.close();
   });
 
   it("matches the mock bank additive BUY_ASSET holding transition", async () => {
-    const modulePath = join(process.cwd(), "../../services/mock-bank/src/app.ts"); const { buildApp } = await import(modulePath) as { buildApp(): FastifyInstance }; const app = buildApp();
+    const modulePath = join(process.cwd(), "../../services/mock-bank/src/app.ts"); const { buildApp } = await import(modulePath) as { buildApp(options: { bankApiToken: string }): FastifyInstance }; const app = buildApp({ bankApiToken: "parity-bank-token" });
     const userId = "buy-parity-user"; const seed = { userId, sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "2.25", maximumSpend: { currency: "USD", minorUnits: "50000" }, quoteId: "asset-quote-aapl-usd-v1", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "45100" };
-    expect((await app.inject({ method: "POST", url: "/v1/execute/buy", headers: { "idempotency-key": "buy-parity-seed" }, payload: seed })).statusCode).toBe(200);
-    const before = BankStateSnapshotV1.parse((await app.inject({ method: "GET", url: `/v1/state/${userId}` })).json());
+    expect((await app.inject({ method: "POST", url: "/v1/execute/buy", headers: { "x-parlance-bank-token": "parity-bank-token", "idempotency-key": "buy-parity-seed" }, payload: seed })).statusCode).toBe(200);
+    const before = BankStateSnapshotV1.parse((await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: { "x-parlance-bank-token": "parity-bank-token" } })).json());
     const step = FinancialPlanStepV1.parse({ id: "buy-parity", sequence: 0, action: "BUY_ASSET", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "25000" }, quoteId: "asset-quote-aapl-usd-v1", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } });
     const simulated = simulateFinancialStep(before, step); expect(simulated.outcome).toBe("SAFE_TO_EXECUTE"); if (simulated.outcome !== "SAFE_TO_EXECUTE") throw new Error("Expected safe simulation");
-    expect((await app.inject({ method: "POST", url: "/v1/execute/buy", headers: { "idempotency-key": "buy-parity" }, payload: { userId, ...step.parameters } })).statusCode).toBe(200);
-    const actual = BankStateSnapshotV1.parse((await app.inject({ method: "GET", url: `/v1/state/${userId}` })).json());
+    expect((await app.inject({ method: "POST", url: "/v1/execute/buy", headers: { "x-parlance-bank-token": "parity-bank-token", "idempotency-key": "buy-parity" }, payload: { userId, ...step.parameters } })).statusCode).toBe(200);
+    const actual = BankStateSnapshotV1.parse((await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: { "x-parlance-bank-token": "parity-bank-token" } })).json());
     expect(simulated.snapshot.holdings.find((holding) => holding.assetId === "asset-aapl")?.quantity).toBe("3.25");
     expect(actual.holdings.find((holding) => holding.assetId === "asset-aapl")?.quantity).toBe("3.25");
     await app.close();

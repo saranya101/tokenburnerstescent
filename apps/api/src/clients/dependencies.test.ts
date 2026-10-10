@@ -18,12 +18,19 @@ describe("dependency clients", () => {
 
   it("identifies mock-bank network failures without exposing its URL", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
-    await expect(new MockBankClient("http://bank.internal").getState("user-1", "trace-bank")).rejects.toThrow("MOCK_BANK_UNAVAILABLE");
+    await expect(new MockBankClient("http://bank.internal", "bank-test-token").getState("user-1", "trace-bank")).rejects.toThrow("MOCK_BANK_UNAVAILABLE");
+  });
+
+  it("fails closed without a bank service credential and injects it when configured", async () => {
+    const request = vi.fn().mockResolvedValue(new Response(JSON.stringify(fixture("bank-state.json")), { status: 200 })); vi.stubGlobal("fetch", request);
+    await expect(new MockBankClient("http://bank.internal", undefined).getState("user-1", "trace-bank")).rejects.toThrow("MOCK_BANK_AUTH_NOT_CONFIGURED");
+    await new MockBankClient("http://bank.internal", "bank-service-secret").getState("user-1", "trace-bank");
+    expect((request.mock.calls[0]?.[1] as RequestInit).headers).toEqual(expect.objectContaining({ "x-parlance-bank-token": "bank-service-secret" }));
   });
 
   it("distinguishes an ambiguous bank write from a definite dependency read failure", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("response lost")));
-    const client = new MockBankClient("http://bank.internal");
+    const client = new MockBankClient("http://bank.internal", "bank-test-token");
     await expect(client.execute("transfer", {}, "same-key", "trace-bank-write")).rejects.toThrow("BANK_RESPONSE_OUTCOME_UNKNOWN");
     await expect(client.lookupByIdempotencyKey("same-key", "trace-bank-lookup")).rejects.toThrow("BANK_LOOKUP_UNAVAILABLE");
   });
@@ -33,7 +40,7 @@ describe("dependency clients", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: "internal" }), { status: 500 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: "INSUFFICIENT_FUNDS" }), { status: 409 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ code: "FX_UNAVAILABLE" }), { status: 503 }));
-    vi.stubGlobal("fetch", request); const client = new MockBankClient("http://bank.internal");
+    vi.stubGlobal("fetch", request); const client = new MockBankClient("http://bank.internal", "bank-test-token");
     await expect(client.execute("transfer", {}, "same-key", "trace-500")).rejects.toThrow("BANK_RESPONSE_OUTCOME_UNKNOWN");
     await expect(client.execute("transfer", {}, "other-key", "trace-409")).rejects.toThrow("INSUFFICIENT_FUNDS");
     await expect(client.execute("fx", {}, "fx-key", "trace-503")).rejects.toThrow("FX_UNAVAILABLE");

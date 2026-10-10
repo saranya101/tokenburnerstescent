@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import Fastify from "fastify";
 import { AssetQuoteV1, AssetV1, BankStateSnapshotV1, MoneyV1, type AssetQuoteV1 as AssetQuote } from "@parlance/contracts";
 import { z } from "zod";
@@ -9,7 +9,15 @@ type Asset = z.infer<typeof AssetV1>;
 interface State { stateVersion: number; balances: Record<string, bigint>; holdings: Record<string, string>; assets: Asset[]; assetQuotes: AssetQuote[]; scenarios: Set<Scenario> }
 interface StoredResponse { operation: "fx" | "transfer" | "payment" | "buy"; requestHash: string; response: { accepted: true; bankReference: string; stateVersion: number } }
 export interface MockBankWriteRecord { operation: StoredResponse["operation"]; idempotencyKey: string; requestHash: string; response: StoredResponse["response"] }
-export interface MockBankOptions { afterWrite?: (record: MockBankWriteRecord) => void }
+export interface MockBankOptions {
+  afterWrite?: (record: MockBankWriteRecord) => void;
+  adminAuthorization?: { demoMode: boolean; opsToken?: string; demoUserId?: string };
+  bankApiToken?: string;
+  initialState?: { stateVersion: number; balances: Record<string, bigint>; holdings: Record<string, string> };
+}
+
+const DEFAULT_INITIAL_STATE_VERSION = 7;
+const DEFAULT_INITIAL_BALANCES = { "acc-sgd": 2_000_000n, "acc-usd": 500_000n };
 
 const Id = z.string().min(1);
 const FxBody = z.object({ userId: Id, accountId: Id, fromAmount: MoneyV1, toCurrency: z.string().length(3), quoteId: Id }).strict();
@@ -38,9 +46,9 @@ const DEMO_ASSET_QUOTE = AssetQuoteV1.parse({
   unitPriceMinor: "20000", feeMinor: "100", expiresAt: "2099-01-01T00:00:00.000Z",
 });
 const fxDestinationAccountId = (currency: string): string | undefined => ACCOUNT_DEFINITIONS.find((account) => account.currency === currency)?.id;
-const initialState = (): State => ({
-  stateVersion: 7,
-  balances: { "acc-sgd": 2_000_000n, "acc-usd": 500_000n },
+const initialState = (stateVersion: number): State => ({
+  stateVersion,
+  balances: { ...DEFAULT_INITIAL_BALANCES },
   holdings: {},
   assets: ASSET_DEFINITIONS.map((asset) => ({ ...asset })),
   assetQuotes: [{ ...DEMO_ASSET_QUOTE }],
@@ -77,10 +85,41 @@ const authoritativeAssetTotal = (quantity: string, unitPriceMinor: string, feeMi
 
 export function buildApp(options: MockBankOptions = {}) {
   const states = new Map<string, State>(); const idempotency = new Map<string, StoredResponse>();
-  const getState = (userId: string): State => { const existing = states.get(userId); if (existing) return existing; const created = initialState(); states.set(userId, created); return created; };
+  const configuredInitialState = options.initialState ?? resolveInitialStateConfiguration();
+  const getState = (userId: string): State => {
+    const existing = states.get(userId); if (existing) return existing;
+    const created = initialState(configuredInitialState.stateVersion); created.balances = { ...configuredInitialState.balances }; created.holdings = { ...configuredInitialState.holdings }; states.set(userId, created); return created;
+  };
   const app = Fastify({ loggerInstance: logger });
+  const securityConfiguration = () => {
+    const authorization = options.adminAuthorization ?? { demoMode: process.env.PARLANCE_DEMO_MODE === "true", opsToken: process.env.PARLANCE_OPS_API_TOKEN, demoUserId: process.env.PARLANCE_DEMO_USER_ID };
+    const bankToken = options.bankApiToken?.trim() || process.env.PARLANCE_BANK_API_TOKEN?.trim();
+    const opsToken = authorization.opsToken?.trim(); const demoUserId = authorization.demoUserId?.trim();
+    const separated = !bankToken || !opsToken || !safeSecretEqual(bankToken, opsToken);
+    const ready = Boolean(bankToken && separated && (!authorization.demoMode || (opsToken && demoUserId)));
+    return { authorization, bankToken, opsToken, ready, separated };
+  };
   app.addHook("onRequest", async (request, reply) => { const traceId = resolveTraceId(request.headers["x-trace-id"]); request.headers["x-trace-id"] = traceId; reply.header("x-trace-id", traceId); });
-  app.get("/health", async () => ({ status: "ok", service: "mock-bank" })); app.get("/ready", async () => ({ status: "ready" }));
+  app.addHook("preHandler", async (request, reply) => {
+    const security = securityConfiguration();
+    const routeUrl = request.routeOptions.url ?? "";
+    if (routeUrl.startsWith("/v1/admin/")) {
+      const authorization = security.authorization;
+      if (!authorization.demoMode) return reply.code(404).send({ code: "NOT_FOUND" });
+      const supplied = typeof request.headers["x-parlance-ops-token"] === "string" ? request.headers["x-parlance-ops-token"] : undefined;
+      if (!security.ready || !security.opsToken || !supplied || !safeSecretEqual(supplied, security.opsToken)) return reply.code(401).send({ code: "UNAUTHORIZED" });
+      const target = typeof request.params === "object" && request.params !== null && "userId" in request.params ? request.params.userId : undefined;
+      if (typeof target !== "string" || target !== authorization.demoUserId?.trim()) return reply.code(404).send({ code: "NOT_FOUND" });
+      return;
+    }
+    if (!routeUrl.startsWith("/v1/")) return;
+    const expected = security.bankToken;
+    const supplied = typeof request.headers["x-parlance-bank-token"] === "string" ? request.headers["x-parlance-bank-token"] : undefined;
+    if (!security.ready || !expected || !supplied || !safeSecretEqual(supplied, expected)) return reply.code(401).send({ code: "UNAUTHORIZED" });
+  });
+  app.get("/health", async () => ({ status: "ok", service: "mock-bank" }));
+  app.get("/ready", async (_request, reply) => securityConfiguration().ready ? { status: "ready" } : reply.code(503).send({ status: "not_ready" }));
+  app.get("/v1/service/ready", async () => ({ status: "ready" }));
   app.get("/v1/executions/idempotency/:key", async (request) => {
     const { key } = z.object({ key: Id }).parse(request.params); const prior = idempotency.get(key);
     return prior ? { status: "COMPLETED" as const, idempotencyKey: key, operation: prior.operation, requestHash: prior.requestHash, ...prior.response } : { status: "NOT_FOUND" as const, idempotencyKey: key };
@@ -123,4 +162,32 @@ export function buildApp(options: MockBankOptions = {}) {
   app.put("/v1/admin/asset-quotes/:userId", async (request) => { const { userId } = z.object({ userId: Id }).parse(request.params); const body = z.object({ assetQuotes: z.array(AssetQuoteV1) }).strict().parse(request.body); const state = getState(userId); state.assetQuotes = body.assetQuotes; return { assetQuotes: state.assetQuotes }; });
   app.put("/v1/admin/assets/:userId", async (request) => { const { userId } = z.object({ userId: Id }).parse(request.params); const body = z.object({ assets: z.array(AssetV1) }).strict().parse(request.body); const state = getState(userId); state.assets = body.assets; return { assets: state.assets }; });
   return app;
+}
+
+export function resolveInitialStateConfiguration(environment: NodeJS.ProcessEnv = process.env): { stateVersion: number; balances: Record<string, bigint>; holdings: Record<string, string> } {
+  const configured = environment.PARLANCE_MOCK_BANK_INITIAL_STATE_VERSION?.trim();
+  const configuredBalances = environment.PARLANCE_MOCK_BANK_INITIAL_BALANCES?.trim();
+  const configuredHoldings = environment.PARLANCE_MOCK_BANK_INITIAL_HOLDINGS?.trim();
+  if (!configured && !configuredBalances && !configuredHoldings) return { stateVersion: DEFAULT_INITIAL_STATE_VERSION, balances: { ...DEFAULT_INITIAL_BALANCES }, holdings: {} };
+  if (environment.NODE_ENV === "production" || environment.PARLANCE_LOCAL_TEST_MODE !== "true") {
+    throw new Error("MOCK_BANK_INITIAL_STATE_VERSION_OVERRIDE_FORBIDDEN");
+  }
+  if (!configured || !/^[1-9]\d*$/u.test(configured)) throw new Error("MOCK_BANK_INITIAL_STATE_VERSION_INVALID");
+  const version = Number(configured);
+  if (!Number.isSafeInteger(version)) throw new Error("MOCK_BANK_INITIAL_STATE_VERSION_INVALID");
+  if (!configuredBalances) throw new Error("MOCK_BANK_INITIAL_BALANCES_REQUIRED");
+  if (!configuredHoldings) throw new Error("MOCK_BANK_INITIAL_HOLDINGS_REQUIRED");
+  let parsedBalances: unknown; let parsedHoldings: unknown;
+  try { parsedBalances = JSON.parse(configuredBalances); } catch { throw new Error("MOCK_BANK_INITIAL_BALANCES_INVALID"); }
+  try { parsedHoldings = JSON.parse(configuredHoldings); } catch { throw new Error("MOCK_BANK_INITIAL_HOLDINGS_INVALID"); }
+  const balances = z.object({ "acc-sgd": z.string().regex(/^(0|[1-9]\d*)$/), "acc-usd": z.string().regex(/^(0|[1-9]\d*)$/) }).strict().safeParse(parsedBalances);
+  if (!balances.success) throw new Error("MOCK_BANK_INITIAL_BALANCES_INVALID");
+  const holdings = z.object({ "asset-aapl": z.string().regex(/^(0|[1-9]\d*)(?:\.\d+)?$/).optional() }).strict().safeParse(parsedHoldings);
+  if (!holdings.success) throw new Error("MOCK_BANK_INITIAL_HOLDINGS_INVALID");
+  const restoredHoldings = Object.fromEntries(Object.entries(holdings.data).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  return { stateVersion: version, balances: Object.fromEntries(Object.entries(balances.data).map(([id, value]) => [id, BigInt(value)])), holdings: restoredHoldings };
+}
+
+function safeSecretEqual(left: string, right: string): boolean {
+  return timingSafeEqual(createHash("sha256").update(left).digest(), createHash("sha256").update(right).digest());
 }

@@ -290,8 +290,129 @@ def test_depth_limit_loop_prevention_and_metrics():
     assert result.diagnostics.states_explored < 100
 
 
-def test_trade_goal_remains_unsupported():
+def test_funded_single_stock_purchase_uses_authoritative_quote_and_updates_projection():
     goal, state = fixture("02-apple-investment")
+    goal.goal.budget = None
+    goal.goal.quantity = "1"
+    result = compile_goal(goal, state)
+    assert actions(result) == ["BUY_ASSET"]
+    step = result.plan.steps[0]
+    assert step.parameters.model_dump(mode="json", by_alias=True) == {
+        "sourceAccountId": "acc-brokerage",
+        "assetId": "asset-aapl",
+        "quantity": "1",
+        "maximumSpend": {"currency": "USD", "minorUnits": "20100"},
+        "quoteId": "asset-quote-aapl-usd-v1",
+        "settlementCurrency": "USD",
+        "quotedUnitPriceMinor": "20000",
+        "quotedFeeMinor": "100",
+        "authorizedTotalMinor": "20100",
+    }
+    assert result.plan.validity.required_quote_ids == ["asset-quote-aapl-usd-v1"]
+    assert result.plan.validity.valid_until == state.asset_quotes[0].expires_at
+    assert result.plan.projected_outcome.acquired_assets[0].asset_id == "asset-aapl"
+    assert result.plan.projected_outcome.acquired_assets[0].quantity == "1"
+    projected = next(
+        item
+        for item in result.plan.projected_outcome.projected_available_balances
+        if item.account_id == "acc-brokerage"
+    )
+    assert projected.money.minor_units == "479900"
+
+
+def test_single_stock_purchase_fails_closed_for_unavailable_asset_and_expired_quote():
+    goal, state = fixture("02-apple-investment")
+    goal.goal.budget = None
+    goal.goal.quantity = "1"
+    state.assets[0].tradable = False
+    result = compile_goal(goal, state)
+    assert result.status == "POLICY_BLOCKED"
+    assert result.reason.code == "ASSET_NOT_TRADABLE"
+
+    state.assets[0].tradable = True
+    state.asset_quotes[0].expires_at = state.captured_at
     result = compile_goal(goal, state)
     assert result.status == "UNSAT"
-    assert result.reason.code == "UNSUPPORTED_GOAL"
+    assert result.reason.code == "ASSET_PRICE_UNAVAILABLE"
+
+
+def test_single_stock_purchase_requires_settled_usd_and_does_not_synthesize_fx():
+    goal, state = fixture("02-apple-investment")
+    goal.goal.budget = None
+    goal.goal.quantity = "1"
+    state.accounts[0].available_minor_units = "20000"
+    state.accounts[0].ledger_minor_units = "20000"
+    account(state, "acc-sgd", "SGD", 500000, ["CONVERT_FX", "SEND_TRANSFER"])
+    result = compile_goal(goal, state)
+    assert result.status == "UNSAT"
+    assert result.reason.code == "INSUFFICIENT_FUNDS"
+
+
+def test_conditional_fx_stock_request_preserves_sgd_minimum_and_never_invents_funding():
+    # The confirmed V1 contract represents the requested acquisition and reserve.
+    # Automatic conditional FX is intentionally unsupported, so insufficient USD
+    # must return a controlled result even when ample SGD and FX are available.
+    goal, state = fixture("02-apple-investment")
+    goal.goal.budget = None
+    goal.goal.quantity = "1"
+    account(state, "acc-sgd", "SGD", 500000, ["CONVERT_FX", "SEND_TRANSFER"])
+    constraint(
+        goal,
+        {
+            "type": "MIN_AVAILABLE_BALANCE",
+            "money": {"currency": "SGD", "minorUnits": "100000"},
+            "accountId": "acc-sgd",
+        },
+    )
+    funded = compile_goal(goal, state)
+    assert actions(funded) == ["BUY_ASSET"]
+    assert funded.plan.steps[0].parameters.source_account_id == "acc-brokerage"
+    assert (
+        next(
+            item
+            for item in funded.plan.projected_outcome.projected_available_balances
+            if item.account_id == "acc-sgd"
+        ).money.minor_units
+        == "500000"
+    )
+
+    state.accounts[0].available_minor_units = "20000"
+    state.accounts[0].ledger_minor_units = "20000"
+    unfunded = compile_goal(goal, state)
+    assert unfunded.status == "UNSAT"
+    assert unfunded.reason.code == "INSUFFICIENT_FUNDS"
+
+
+def test_single_stock_purchase_recompiles_material_quote_and_state_changes():
+    goal, state = fixture("02-apple-investment")
+    goal.goal.budget = None
+    goal.goal.quantity = "1"
+    first = compile_goal(goal, state)
+    assert actions(first) == ["BUY_ASSET"]
+    state.state_version += 1
+    state.asset_quotes[0].unit_price_minor = "20100"
+    second = compile_goal(goal, state)
+    assert actions(second) == ["BUY_ASSET"]
+    assert second.plan.bank_state_version == first.plan.bank_state_version + 1
+    assert second.plan.plan_hash != first.plan.plan_hash
+    assert second.plan.steps[0].parameters.authorized_total_minor == "20200"
+
+
+def test_single_stock_purchase_enforces_customer_and_persistent_hard_constraints():
+    goal, state = fixture("02-apple-investment")
+    goal.goal.budget = None
+    goal.goal.quantity = "1"
+    constraint(
+        goal,
+        {"type": "MAX_TOTAL_COST", "money": {"currency": "USD", "minorUnits": "20100"}},
+    )
+    assert actions(compile_goal(goal, state)) == ["BUY_ASSET"]
+    goal.constraints[0].money.minor_units = "20099"
+    limited = compile_goal(goal, state)
+    assert limited.status == "UNSAT"
+    assert limited.reason.code == "MAX_TOTAL_COST_VIOLATED"
+
+    goal.constraints.clear()
+    excluded = compile_goal(goal, state, (hard("EXCLUDED_ACCOUNT", accountId="acc-brokerage"),))
+    assert excluded.status == "UNSAT"
+    assert excluded.reason.code == "EXCLUDED_ACCOUNT_USED"

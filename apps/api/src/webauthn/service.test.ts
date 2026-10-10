@@ -15,6 +15,8 @@ import type { ApprovalRiskGate } from "../risk/gate.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(join(process.cwd(), "../../packages/contracts/fixtures/01-ntu-transfer", name), "utf8"));
 const fixedNow = new Date("2026-09-23T10:00:00.000Z");
+const routeAuthorization = { internalApiToken: "test-internal-token", opsApiToken: "test-ops-token" };
+const routeHeaders = { "x-parlance-internal-token": routeAuthorization.internalApiToken, "x-parlance-customer-id": "demo-user" };
 
 function authoritativeRecords(): { goal: StoredGoal; plan: StoredPlan; state: BankStateSnapshotV1 } {
   const rawGoal = GoalContractV1.parse({ ...(fixture("goal-contract.json") as object), userId: "demo-user", contractHash: "0".repeat(64) });
@@ -137,7 +139,7 @@ async function approvalCeremony(values: ReturnType<typeof setup>) {
 
 beforeEach(() => {
   vi.stubEnv("PARLANCE_WEBAUTHN_RP_ID", "localhost"); vi.stubEnv("PARLANCE_WEBAUTHN_ORIGIN", "http://localhost:3000");
-  vi.stubEnv("PARLANCE_DEMO_WEBAUTHN_ENROLLMENT", "true"); vi.stubEnv("PARLANCE_DEMO_USER_ID", "demo-user");
+  vi.stubEnv("PARLANCE_DEMO_WEBAUTHN_ENROLLMENT", "true"); vi.stubEnv("PARLANCE_DEMO_USER_ID", "demo-user"); vi.stubEnv("PARLANCE_CUSTOMER_USER_ID", "demo-user");
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -308,7 +310,7 @@ describe("WebAuthn Phase 1 registration", () => {
   it("fails closed unless demo enrollment is explicitly enabled and rejects caller-selected users", async () => {
     const disabled = setup(); vi.stubEnv("PARLANCE_DEMO_WEBAUTHN_ENROLLMENT", "false"); await expect(disabled.service.registrationOptions()).rejects.toThrow("DEMO_WEBAUTHN_ENROLLMENT_DISABLED");
     vi.stubEnv("PARLANCE_DEMO_WEBAUTHN_ENROLLMENT", "true"); const enabled = setup();
-    const app = buildApp({ webauthn: enabled.service } as unknown as ApiServices); const result = await app.inject({ method: "POST", url: "/v1/webauthn/registration/options", payload: { userId: "attacker" } });
+    const app = buildApp({ webauthn: enabled.service, repository: enabled.repository } as unknown as ApiServices, routeAuthorization); const result = await app.inject({ method: "POST", url: "/v1/webauthn/registration/options", headers: routeHeaders, payload: { userId: "attacker" } });
     expect(result.statusCode).toBe(400); expect(enabled.repository.challenges.size).toBe(0); await app.close();
   });
 });
@@ -359,8 +361,8 @@ describe("WebAuthn Phase 1 approval options", () => {
   });
 
   it("rejects caller-supplied financial authority fields before reading bank state", async () => {
-    const values = setup(); const app = buildApp({ webauthn: values.service } as unknown as ApiServices);
-    const result = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approval-options`, payload: { userId: "attacker", bankStateVersion: 999 } });
+    const values = setup(); const app = buildApp({ webauthn: values.service, repository: values.repository } as unknown as ApiServices, routeAuthorization);
+    const result = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approval-options`, headers: routeHeaders, payload: { userId: "attacker", bankStateVersion: 999 } });
     expect(result.statusCode).toBe(400); expect(values.bank).toMatchObject({ reads: 0, writes: 0 }); expect(values.repository.challenges.size).toBe(0); await app.close();
   });
 });
@@ -464,10 +466,10 @@ describe("WebAuthn Phase 2A approval verification", () => {
   });
 
   it("strictly rejects caller financial bindings and leaves the old direct approval path disabled", async () => {
-    const values = setup(); const { issued, challenge } = await approvalCeremony(values); const app = buildApp({ webauthn: values.service } as unknown as ApiServices);
-    const tampered = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approval-verify`, payload: { challengeId: issued.challengeId, credential: assertion(challenge.challenge), userId: "attacker", financialPlanHash: "caller", expiresAt: "2099-01-01T00:00:00Z" } });
+    const values = setup(); const { issued, challenge } = await approvalCeremony(values); const app = buildApp({ webauthn: values.service, repository: values.repository } as unknown as ApiServices, routeAuthorization);
+    const tampered = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approval-verify`, headers: routeHeaders, payload: { challengeId: issued.challengeId, credential: assertion(challenge.challenge), userId: "attacker", financialPlanHash: "caller", expiresAt: "2099-01-01T00:00:00Z" } });
     expect(tampered.statusCode).toBe(400); expect(values.repository.approvals).toBe(0);
-    const bypass = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approve`, payload: { userId: "demo-user", method: "PASSKEY", signatureReference: "caller" } });
+    const bypass = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approve`, headers: routeHeaders, payload: { userId: "demo-user", method: "PASSKEY", signatureReference: "caller" } });
     expect(bypass.statusCode).toBe(404); expect(values.repository.approvals).toBe(0); await app.close();
   });
 });

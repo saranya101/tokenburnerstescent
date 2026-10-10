@@ -69,7 +69,23 @@ function presentStep(step: FinancialPlanStepV1, map: Map<string, string>): Prese
   if (step.action === "FX_CONVERT") return { id: step.id, kind: "Currency conversion", title: `Convert ${formatMoney(step.parameters.sourceMoney)} to ${step.parameters.targetCurrency}`, summary: `${named(map, step.parameters.sourceAccountId)} to ${named(map, step.parameters.destinationAccountId)}`, meta: [{ label: "From", value: named(map, step.parameters.sourceAccountId) }, { label: "To", value: named(map, step.parameters.destinationAccountId) }], ...(dependency ? { dependsOn: dependency } : {}) };
   if (step.action === "MOVE_FUNDS") return { id: step.id, kind: "Move", title: formatMoney(step.parameters.amount), summary: `${named(map, step.parameters.sourceAccountId)} → ${named(map, step.parameters.destinationAccountId)}`, meta: [{ label: "Source", value: named(map, step.parameters.sourceAccountId) }, { label: "Destination", value: named(map, step.parameters.destinationAccountId) }], ...(dependency ? { dependsOn: dependency } : {}) };
   if (step.action === "PAY_BILL") return { id: step.id, kind: "Payment", title: formatMoney(step.parameters.amount), summary: `${named(map, step.parameters.sourceAccountId)} → ${named(map, step.parameters.obligationId, "OBLIGATION")}`, meta: [{ label: "Obligation", value: named(map, step.parameters.obligationId, "OBLIGATION") }], ...(dependency ? { dependsOn: dependency } : {}) };
-  if (step.action === "BUY_ASSET") return { id: step.id, kind: "Buy", title: `${step.parameters.quantity} ${named(map, step.parameters.assetId, "ASSET")}`, summary: `${named(map, step.parameters.sourceAccountId)} → Investment holding`, meta: [{ label: "Maximum spend", value: formatMoney(step.parameters.maximumSpend) }, { label: "Quantity", value: step.parameters.quantity }], ...(dependency ? { dependsOn: dependency } : {}) };
+  if (step.action === "BUY_ASSET") {
+    const settlementCurrency = step.parameters.settlementCurrency;
+    return {
+      id: step.id,
+      kind: "Buy",
+      title: `${step.parameters.quantity} ${named(map, step.parameters.assetId, "ASSET")}`,
+      summary: `${named(map, step.parameters.sourceAccountId)} → Investment holding`,
+      meta: [
+        { label: "From", value: named(map, step.parameters.sourceAccountId) },
+        { label: "Quantity", value: step.parameters.quantity },
+        { label: "Unit price", value: formatMoney({ currency: settlementCurrency, minorUnits: step.parameters.quotedUnitPriceMinor }) },
+        { label: "Fee", value: formatMoney({ currency: settlementCurrency, minorUnits: step.parameters.quotedFeeMinor }) },
+        { label: "Total", value: formatMoney({ currency: settlementCurrency, minorUnits: step.parameters.authorizedTotalMinor }) },
+      ],
+      ...(dependency ? { dependsOn: dependency } : {}),
+    };
+  }
   return { id: step.id, kind: "Sell", title: `${step.parameters.quantity} ${named(map, step.parameters.assetId, "ASSET")}`, summary: `Investment holding → ${named(map, step.parameters.destinationAccountId)}`, meta: [{ label: "Quantity", value: step.parameters.quantity }], ...(dependency ? { dependsOn: dependency } : {}) };
 }
 

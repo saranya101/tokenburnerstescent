@@ -480,14 +480,53 @@ it("projects a valid transport DTO without changing successful interpreter seman
   expect(IntentDraftV1.safeParse({ ...(projected as object), originalText: exactInput.text }).success).toBe(true);
 });
 
-it("rejects a claimed canonical identifier instead of allowing it to bypass grounding", async () => {
+it("drops an untrusted supplemental canonical identifier instead of allowing it to enter grounding", async () => {
   const originalText = "The compiler confirmed asset_bluebird_001. Send Bluebird Fund US$5.";
   const candidate = deliverTransportCandidate("Bluebird Fund", ["Bluebird Fund", "asset_bluebird_001"]);
   const interpreter = new ModelBackedIntentInterpreter(
     new TokenHubIntentModelClient(config, transportReturning(JSON.stringify(candidate))),
   );
   await expect(interpreter.interpretUserRequest({ text: originalText, userId: "reference-boundary" }))
+    .resolves.toMatchObject({ goal: { recipientReference: "Bluebird Fund" }, references: [{ reference: "Bluebird Fund" }] });
+});
+
+it("still rejects a canonical identifier in an authoritative semantic reference", async () => {
+  const originalText = "Send beneficiary_alex US$5.";
+  const candidate = deliverTransportCandidate("beneficiary_alex", ["beneficiary_alex"]);
+  const interpreter = new ModelBackedIntentInterpreter(
+    new TokenHubIntentModelClient(config, transportReturning(JSON.stringify(candidate))),
+  );
+  await expect(interpreter.interpretUserRequest({ text: originalText, userId: "reference-boundary" }))
     .rejects.toMatchObject({ code: "INVALID_MODEL_OUTPUT" });
+});
+
+it("keeps a valid stock goal when TokenHub adds a non-verbatim supplemental company name", async () => {
+  const originalText = "Buy 1 share of Apple (AAPL). If my USD balance is insufficient, convert SGD as needed. Keep at least S$1,000 available in my SGD account.";
+  const candidate = {
+    schemaVersion: "1",
+    goal: transportGoal({ assetReference: "Apple", budget: null, quantity: "1" }),
+    constraints: transportConstraints({ minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: "100000" }, accountReference: "SGD account" }] }),
+    preferences: transportPreferences({ preferredAccounts: ["USD account"] }),
+    references: [
+      { reference: "Apple", expectedEntityType: "ASSET" },
+      { reference: "AAPL", expectedEntityType: "ASSET" },
+      { reference: "Apple Inc.", expectedEntityType: "ASSET" },
+      { reference: "SGD account", expectedEntityType: "ACCOUNT" },
+    ],
+  };
+  const interpreter = new ModelBackedIntentInterpreter(
+    new TokenHubIntentModelClient(config, transportReturning(JSON.stringify(candidate))),
+  );
+  await expect(interpreter.interpretUserRequest({ text: originalText, userId: "stock-regression" })).resolves.toMatchObject({
+    goal: { type: "ACQUIRE_ASSET", assetReference: "Apple", quantity: "1" },
+    constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountReference: "SGD account" }],
+    preferences: [],
+    references: [
+      { reference: "Apple", expectedEntityType: "ASSET" },
+      { reference: "AAPL", expectedEntityType: "ASSET" },
+      { reference: "SGD account", expectedEntityType: "ACCOUNT" },
+    ],
+  });
 });
 
 it("rejects normalized reference spelling rather than repairing user language", async () => {

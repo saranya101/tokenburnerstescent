@@ -4,6 +4,9 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "dev": "node --env-file=.env ./node_modules/turbo/bin/turbo dev --env-mode=loose",
+    "dev:safe": "node --env-file=.env scripts/dev-safe.mjs",
+    "dev:restart": "node --env-file=.env scripts/dev-safe.mjs --restart",
+    "test:dev-safe": "node --test scripts/dev-safe.test.mjs",
     "db:setup": "node --env-file=.env packages/db/node_modules/prisma/build/index.js migrate deploy --schema packages/db/prisma/schema.prisma && pnpm db:seed",
     "db:seed": "node --env-file=.env packages/db/prisma/seed.mjs",
     "build": "turbo build",

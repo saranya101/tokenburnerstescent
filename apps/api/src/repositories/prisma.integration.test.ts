@@ -17,10 +17,10 @@ const fixture = (name: string): unknown => JSON.parse(readFileSync(join(process.
 const ids = { user: "it-user-ntu", goalRow: "it-goal-row-ntu", goal: "it-goal-ntu", trace: "it-trace-ntu" };
 
 async function mockBank(): Promise<BankPort> {
-  const modulePath = join(process.cwd(), "../../services/mock-bank/src/app.ts"); const { buildApp } = await import(modulePath) as { buildApp(): FastifyInstance }; const app = buildApp();
-  return { async getState(userId, traceId) { const response = await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: { "x-trace-id": traceId } }); const state = BankStateSnapshotV1.parse(response.json()); return BankStateSnapshotV1.parse({ ...state, fxQuotes: state.fxQuotes.map((quote, index) => index === 0 ? { ...quote, id: "quote-sgd-usd-1" } : quote) }); },
-    async execute(path, payload, key, traceId) { const response = await app.inject({ method: "POST", url: `/v1/execute/${path}`, headers: { "idempotency-key": key, "x-trace-id": traceId, "content-type": "application/json" }, body: JSON.stringify(payload) }); if (response.statusCode >= 400) throw new Error(response.json().code); return response.json(); },
-    async lookupByIdempotencyKey(key, traceId) { const response = await app.inject({ method: "GET", url: `/v1/executions/idempotency/${key}`, headers: { "x-trace-id": traceId } }); return response.json(); } };
+  const modulePath = join(process.cwd(), "../../services/mock-bank/src/app.ts"); const { buildApp } = await import(modulePath) as { buildApp(options: { bankApiToken: string }): FastifyInstance }; const app = buildApp({ bankApiToken: "integration-bank-token" });
+  return { async getState(userId, traceId) { const response = await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: { "x-trace-id": traceId, "x-parlance-bank-token": "integration-bank-token" } }); const state = BankStateSnapshotV1.parse(response.json()); return BankStateSnapshotV1.parse({ ...state, fxQuotes: state.fxQuotes.map((quote, index) => index === 0 ? { ...quote, id: "quote-sgd-usd-1" } : quote) }); },
+    async execute(path, payload, key, traceId) { const response = await app.inject({ method: "POST", url: `/v1/execute/${path}`, headers: { "idempotency-key": key, "x-trace-id": traceId, "x-parlance-bank-token": "integration-bank-token", "content-type": "application/json" }, body: JSON.stringify(payload) }); if (response.statusCode >= 400) throw new Error(response.json().code); return response.json(); },
+    async lookupByIdempotencyKey(key, traceId) { const response = await app.inject({ method: "GET", url: `/v1/executions/idempotency/${key}`, headers: { "x-trace-id": traceId, "x-parlance-bank-token": "integration-bank-token" } }); return response.json(); } };
 }
 
 async function cleanup(db: PrismaClient): Promise<void> {
@@ -41,7 +41,7 @@ describe.skipIf(!testDatabaseUrl)("Prisma PostgreSQL restart safety", () => {
   afterAll(async () => { if (db) { await cleanup(db); await db.$disconnect(); } });
 
   it("atomically confirms one candidate transition and reloads the same semantic hash", async () => {
-    const draft: IntentDraftV1 = { schemaVersion: "1", originalText: "send $500 to NTU", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "NTU" }, constraints: [], preferences: [], references: [] };
+    const draft: IntentDraftV1 = { schemaVersion: "1", originalText: "send USD 500 to NTU", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "NTU" }, constraints: [], preferences: [], references: [] };
     const generated = ["it-candidate-ntu", "it-confirmed-goal"];
     const repository = new PrismaParlanceRepository(db);
     const messages = new MessageOrchestrationService(repository, { interpretUserRequest: async () => draft }, () => ({ ground: async (input: EntityGroundingInput) => ({ status: "RESOLVED", reference: input.reference, entityType: "BENEFICIARY", entityId: "it-db-ben-ntu", resolutionMethod: "EXACT" }) }), undefined, undefined, () => new Date("2026-09-25T10:00:00Z"), () => generated.shift()!);
@@ -53,7 +53,7 @@ describe.skipIf(!testDatabaseUrl)("Prisma PostgreSQL restart safety", () => {
   });
 
   it("persists and idempotently continues clarification without creating financial authority", async () => {
-    const draft: IntentDraftV1 = { schemaVersion: "1", originalText: "Send John $500", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "John" }, constraints: [], preferences: [], references: [] };
+    const draft: IntentDraftV1 = { schemaVersion: "1", originalText: "Send John USD 500", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "John" }, constraints: [], preferences: [], references: [] };
     const generated = ["it-clarification-john", "it-goal-john"]; const repository = new PrismaParlanceRepository(db);
     const messages = new MessageOrchestrationService(repository, { interpretUserRequest: async () => draft }, () => ({ ground: async (input: EntityGroundingInput) => ({ status: "AMBIGUOUS", reference: input.reference, expectedEntityType: "BENEFICIARY", candidates: [{ entityType: "BENEFICIARY", entityId: "ben-john-1", canonicalName: "John Tan" }, { entityType: "BENEFICIARY", entityId: "ben-john-2", canonicalName: "John Lim" }] }) }), undefined, undefined, () => new Date("2026-09-25T10:00:00Z"), () => generated.shift()!);
     const pending = await messages.receive({ userId: ids.user, text: draft.originalText }, ids.trace); expect(pending).toMatchObject({ status: "NEEDS_CLARIFICATION", clarificationId: "it-clarification-john" });

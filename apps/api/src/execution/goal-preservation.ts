@@ -63,9 +63,11 @@ function sourceAccountId(step: FinancialPlanStepV1): string | undefined {
 export function stepPreservesConstraints(goal: GoalContractV1, step: FinancialPlanStepV1, snapshot: BankStateSnapshotV1): boolean {
   return goal.constraints.every((constraint) => {
     if (constraint.type === "EXCLUDED_ACCOUNT") return sourceAccountId(step) !== constraint.accountId;
-    // Contract V1.1 does not define which flows constitute total cost or cross-currency normalization.
-    // Runtime enforcement therefore remains at the deterministic compiler/policy boundary.
-    if (constraint.type === "MAX_TOTAL_COST") return false;
+    // BUY_ASSET commits to its exact settlement-currency price plus fee. Other
+    // flows still lack a V1.1 runtime definition for total cost normalization.
+    if (constraint.type === "MAX_TOTAL_COST") return step.action === "BUY_ASSET"
+      && step.parameters.settlementCurrency === constraint.money.currency
+      && BigInt(step.parameters.authorizedTotalMinor) <= BigInt(constraint.money.minorUnits);
     if (constraint.type === "MIN_AVAILABLE_BALANCE") { const accounts = constraint.accountId ? snapshot.accounts.filter((item) => item.id === constraint.accountId) : snapshot.accounts.filter((item) => item.currency === constraint.money.currency && item.status === "ACTIVE"); return accounts.reduce((sum, account) => sum + BigInt(account.availableMinorUnits), 0n) >= BigInt(constraint.money.minorUnits); }
     return false;
   });

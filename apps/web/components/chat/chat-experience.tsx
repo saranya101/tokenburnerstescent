@@ -16,7 +16,11 @@ import { FinancialPlanPreview } from "../plan/financial-plan-preview";
 import { RiskOutcomeCard } from "../risk/risk-outcome-card";
 import { PasskeySetupCard } from "../security/passkey-setup-card";
 import { Icon } from "../ui/icon";
+import { ChatBankingSidebar } from "./chat-banking-sidebar";
 import { ConversationComposer } from "./conversation-composer";
+import { SingaporeSkyline } from "./singapore-skyline";
+
+export const chatWelcomeGreeting = "Welcome back.";
 
 function requestText(state: CustomerFlowState): string | undefined { return "requestText" in state ? state.requestText : undefined; }
 function statusFor(stepId: string, state: CustomerFlowState): TimelineItem["status"] {
@@ -42,10 +46,12 @@ export function ChatExperience() {
   const unresolved = state.phase === "RECOVERY_PENDING" || state.phase === "EXECUTING" || state.phase === "PAUSED" || state.phase === "AUTHORIZED";
   const planPresentation = "plan" in state ? ("bundle" in state ? presentBundlePlan(state.bundle, state.plan) : "goal" in state ? presentPlan(state.goal, state.plan) : undefined) : undefined;
   return <div className={`parlance-workspace ${isInitial ? "is-initial" : "is-active"}`}>
-    <header className="workspace-header"><div className="workspace-title"><div><p>{isInitial ? "Good evening, Alex." : "Pay & Transfer"}</p><h1>{isInitial ? "What would you like to do?" : "Your payment request"}</h1></div></div></header>
+    <div className="chat-workspace-grid">
+      <section className="chat-primary" aria-label="Pay and transfer conversation">
+    <header className="workspace-header"><div className="workspace-title"><div><p>{isInitial ? chatWelcomeGreeting : "Pay & Transfer"}</p><h1>{isInitial ? "What would you like to do today?" : "Your payment request"}</h1>{isInitial && <span>Tell me what you&apos;d like to achieve. You&apos;ll review the exact plan before anything moves.</span>}</div></div></header>
     <div className="workspace-body">
       {state.phase === "RESTORING_EXECUTION" && <WorkingState title="Checking your latest transaction status…" detail="Please wait while we check whether a recent transaction still needs your attention." />}
-      {isInitial && <ConversationComposer onSubmit={(text, input) => void flow.submitMessage(text, input)} />}
+      {isInitial && <><section className="parlance-introduction"><span><Icon name="spark" /></span><div><strong>Parlance</strong><p>Describe what you need in your own words. I’ll confirm the meaning first, then show the exact banking plan for your review.</p></div></section><ConversationComposer onSubmit={(text, input) => void flow.submitMessage(text, input)} /></>}
       {message && <div className="conversation-stream">
         <div className="request-context"><span className="request-context-icon"><Icon name="transfer" /></span><div><small>Your request</small><strong>“{message}”</strong></div>{!unresolved && state.phase !== "PARTIALLY_COMPLETED" && <button type="button" onClick={flow.reset}>Start over <Icon name="arrow" /></button>}</div>
         {state.phase === "INTERPRETING" && <WorkingState title="Understanding your request…" detail="Checking names and details against your available banking relationships." />}
@@ -78,6 +84,10 @@ export function ChatExperience() {
         {state.phase === "ERROR" && <OutcomeCard title="We couldn’t continue this request" detail="No money was moved. Please try again." onDone={flow.reset} />}
       </div>}
     </div>
+      </section>
+      <ChatBankingSidebar />
+    </div>
+    {isInitial && <div className="chat-skyline-scene"><SingaporeSkyline /></div>}
   </div>;
 }
 

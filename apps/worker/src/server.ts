@@ -6,11 +6,13 @@ import { classifyRecoveryResult, PrismaRecoveryWorkStore, processNextRecovery } 
 const app = Fastify({ loggerInstance: logger });
 app.addHook("onRequest", async (request, reply) => { const traceId = resolveTraceId(request.headers["x-trace-id"]); reply.header("x-trace-id", traceId); });
 app.get("/health", async () => ({ status: "ok", service: "worker" }));
-app.get("/ready", async (_request, reply) => process.env.REDIS_URL ? { status: "ready" } : reply.code(503).send({ status: "not_ready", missing: ["REDIS_URL"] }));
+app.get("/ready", async (_request, reply) => process.env.REDIS_URL && process.env.PARLANCE_OPS_API_TOKEN?.trim() ? { status: "ready" } : reply.code(503).send({ status: "not_ready" }));
 const apiUrl = process.env.API_URL ?? "http://127.0.0.1:4001"; const db = getPrismaClient(); const recoveryStore = new PrismaRecoveryWorkStore(db, randomUUID); let recoveryRunning = false;
 const recoveryTimer = setInterval(() => { if (recoveryRunning) return; recoveryRunning = true; void processNextRecovery(recoveryStore, {
   async recover(executionId, traceId) {
-    const response = await fetch(`${apiUrl}/v1/executions/${encodeURIComponent(executionId)}/run`, { method: "POST", headers: { "x-trace-id": traceId } });
+    const opsToken = process.env.PARLANCE_OPS_API_TOKEN?.trim();
+    if (!opsToken) throw new Error("RECOVERY_API_AUTH_NOT_CONFIGURED");
+    const response = await fetch(`${apiUrl}/v1/ops/executions/${encodeURIComponent(executionId)}/run`, { method: "POST", headers: { "x-trace-id": traceId, "x-parlance-ops-token": opsToken } });
     if (!response.ok) throw new Error(`RECOVERY_API_${response.status}`);
     return classifyRecoveryResult(await response.json());
   },

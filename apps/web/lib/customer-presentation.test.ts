@@ -29,6 +29,24 @@ it("uses customer account and recipient names instead of raw financial identifie
   expect(rendered).not.toMatch(/acc-sgd|acc-usd|ben-ntu|quote-private|FX_CONVERT|TRANSFER/u);
 });
 
+it("presents the authoritative stock price, fee, total, and funding account", () => {
+  const goal = GoalContractV1.parse({ schemaVersion: "1", id: "goal-stock", userId: "user", version: 1, status: "CONFIRMED", contractHash: "goal-hash-stock-1", createdAt: "2026-09-28T00:00:00.000Z", confirmedAt: "2026-09-28T00:01:00.000Z", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [], entityBindings: [{ schemaVersion: "1", reference: "Apple", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "EXACT", confirmed: true }] });
+  const plan = FinancialPlanV1.parse({ schemaVersion: "1", id: "plan-stock", goalContractId: "goal-stock", goalContractVersion: 1, bankStateVersion: 10, compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test", planHash: "plan-hash-stock-1", steps: [{ id: "buy", sequence: 0, dependsOn: [], reversible: false, action: "BUY_ASSET", parameters: { sourceAccountId: "acc-brokerage", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "20100" }, quoteId: "quote-private", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } }], validity: { requiredQuoteIds: ["quote-private"], validUntil: "2099-01-01T00:00:00.000Z" }, projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] } });
+  const presentation = presentPlan(goal, plan);
+  expect(presentation.steps[0]).toMatchObject({
+    title: "1 Apple",
+    summary: "Investment Account → Investment holding",
+    meta: [
+      { label: "From", value: "Investment Account" },
+      { label: "Quantity", value: "1" },
+      { label: "Unit price", value: "USD 200.00" },
+      { label: "Fee", value: "USD 1.00" },
+      { label: "Total", value: "USD 201.00" },
+    ],
+  });
+  expect(JSON.stringify(presentation)).not.toContain("quote-private");
+});
+
 it("shows ordering only for an explicit bundle dependency and presents global constraints", () => {
   const base = {
     schemaVersion: "1" as const, bundleId: "bundle-1", bundleVersion: 1, contractHash: "a".repeat(64),

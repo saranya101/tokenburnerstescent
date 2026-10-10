@@ -84,6 +84,38 @@ function compilationRepository(goal: GoalContractV1): ParlanceRepository {
 }
 
 describe("Person B to Person A confirmation boundary", () => {
+  it.each([
+    {
+      text: "Buy 1 share of Apple (AAPL).",
+      constraints: [] as IntentDraftV1["constraints"],
+    },
+    {
+      text: "Buy 1 share of Apple (AAPL). If my USD balance is insufficient, convert SGD as needed. Keep at least S$1,000 available in my SGD account.",
+      constraints: [{ type: "MIN_AVAILABLE_BALANCE" as const, money: { currency: "SGD", minorUnits: "100000" }, accountReference: "SGD account" }],
+    },
+  ])("grounds the stock request and stops at explicit goal confirmation: $text", async ({ text, constraints }) => {
+    const draft: IntentDraftV1 = {
+      schemaVersion: "1", originalText: text,
+      goal: { type: "ACQUIRE_ASSET", assetReference: "Apple", quantity: "1" },
+      constraints, preferences: [], references: [],
+    };
+    const repository = new CandidateRepository();
+    const grounder = new FixedGrounder((input) => input.expectedEntityType === "ASSET"
+      ? { status: "RESOLVED", reference: input.reference, entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS" }
+      : { status: "RESOLVED", reference: input.reference, entityType: "ACCOUNT", entityId: "acc-sgd", resolutionMethod: "ALIAS" });
+    const messages = new MessageOrchestrationService(repository, new FixedInterpreter(draft), () => grounder);
+    const result = await messages.receive({ userId: "user-1", text }, "trace-stock-request");
+    expect(result).toMatchObject({
+      status: "AWAITING_GOAL_CONFIRMATION",
+      goalCandidate: {
+        goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" },
+        constraints: constraints.length === 0 ? [] : [{ type: "MIN_AVAILABLE_BALANCE", accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "100000" } }],
+      },
+    });
+    expect(repository.validationAudits).toEqual([expect.objectContaining({ decision: "PASS", mismatches: [] })]);
+    expect(repository.goal).toBeUndefined();
+  });
+
   it("grounds, waits for explicit confirmation, persists a semantic hash, and sends only GoalContractV1 to Person C", async () => {
     ids.splice(0, ids.length, "candidate-1", "goal-1");
     const repository = new CandidateRepository(); const messages = service(repository);

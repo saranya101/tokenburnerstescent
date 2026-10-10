@@ -6,7 +6,10 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { PlanPresentation } from "../lib/customer-presentation";
 import { customerDesktopNavigation, customerMobileNavigation } from "./banking/banking-nav";
+import { BankingShell } from "./banking/banking-shell";
+import { chatWelcomeGreeting } from "./chat/chat-experience";
 import { ConversationComposer } from "./chat/conversation-composer";
+import { SingaporeSkyline } from "./chat/singapore-skyline";
 import { ReapprovalCard } from "./execution/reapproval-card";
 import { RecoveryStatusCard } from "./execution/recovery-status-card";
 import { SafeStopCard } from "./execution/safe-stop-card";
@@ -32,13 +35,28 @@ it("presents the conversational route as Pay & Transfer in desktop and mobile ba
 
 it("renders a banking task entry instead of an AI prompt gallery", () => {
   const html = renderToStaticMarkup(createElement(ConversationComposer, { onSubmit: vi.fn() }));
-  expect(html).toContain("Tell us what you’d like to do");
-  expect(html).toContain("Send money");
-  expect(html).toContain("Pay a bill");
+  expect(html).toContain("Describe a payment, transfer or investment");
+  expect(html).not.toMatch(/Try asking about|Send money|Pay a bill|Buy an investment/iu);
   expect(html).not.toMatch(/Ask Parlance|AI helps|prompt/iu);
   expect(html).toContain("Use microphone for voice input");
   expect(html).toContain('aria-live="polite"');
   expect(html).toContain("Voice input");
+});
+
+it("renders the supplied Singapore skyline image without the previous inline SVG", () => {
+  const html = renderToStaticMarkup(createElement(SingaporeSkyline));
+  expect(html).toContain("/images/singapore-skyline.png");
+  expect(html).toContain('width="2172"');
+  expect(html).toContain('height="724"');
+  expect(html).not.toContain("<svg");
+});
+
+it("does not present a placeholder name or guessed time of day on the chat welcome state", () => {
+  const shell = renderToStaticMarkup(createElement(BankingShell, { active: "parlance", children: createElement("div") }));
+  expect(chatWelcomeGreeting).toBe("Welcome back.");
+  expect(chatWelcomeGreeting).not.toMatch(/morning|afternoon|evening|Alex/iu);
+  expect(shell).not.toMatch(/Alex Tan|>AT</u);
+  expect(shell).toContain('aria-label="Customer profile"');
 });
 
 it.each([

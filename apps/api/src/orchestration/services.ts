@@ -580,8 +580,13 @@ export class ExecutionService {
     const goal = plan && plan.ownerType !== "BUNDLE" ? await this.repository.getConfirmedGoal(plan.plan.goalContractId) : null;
     const bundleRepository = this.repository as ParlanceRepository & Partial<BundlePlanRepository>;
     const goalBundle = plan?.ownerType === "BUNDLE" && bundleRepository.getConfirmedGoalBundle ? await bundleRepository.getConfirmedGoalBundle(plan.plan.goalContractId) : null;
+    return { state: execution.executionState, result: execution.result, goal: goal?.contract, goalBundle: goalBundle?.contract, plan: plan?.plan };
+  }
+  async opsDetail(id: string) {
+    const detail = await this.detail(id); if (!detail) return null;
+    const execution = await this.repository.getExecution(id); if (!execution) return null;
     const audit = (await this.repository.listAudit()).filter((item) => typeof item === "object" && item !== null && (("aggregateId" in item && item.aggregateId === id) || ("traceId" in item && item.traceId === execution.traceId)));
-    return { state: execution.executionState, traceId: execution.traceId, result: execution.result, goal: goal?.contract, goalBundle: goalBundle?.contract, plan: plan?.plan, audit };
+    return { ...detail, traceId: execution.traceId, audit };
   }
   list() { return this.repository.listExecutions(); }
   listRecoverable() { return this.repository.listRecoverableExecutions(); }
