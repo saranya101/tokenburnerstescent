@@ -4,7 +4,7 @@ import { Icon } from "../ui/icon";
 import { customerDesktopNavigation, customerMobileNavigation, type BankingSection } from "./banking-nav";
 
 export function BankingShell({ active, children }: { active: BankingSection; children: ReactNode }) {
-  return <div className={`banking-shell ${active === "parlance" ? "is-parlance-shell" : ""}`}>
+  return <div className={`banking-shell ${active === "parlance" ? "is-parlance-shell" : ""} ${active === "invest" ? "is-invest-shell" : ""}`}>
     <header className="banking-header">
       <Link className="bank-brand" href="/" aria-label="DBS digibank home"><span className="bank-wordmark"><b>DBS</b><span>digibank</span></span>{active === "parlance" && <span className="concept-label">Parlance</span>}</Link>
       <div className="header-actions">

@@ -1,4 +1,5 @@
 import { IntentInterpreterError } from "../../interpreter/errors.js";
+import { IntentDraftV1 } from "@parlance/contracts";
 import { TokenHubConfigurationError } from "./config.js";
 import { createTokenHubIntentInterpreter } from "./index.js";
 import { assertTokenHubSemanticSmokeDraft, TOKENHUB_SMOKE_INPUT, TokenHubSemanticSmokeError } from "./smoke-fixture.js";
@@ -14,7 +15,7 @@ async function main(): Promise<void> {
   const draft = await interpreter.interpretUserRequest({ text: TOKENHUB_SMOKE_INPUT, userId: "tokenhub-smoke" });
   console.log("Validated IntentDraftV1:");
   console.log(JSON.stringify(draft, null, 2));
-  assertTokenHubSemanticSmokeDraft(draft);
+  assertTokenHubSemanticSmokeDraft(IntentDraftV1.parse(draft));
   console.log("TokenHub semantic smoke test passed.");
 }
 

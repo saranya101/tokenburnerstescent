@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type PrismaClient } from "@parlance/db";
-import { ApprovalV1, BundleSatisfactionProofV1, ExecutionResultV1, FinancialPlanV1, GoalBundleContractV1, GoalBundleItemV1, GoalContractV1, IntentBundleDraftV1, IntentDraftV1, type CompilerResultV1 } from "@parlance/contracts";
+import { ApprovalV1, BundleSatisfactionProofV1, ExecutionResultV1, FinancialPlanV1, GoalBundleContractV1, GoalBundleItemV1, GoalContractV1, IntentBundleDraftV1, IntentDraftV1, InterpretedIntentDraftV1, type CompilerResultV1 } from "@parlance/contracts";
 import { GoalContractCandidateV1 } from "@parlance/intent-engine";
 import type { BundleClarificationProgress, BundleConfirmationRepository, BundlePlanRepository, GoalBundleCandidate, ClarificationProgress, GoalConfirmationRepository, ParlanceRepository, StoredApproval, StoredBundleCandidate, StoredBundleClarification, StoredClarificationRequest, StoredExecution, StoredGoal, StoredGoalBundle, StoredGoalCandidate, StoredPlan } from "../orchestration/ports.js";
 import type { ApprovalPayload, NewWebAuthnChallenge, NewWebAuthnCredential, StoredApprovalEvidence, StoredWebAuthnChallenge, StoredWebAuthnCredential, VerifiedPasskeyAuthorizationInput, WebAuthnRepository } from "../webauthn/types.js";
@@ -79,7 +79,7 @@ function mapClarification(row: IntentDraftRow): StoredClarificationRequest {
   if (payload.kind !== "CLARIFICATION_PENDING_V1" || typeof payload.goalContractId !== "string" || typeof payload.version !== "number" || typeof payload.originalText !== "string" || !Array.isArray(payload.groundingResults) || !Array.isArray(payload.clarifications)) throw new Error("CLARIFICATION_INVALID");
   return {
     clarificationId: row.id, goalContractId: payload.goalContractId, userId: row.userId, version: payload.version,
-    createdAt: row.createdAt.toISOString(), originalText: payload.originalText, intentDraft: IntentDraftV1.parse(payload.intentDraft),
+    createdAt: row.createdAt.toISOString(), originalText: payload.originalText, intentDraft: InterpretedIntentDraftV1.parse(payload.intentDraft),
     groundingResults: payload.groundingResults as StoredClarificationRequest["groundingResults"],
     clarifications: payload.clarifications as StoredClarificationRequest["clarifications"],
     inputProvenance: storedProvenance(payload.inputProvenance, payload.originalText),
@@ -182,7 +182,7 @@ export class PrismaParlanceRepository implements ParlanceRepository, BundlePlanR
     return row ? mapGoalBundle(row) : null;
   }
   async saveClarification(input: Parameters<GoalConfirmationRepository["saveClarification"]>[0]): Promise<StoredClarificationRequest> {
-    const intentDraft = IntentDraftV1.parse(input.intentDraft); const createdAt = new Date(input.createdAt);
+    const intentDraft = InterpretedIntentDraftV1.parse(input.intentDraft); const createdAt = new Date(input.createdAt);
     const row = await this.db.$transaction(async (tx) => {
       const conversation = await tx.conversation.create({ data: { userId: input.userId, createdAt, messages: { create: { role: "USER", content: input.originalText, traceId: input.traceId, createdAt, ...messageProvenance(input.inputProvenance) } } } });
       return tx.intentDraftRecord.create({ data: {
@@ -207,8 +207,8 @@ export class PrismaParlanceRepository implements ParlanceRepository, BundlePlanR
       }
       const pending = mapClarification(current);
       const payload = input.candidate === undefined
-        ? { kind: "CLARIFICATION_PENDING_V1", goalContractId: pending.goalContractId, version: pending.version, originalText: pending.originalText, inputProvenance: pending.inputProvenance, clarificationAnswers: [...(pending.clarificationAnswers ?? []), input.answerText], intentDraft: pending.intentDraft, groundingResults: input.groundingResults, clarifications: input.clarifications }
-        : { kind: "GOAL_CANDIDATE_V1", goalContractId: pending.goalContractId, version: pending.version, originalText: pending.originalText, inputProvenance: pending.inputProvenance, clarificationAnswers: [...(pending.clarificationAnswers ?? []), input.answerText], intentDraft: pending.intentDraft, candidate: GoalContractCandidateV1.parse(input.candidate) };
+        ? { kind: "CLARIFICATION_PENDING_V1", goalContractId: pending.goalContractId, version: pending.version, originalText: pending.originalText, inputProvenance: pending.inputProvenance, clarificationAnswers: [...(pending.clarificationAnswers ?? []), input.answerText], intentDraft: InterpretedIntentDraftV1.parse(input.intentDraft), groundingResults: input.groundingResults, clarifications: input.clarifications }
+        : { kind: "GOAL_CANDIDATE_V1", goalContractId: pending.goalContractId, version: pending.version, originalText: pending.originalText, inputProvenance: pending.inputProvenance, clarificationAnswers: [...(pending.clarificationAnswers ?? []), input.answerText], intentDraft: IntentDraftV1.parse(input.intentDraft), candidate: GoalContractCandidateV1.parse(input.candidate) };
       const status = input.candidate === undefined ? "NEEDS_CLARIFICATION" : "AWAITING_GOAL_CONFIRMATION";
       if (input.candidate !== undefined) {
         if (input.semanticValidation?.decision !== "PASS") throw new Error("SEMANTIC_VALIDATION_REQUIRED");

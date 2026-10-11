@@ -1,10 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { BankingShell } from "../../components/banking/banking-shell";
 import { InvestmentView } from "../../components/banking/investment-view";
+import { SingaporeSkyline } from "../../components/chat/singapore-skyline";
 import { useBankingState } from "../../hooks/use-banking-state";
 
 export default function InvestPage() {
   const banking = useBankingState();
-  return <BankingShell active="invest"><div className="banking-page"><header className="page-heading"><p>Invest</p><h1>Your investments</h1><span>Holdings and prices shown from the authoritative demo bank state.</span></header><InvestmentView {...banking} /></div></BankingShell>;
+  return <BankingShell active="invest"><div className="banking-page investment-page"><div className="investment-skyline" aria-hidden="true"><SingaporeSkyline /></div><header className="page-heading investment-page-heading"><div><p>Wealth</p><h1>Investments</h1><span>Your portfolio at a glance</span></div><Link className="button bank-primary" href="/chat">Buy / Invest</Link></header><InvestmentView {...banking} /></div></BankingShell>;
 }

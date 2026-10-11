@@ -33,6 +33,14 @@ it("sends a strict empty body when the customer explicitly confirms meaning", as
   expect(fetcher).toHaveBeenCalledWith("/api/parlance/goal-candidates/candidate-1/confirm", expect.objectContaining({ method: "POST", body: "{}" }));
 });
 
+it("submits only the selected funding account and optional reserve for a new review candidate", async () => {
+  const goalCandidate = { schemaVersion: "1", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }], preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }], entityBindings: [] };
+  const fetcher = vi.fn().mockResolvedValue(json({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-funded", goalCandidate }));
+  const api = createParlanceApi(fetcher as typeof fetch);
+  await expect(api.proposeInvestmentFunding("goal-apple", "acc-sgd", "100000")).resolves.toMatchObject({ candidateId: "candidate-funded", goalCandidate });
+  expect(fetcher).toHaveBeenCalledWith("/api/parlance/goals/goal-apple/funding-candidate", expect.objectContaining({ method: "POST", body: JSON.stringify({ sourceAccountId: "acc-sgd", minimumSgdReserveMinorUnits: "100000" }) }));
+});
+
 it("sends no client bundle payload or hash when confirming combined meaning", async () => {
   const contract = { schemaVersion: "1", bundleId: "bundle-1", bundleVersion: 1, items: [{ itemId: "item-1", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [], bindings: [] }], globalConstraints: [], explicitDependencies: [], contractHash: "b".repeat(64) };
   const fetcher = vi.fn().mockResolvedValue(json({ goalBundleContract: contract }));

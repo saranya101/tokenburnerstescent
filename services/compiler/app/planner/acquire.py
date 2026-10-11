@@ -1,6 +1,6 @@
 """Shared deterministic planning for a grounded asset acquisition."""
 
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 
 from app.constraints.evaluator import evaluate_constraints
 from app.models.contracts import (
@@ -12,7 +12,7 @@ from app.models.contracts import (
     GoalContractV1,
     HardRule,
 )
-from app.operations.models import BuyAsset, Money
+from app.operations.models import BuyAsset, FxConvert, InternalOperation, Money
 from app.policy.engine import PolicyEngine
 from app.simulator.apply import apply_operation
 from app.simulator.state import SimulatedState
@@ -180,3 +180,169 @@ def compile_acquire_operation(
     if first_violation is not None:
         return _unsat(first_violation.code, details, **first_violation.details)
     return _unsat("COMPOSITE_SIMULATION_FAILED", details)
+
+
+def _funds(account) -> int:
+    return min(int(account.available_minor_units), int(account.ledger_minor_units))
+
+
+def _converted(amount: int, rate: Decimal) -> int:
+    return int((Decimal(amount) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN))
+
+
+def _source_needed(target_minor_units: int, rate: Decimal) -> int:
+    low, high = 1, 1
+    while _converted(high, rate) < target_minor_units:
+        high *= 2
+    while low < high:
+        middle = (low + high) // 2
+        if _converted(middle, rate) >= target_minor_units:
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+def compile_acquire_route(
+    goal_contract: GoalContractV1,
+    snapshot: BankStateSnapshotV1,
+    policy: PolicyEngine,
+    hard_rules: tuple[HardRule, ...] = (),
+) -> tuple[InternalOperation, ...] | CompilerUnsatV1 | CompilerPolicyBlockedV1:
+    """Compile a direct purchase or an explicitly permitted FX-funded purchase.
+
+    A non-settlement PREFER_ACCOUNT is the confirmed, plan-bound customer choice
+    that permits using that account for funding. Without it, insufficient settled
+    funds remain a controlled failure and no FX route is synthesized.
+    """
+    context: dict[str, object] = {"bankStateVersion": snapshot.state_version}
+    direct = compile_acquire_operation(goal_contract, snapshot, policy, hard_rules, context=context)
+    if isinstance(direct, BuyAsset):
+        return (direct,)
+    if direct.reason.code != "INSUFFICIENT_FUNDS":
+        return direct
+    if "FX_CONVERT" not in policy.allowed_operations:
+        return direct
+    if not snapshot.service_availability.fx:
+        return _blocked("REQUIRED_SERVICE_UNAVAILABLE", context, service="fx")
+
+    goal = goal_contract.goal
+    assert isinstance(goal, AcquireAssetGroundedGoalV1)
+    asset = next(item for item in snapshot.assets if item.id == goal.asset_id)
+    required = int((direct.reason.details or {}).get("requiredMinorUnits", 0))
+    preferred_ids = {
+        preference.account_id
+        for preference in goal_contract.preferences
+        if preference.type == "PREFER_ACCOUNT"
+    }
+    sources = sorted(
+        (
+            account
+            for account in snapshot.accounts
+            if account.id in preferred_ids
+            and account.status == "ACTIVE"
+            and account.currency != asset.settlement_currency
+            and "CONVERT_FX" in account.capabilities
+        ),
+        key=lambda account: account.id,
+    )
+    if not sources:
+        return direct
+    destinations = sorted(
+        (
+            account
+            for account in snapshot.accounts
+            if account.status == "ACTIVE"
+            and account.currency == asset.settlement_currency
+            and "TRADE_ASSET" in account.capabilities
+            and "RECEIVE_TRANSFER" in account.capabilities
+        ),
+        key=lambda account: account.id,
+    )
+    saw_pair = False
+    saw_expired = False
+    saw_valid_quote = False
+    saw_insufficient_source = False
+    first_failure: CompilerUnsatV1 | CompilerPolicyBlockedV1 | None = None
+
+    for destination in destinations:
+        shortfall = required - _funds(destination)
+        if shortfall <= 0:
+            continue
+        for source in sources:
+            matching_quotes = sorted(
+                (
+                    quote
+                    for quote in snapshot.fx_quotes
+                    if quote.from_currency == source.currency
+                    and quote.to_currency == asset.settlement_currency
+                ),
+                key=lambda quote: quote.id,
+            )
+            for quote in matching_quotes:
+                saw_pair = True
+                if quote.expires_at <= snapshot.captured_at:
+                    saw_expired = True
+                    continue
+                try:
+                    rate = Decimal(quote.rate)
+                except InvalidOperation:
+                    continue
+                if not rate.is_finite() or rate <= 0:
+                    continue
+                if quote.fee is not None and quote.fee.currency != source.currency:
+                    continue
+                saw_valid_quote = True
+                source_amount = _source_needed(shortfall, rate)
+                fee = int(quote.fee.minor_units) if quote.fee is not None else 0
+                if _funds(source) < source_amount + fee:
+                    saw_insufficient_source = True
+                    continue
+                fx = FxConvert(
+                    source.id,
+                    destination.id,
+                    Money(source.currency, source_amount),
+                    asset.settlement_currency,
+                    quote.id,
+                )
+                after_fx = apply_operation(SimulatedState.from_snapshot(snapshot), fx)
+                if not after_fx.success:
+                    continue
+                purchase = compile_acquire_operation(
+                    goal_contract,
+                    after_fx.state.to_snapshot(),
+                    policy,
+                    hard_rules,
+                    context=context,
+                )
+                if not isinstance(purchase, BuyAsset):
+                    if first_failure is None:
+                        first_failure = purchase
+                    continue
+                after_purchase = apply_operation(after_fx.state, purchase)
+                if not after_purchase.success:
+                    continue
+                evaluation = evaluate_constraints(
+                    goal_contract,
+                    snapshot,
+                    after_purchase.state,
+                    (fx, purchase),
+                    hard_rules,
+                )
+                if evaluation.valid:
+                    return (fx, purchase)
+                if first_failure is None:
+                    violation = evaluation.violations[0]
+                    first_failure = _unsat(violation.code, context, **violation.details)
+
+    if first_failure is not None:
+        return first_failure
+    if saw_pair and not saw_valid_quote and saw_expired:
+        return _unsat("QUOTE_EXPIRED", context, currency=asset.settlement_currency)
+    if saw_insufficient_source:
+        return _unsat(
+            "INSUFFICIENT_FUNDING_FUNDS",
+            context,
+            fundingAccountIds=[source.id for source in sources],
+        )
+    return _unsat("NO_FX_ROUTE", context, currency=asset.settlement_currency)

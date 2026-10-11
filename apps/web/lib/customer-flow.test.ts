@@ -102,12 +102,52 @@ it("continues a backend clarification through its persisted identifier without r
   expect(values.flow.state).toMatchObject({ answers: [{ reference: "John", answer: "John Tan" }] });
 });
 
+it("continues sequential beneficiary and money clarification without confirming or compiling early", async () => {
+  const beneficiary = { reason: "AMBIGUOUS_ENTITY", field: "goal.recipientReference", originalReference: "John", questionKey: "clarify.entity.ambiguous", options: [{ entityId: "ben-john-lim", entityType: "BENEFICIARY" as const, displayName: "John Lim" }] };
+  const amount = { reason: "MISSING_FIELD", field: "goal.amount", originalReference: "transfer amount", questionKey: "clarify.transfer.amount", options: [] };
+  const answerClarification = vi.fn()
+    .mockResolvedValueOnce({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-1", clarifications: [amount] })
+    .mockResolvedValueOnce({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: candidate });
+  const values = setup({
+    sendMessage: vi.fn().mockResolvedValue({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-1", clarifications: [beneficiary, amount] }),
+    answerClarification,
+  });
+  await values.flow.submitMessage("Send money to John");
+  await values.flow.answerClarification(beneficiary, beneficiary.options[0]!);
+  expect(values.flow.state).toMatchObject({ phase: "CLARIFICATION", clarifications: [amount] });
+  expect(values.api.confirmGoal).not.toHaveBeenCalled(); expect(values.api.compileGoal).not.toHaveBeenCalled();
+  await values.flow.answerClarificationText(amount, "S$500");
+  expect(values.flow.state).toMatchObject({ phase: "GOAL_REVIEW", answers: [
+    { reference: "John", answer: "John Lim" }, { reference: "transfer amount", answer: "S$500" },
+  ] });
+  expect(answerClarification).toHaveBeenNthCalledWith(1, "clarification-1", { selectedCandidateId: "ben-john-lim" });
+  expect(answerClarification).toHaveBeenNthCalledWith(2, "clarification-1", { answerText: "S$500" });
+  expect(values.api.confirmGoal).not.toHaveBeenCalled(); expect(values.api.compileGoal).not.toHaveBeenCalled(); expect(values.api.approvalOptions).not.toHaveBeenCalled(); expect(values.api.runExecution).not.toHaveBeenCalled();
+});
+
 it("sends typed clarification text for server-side grounding and never supplies a binding", async () => {
   const clarification = { reason: "ENTITY_NOT_FOUND", field: "preferences[0].accountReference", originalReference: "my SGD account", questionKey: "clarify.entity.not_found", options: [] };
   const values = setup({ sendMessage: vi.fn().mockResolvedValue({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-account", clarifications: [clarification] }) });
   await values.flow.submitMessage("Send NTU USD 7000 using my SGD account"); await values.flow.answerClarificationText(clarification, "DBS Multiplier Account");
   expect(values.api.answerClarification).toHaveBeenCalledWith("clarification-account", { answerText: "DBS Multiplier Account" });
   expect(JSON.stringify(vi.mocked(values.api.answerClarification).mock.calls)).not.toMatch(/entityId|entityBinding|confirmed|goalContractHash|planHash/u);
+});
+
+it("shows an actionable rejection and does not record an answer when typed grounding returns the same clarification", async () => {
+  const clarification = { reason: "ENTITY_NOT_FOUND", field: "preferences[0].accountReference", originalReference: "SGD if necessary", questionKey: "clarify.entity.not_found", options: [] };
+  const answerClarification = vi.fn().mockResolvedValue({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-account", clarifications: [clarification] });
+  const values = setup({
+    sendMessage: vi.fn().mockResolvedValue({ status: "NEEDS_CLARIFICATION", clarificationId: "clarification-account", clarifications: [clarification] }),
+    answerClarification,
+  });
+  await values.flow.submitMessage("Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$17,000 available in my SGD account.");
+  const submission = values.flow.answerClarificationText(clarification, "My DBS Multiplier Account");
+  expect(values.flow.state).toMatchObject({ phase: "CLARIFICATION", submitting: true });
+  await submission;
+  expect(values.flow.state).toMatchObject({ phase: "CLARIFICATION", submitting: false, answers: [], error: expect.stringContaining("couldn’t match") });
+  expect(answerClarification).toHaveBeenCalledOnce();
+  expect(values.api.confirmGoal).not.toHaveBeenCalled();
+  expect(values.api.compileGoal).not.toHaveBeenCalled();
 });
 
 it("cancels clarification without confirmation, compilation, approval, or execution", async () => {
@@ -261,6 +301,54 @@ it("maps compiler policy refusal to the safe customer stop state", async () => {
   const values = setup({ compileGoal: vi.fn().mockResolvedValue({ schemaVersion: "1", status: "POLICY_BLOCKED", reason: { code: "SERVICE_UNAVAILABLE", message: "Required service is unavailable." } }) });
   await values.flow.submitMessage("Send NTU USD 5,000"); await values.flow.confirmMeaning();
   expect(values.flow.state).toMatchObject({ phase: "UNAVAILABLE", kind: "POLICY_BLOCKED" }); expect(values.api.approvalOptions).not.toHaveBeenCalled();
+});
+
+it("preserves deterministic refusal details and amends only by returning the original request to the composer", async () => {
+  const details = { bankStateVersion: 18, accountId: "acc-sgd", currency: "SGD", requiredMinorUnits: "1700000", projectedMinorUnits: "1689401" };
+  const values = setup({ compileGoal: vi.fn().mockResolvedValue({
+    schemaVersion: "1", status: "UNSAT", reason: { code: "MIN_AVAILABLE_BALANCE_VIOLATED", message: "Min available balance violated", details }, relaxations: [],
+  }) });
+  const requestText = "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$17,000 available in my SGD account.";
+  await values.flow.submitMessage(requestText);
+  await values.flow.confirmMeaning();
+  expect(values.flow.state).toMatchObject({ phase: "UNAVAILABLE", reasonCode: "MIN_AVAILABLE_BALANCE_VIOLATED", details });
+  expect(values.api.approvalOptions).not.toHaveBeenCalled();
+  expect(values.api.verifyApproval).not.toHaveBeenCalled();
+  expect(values.api.runExecution).not.toHaveBeenCalled();
+
+  values.flow.amendRequest();
+  expect(values.flow.state).toEqual({ phase: "COMPOSE", draftText: requestText });
+  expect(values.api.sendMessage).toHaveBeenCalledOnce();
+});
+
+it("requires a second meaning confirmation before an SGD-funded investment can compile or request approval", async () => {
+  const investmentCandidate: GoalCandidate = {
+    schemaVersion: "1", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [],
+    entityBindings: [{ schemaVersion: "1", reference: "Apple", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS", confirmed: false }],
+  };
+  const investmentGoal = GoalContractV1.parse({ ...investmentCandidate, id: "goal-apple", userId: "user-1", version: 1, sourceIntentDraftId: "candidate-apple", status: "CONFIRMED", contractHash: "a".repeat(64), createdAt: "2026-10-10T00:00:00.000Z", confirmedAt: "2026-10-10T00:01:00.000Z", entityBindings: investmentCandidate.entityBindings.map((item) => ({ ...item, confirmed: true })) });
+  const fundedCandidate: GoalCandidate = {
+    ...investmentCandidate,
+    constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }],
+    preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }],
+    entityBindings: [...investmentCandidate.entityBindings, { schemaVersion: "1", reference: "acc-sgd", entityType: "ACCOUNT", entityId: "acc-sgd", resolutionMethod: "USER_CONFIRMED", confirmed: false }],
+  };
+  const proposeInvestmentFunding = vi.fn().mockResolvedValue({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-funded", goalCandidate: fundedCandidate });
+  const values = setup({
+    sendMessage: vi.fn().mockResolvedValue({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-apple", goalCandidate: investmentCandidate }),
+    confirmGoal: vi.fn().mockResolvedValue(investmentGoal),
+    compileGoal: vi.fn().mockResolvedValue({ schemaVersion: "1", status: "UNSAT", reason: { code: "INSUFFICIENT_FUNDS", message: "Insufficient funds." }, relaxations: [] }),
+    proposeInvestmentFunding,
+  });
+  await values.flow.submitMessage("Buy 1 share of Apple (AAPL).");
+  await values.flow.confirmMeaning();
+  expect(values.flow.state).toMatchObject({ phase: "UNAVAILABLE", reasonCode: "INSUFFICIENT_FUNDS", goal: { id: "goal-apple" } });
+  await values.flow.reviewInvestmentFunding("acc-sgd", "100000");
+  expect(proposeInvestmentFunding).toHaveBeenCalledWith("goal-apple", "acc-sgd", "100000");
+  expect(values.flow.state).toMatchObject({ phase: "GOAL_REVIEW", candidateId: "candidate-funded", candidate: { goal: { assetId: "asset-aapl", quantity: "1" } } });
+  expect(values.api.compileGoal).toHaveBeenCalledTimes(1);
+  expect(values.api.approvalOptions).not.toHaveBeenCalled();
+  expect(values.api.runExecution).not.toHaveBeenCalled();
 });
 
 function memoryResumeStore(initial?: string) {

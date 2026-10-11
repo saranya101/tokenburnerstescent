@@ -113,6 +113,13 @@ export function createParlanceApi(fetcher: typeof fetch = fetch) {
       const value = record(await request(`goal-candidates/${encodeURIComponent(candidateId)}/confirm`, "POST", {}));
       return GoalContractV1.parse(value?.goalContract);
     },
+    async proposeInvestmentFunding(goalId: string, sourceAccountId: string, minimumSgdReserveMinorUnits?: string): Promise<Extract<MessageResponse, { status: "AWAITING_GOAL_CONFIRMATION" }>> {
+      const value = record(await request(`goals/${encodeURIComponent(goalId)}/funding-candidate`, "POST", {
+        sourceAccountId, ...(minimumSgdReserveMinorUnits === undefined ? {} : { minimumSgdReserveMinorUnits }),
+      }));
+      if (value?.status !== "AWAITING_GOAL_CONFIRMATION" || typeof value.candidateId !== "string") throw new ParlanceApiError("INVALID_API_RESPONSE", 502);
+      return { status: value.status, candidateId: value.candidateId, goalCandidate: GoalCandidateSchema.parse(value.goalCandidate) };
+    },
     async confirmGoalBundle(candidateId: string): Promise<GoalBundleContract> {
       const value = record(await request(`goal-bundle-candidates/${encodeURIComponent(candidateId)}/confirm`, "POST", {}));
       return GoalBundleContractV1.parse(value?.goalBundleContract);

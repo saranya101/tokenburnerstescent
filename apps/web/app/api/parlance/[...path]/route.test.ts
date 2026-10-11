@@ -68,6 +68,16 @@ it("proxies a clarification answer without adding authoritative fields", async (
   expect(upstream).toHaveBeenCalledWith("http://api.internal:4001/v1/clarifications/clarification-1/answer", expect.objectContaining({ body: JSON.stringify({ selectedCandidateId: "acc-1" }) }));
 });
 
+it("allows the bounded investment funding review route without accepting browser authority headers", async () => {
+  configure();
+  const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-funded", goalCandidate: {} }), { status: 200 }));
+  vi.stubGlobal("fetch", upstream);
+  const body = { sourceAccountId: "acc-sgd", minimumSgdReserveMinorUnits: "100000" };
+  const response = await POST(new NextRequest("http://localhost/api/parlance/goals/goal-apple/funding-candidate", { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json", "x-parlance-customer-id": "attacker" } }), { params: Promise.resolve({ path: ["goals", "goal-apple", "funding-candidate"] }) });
+  expect(response.status).toBe(200);
+  expect(upstream).toHaveBeenCalledWith("http://api.internal:4001/v1/goals/goal-apple/funding-candidate", expect.objectContaining({ body: JSON.stringify(body), headers: expect.objectContaining({ "x-parlance-customer-id": "user-1" }) }));
+});
+
 it("overwrites spoofed trusted headers instead of forwarding browser authority", async () => {
   configure();
   const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [] }), { status: 200 })); vi.stubGlobal("fetch", upstream);

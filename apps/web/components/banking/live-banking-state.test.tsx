@@ -8,6 +8,7 @@ import { BankingHomeView } from "./banking-home";
 import { customerDesktopNavigation } from "./banking-nav";
 import { ChatBankingSidebarView } from "../chat/chat-banking-sidebar";
 import { InvestmentView } from "./investment-view";
+import { matchingPayees, SavedPayeesView } from "./saved-payees-view";
 
 const bankState = BankStateSnapshotV1.parse({
   schemaVersion: "1",
@@ -18,7 +19,11 @@ const bankState = BankStateSnapshotV1.parse({
     { id: "acc-sgd", type: "CHECKING", currency: "SGD", ledgerMinorUnits: "2000000", availableMinorUnits: "2000000", status: "ACTIVE", capabilities: ["SEND_TRANSFER", "RECEIVE_TRANSFER"] },
     { id: "acc-usd", type: "BROKERAGE", currency: "USD", ledgerMinorUnits: "449900", availableMinorUnits: "449900", status: "ACTIVE", capabilities: ["SEND_TRANSFER", "TRADE_ASSET"] },
   ],
-  beneficiaries: [],
+  beneficiaries: [
+    { id: "ben-john-tan", name: "John Tan", supportedCurrencies: ["SGD"], status: "ACTIVE" },
+    { id: "ben-john-lim", name: "John Lim", supportedCurrencies: ["SGD"], status: "ACTIVE" },
+    { id: "ben-ntu", name: "Nanyang Technological University", supportedCurrencies: ["USD"], status: "ACTIVE" },
+  ],
   assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: true, settlementCurrency: "USD" }],
   holdings: [{ assetId: "asset-aapl", quantity: "1" }],
   obligations: [],
@@ -37,11 +42,18 @@ describe("authoritative customer banking presentation", () => {
   });
 
   it("shows the authoritative AAPL holding and quote-derived estimated value", () => {
-    const html = renderToStaticMarkup(createElement(InvestmentView, { state: bankState, loading: false }));
+    const html = renderToStaticMarkup(createElement(InvestmentView, { state: bankState, activity, loading: false }));
     expect(html).toContain("Apple Inc.");
     expect(html).toContain("1 share");
     expect(html).toContain("US$200.00");
-    expect(html).toContain("not live market prices");
+    expect(html).toContain("100%");
+    expect(html).toContain("S$20,000.00");
+    expect(html).toContain("US$4,499.00");
+    expect(html).toContain("Buy 1 AAPL");
+    expect(html).toContain("Market watch");
+    expect(html).toContain("Historical valuation data is not available");
+    expect(html).not.toMatch(/daily gain|top gainers|most active|US\$201\.24/iu);
+    expect(html).toContain("not external market prices");
   });
 
   it("keeps the holding visible when no quote is available", () => {
@@ -49,7 +61,16 @@ describe("authoritative customer banking presentation", () => {
     const html = renderToStaticMarkup(createElement(InvestmentView, { state, loading: false }));
     expect(html).toContain("Apple Inc.");
     expect(html).toContain("1 share");
-    expect(html).toContain("No current demo bank quote is available");
+    expect(html).toContain("No fresh quote");
+    expect(html).toContain("Current value</dt><dd>Unavailable");
+  });
+
+  it("treats an expired quote as unavailable instead of valuing the portfolio", () => {
+    const state = BankStateSnapshotV1.parse({ ...bankState, assetQuotes: [{ ...bankState.assetQuotes[0]!, expiresAt: "2026-10-02T23:59:59.000Z" }] });
+    const html = renderToStaticMarkup(createElement(InvestmentView, { state, activity, loading: false }));
+    expect(html).toContain("No fresh quote");
+    expect(html).toContain("Quote unavailable");
+    expect(html).not.toContain("US$200.00");
   });
 
   it("renders live account and investment summaries on Home", () => {
@@ -66,6 +87,23 @@ describe("authoritative customer banking presentation", () => {
     expect(html).toContain("Your accounts"); expect(html).toContain("S$20,000.00"); expect(html).toContain("US$4,499.00");
     expect(html).toContain("Recent transactions"); expect(html).toContain("Transfer to John Tan"); expect(html).toContain("−US$300.00");
     expect(html).not.toMatch(/Insights for you|Move money with confidence|Try asking about/iu);
+  });
+
+  it("lists and searches authoritative saved payees without inventing recipient details", () => {
+    const html = renderToStaticMarkup(createElement(SavedPayeesView, { state: bankState, loading: false }));
+    expect(html).toContain("John Tan"); expect(html).toContain("John Lim"); expect(html).toContain("Nanyang Technological University");
+    expect(html).toContain("SGD transfers"); expect(html).toContain("USD transfers");
+    expect(html).toContain("draft=Send+money+to+John+Tan");
+    expect(html).not.toMatch(/account number|••••|DBS Bank Ltd/iu);
+    expect(matchingPayees(bankState.beneficiaries, "john").map((item) => item.name)).toEqual(["John Lim", "John Tan"]);
+    expect(matchingPayees(bankState.beneficiaries, "missing")).toEqual([]);
+  });
+
+  it("renders honest saved-payee loading, empty, and error states", () => {
+    expect(renderToStaticMarkup(createElement(SavedPayeesView, { loading: true }))).toContain("Loading your saved payees");
+    expect(renderToStaticMarkup(createElement(SavedPayeesView, { loading: false, error: "CUSTOMER_STATE_UNAVAILABLE" }))).toContain("Saved payees are temporarily unavailable");
+    const emptyState = BankStateSnapshotV1.parse({ ...bankState, beneficiaries: [] });
+    expect(renderToStaticMarkup(createElement(SavedPayeesView, { state: emptyState, loading: false }))).toContain("No saved payees");
   });
 
   it("renders honest loading, empty, and error states in the chat banking rail", () => {
@@ -90,6 +128,9 @@ describe("authoritative customer banking presentation", () => {
     const state = BankStateSnapshotV1.parse({ ...bankState, holdings: [] });
     const html = renderToStaticMarkup(createElement(InvestmentView, { state, loading: false }));
     expect(html).toContain("No investments yet");
+    expect(html).toContain("Buy / Invest");
+    expect(html).toContain("No holdings to allocate");
+    expect(html).not.toMatch(/AI Insights|Portfolio Insights/iu);
   });
 
   it("links authoritative sections to dedicated customer pages", () => {

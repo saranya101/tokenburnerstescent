@@ -37,8 +37,8 @@ const ACCOUNT_DEFINITIONS = [
 ];
 const BENEFICIARY_DEFINITIONS = [
   { id: "ben-ntu", name: "Nanyang Technological University", supportedCurrencies: ["USD"], status: "ACTIVE" as const },
-  { id: "ben-john-1", name: "John Tan", supportedCurrencies: ["USD"], status: "ACTIVE" as const },
-  { id: "ben-john-2", name: "John Lim", supportedCurrencies: ["USD"], status: "ACTIVE" as const },
+  { id: "ben-john-tan", name: "John Tan", supportedCurrencies: ["SGD"], status: "ACTIVE" as const },
+  { id: "ben-john-lim", name: "John Lim", supportedCurrencies: ["SGD"], status: "ACTIVE" as const },
 ];
 const ASSET_DEFINITIONS = [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY" as const, tradable: true, settlementCurrency: "USD" }];
 const DEMO_ASSET_QUOTE = AssetQuoteV1.parse({
@@ -132,6 +132,11 @@ export function buildApp(options: MockBankOptions = {}) {
   }); });
   app.post("/v1/fx/quote", async (request, reply) => { const body = QuoteBody.parse(request.body); const state = getState(body.userId); if (state.scenarios.has("FX_UNAVAILABLE")) return reply.code(503).send({ code: "FX_UNAVAILABLE" }); return { id: `q-${body.userId}-${state.stateVersion}`, fromCurrency: body.fromCurrency, toCurrency: body.toCurrency, rate: "0.75", expiresAt: new Date(Date.now() + 60_000).toISOString() }; });
   const debit = (state: State, accountId: string, money: { minorUnits: string }): void => { const balance = state.balances[accountId]; if (balance === undefined) throw new Error("ACCOUNT_NOT_FOUND"); const amount = BigInt(money.minorUnits); if (balance < amount) throw new Error("INSUFFICIENT_FUNDS"); state.balances[accountId] = balance - amount; };
+  const requireAccountCurrency = (accountId: string, currency: string): void => {
+    const account = ACCOUNT_DEFINITIONS.find((candidate) => candidate.id === accountId);
+    if (!account) throw new Error("ACCOUNT_NOT_FOUND");
+    if (account.currency !== currency) throw new Error("ACCOUNT_CURRENCY_MISMATCH");
+  };
   const execute = <T extends WriteBody>(path: "fx" | "transfer" | "payment" | "buy", schema: z.ZodType<T>, blocked: Scenario, mutate: (state: State, body: T) => void) => app.post(`/v1/execute/${path}`, async (request, reply) => {
     const key = request.headers["idempotency-key"]; if (typeof key !== "string" || !key) return reply.code(400).send({ code: "IDEMPOTENCY_KEY_REQUIRED" });
     const body = schema.parse(request.body); const hash = requestHash(body); const prior = idempotency.get(key); if (prior) return prior.operation === path && prior.requestHash === hash ? prior.response : reply.code(409).send({ code: "IDEMPOTENCY_KEY_REUSED" });
@@ -140,7 +145,19 @@ export function buildApp(options: MockBankOptions = {}) {
     state.stateVersion += 1; const response = { accepted: true as const, bankReference: `mock-${key}`, stateVersion: state.stateVersion }; const record = { operation: path, idempotencyKey: key, requestHash: hash, response }; idempotency.set(key, { operation: path, requestHash: hash, response }); options.afterWrite?.(record); return response;
   });
   execute("fx", FxBody, "FX_UNAVAILABLE", (state, body) => { debit(state, body.accountId, body.fromAmount); const target = fxDestinationAccountId(body.toCurrency); if (!target) throw new Error("FX_DESTINATION_ACCOUNT_NOT_FOUND"); state.balances[target] = (state.balances[target] ?? 0n) + multiplyRateHalfEven(body.fromAmount.minorUnits, 75n, 100n); });
-  execute("transfer", TransferBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => { debit(state, body.sourceAccountId, body.amount); if ("destinationAccountId" in body) state.balances[body.destinationAccountId] = (state.balances[body.destinationAccountId] ?? 0n) + BigInt(body.amount.minorUnits); });
+  execute("transfer", TransferBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => {
+    requireAccountCurrency(body.sourceAccountId, body.amount.currency);
+    if ("beneficiaryId" in body) {
+      const beneficiary = BENEFICIARY_DEFINITIONS.find((candidate) => candidate.id === body.beneficiaryId);
+      if (!beneficiary) throw new Error("BENEFICIARY_NOT_FOUND");
+      if (beneficiary.status !== "ACTIVE") throw new Error("BENEFICIARY_UNAVAILABLE");
+      if (!beneficiary.supportedCurrencies.some((currency) => currency === body.amount.currency)) throw new Error("BENEFICIARY_CURRENCY_UNSUPPORTED");
+    } else {
+      requireAccountCurrency(body.destinationAccountId, body.amount.currency);
+    }
+    debit(state, body.sourceAccountId, body.amount);
+    if ("destinationAccountId" in body) state.balances[body.destinationAccountId] = (state.balances[body.destinationAccountId] ?? 0n) + BigInt(body.amount.minorUnits);
+  });
   execute("payment", PaymentBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => debit(state, body.sourceAccountId, body.amount)); execute("buy", BuyBody, "ASSET_UNAVAILABLE", (state, body) => {
     const quote = state.assetQuotes.find((item) => item.quoteId === body.quoteId); if (!quote) throw new Error("ASSET_QUOTE_NOT_FOUND");
     if (quote.assetId !== body.assetId) throw new Error("ASSET_QUOTE_ASSET_MISMATCH");

@@ -1,4 +1,4 @@
-import type { ApprovalV1, BankStateSnapshotV1, BundleSatisfactionProofV1, CompileGoalBundleRequestV1, CompileGoalBundleResultV1, CompilerResultV1, ConstraintV1, ExecutionResultV1, FinancialPlanV1, GoalBundleContractV1, GoalBundleItemV1, GoalContractV1, GoalDependencyV1, IntentBundleDraftV1, IntentDraftV1 } from "@parlance/contracts";
+import type { ApprovalV1, BankStateSnapshotV1, BundleSatisfactionProofV1, CompileGoalBundleRequestV1, CompileGoalBundleResultV1, CompilerResultV1, ConstraintV1, ExecutionResultV1, FinancialPlanV1, GoalBundleContractV1, GoalBundleItemV1, GoalContractV1, GoalDependencyV1, IntentBundleDraftV1, IntentDraftV1, InterpretedIntentDraftV1 } from "@parlance/contracts";
 import type { ClarificationItem, EntityGroundingResult, GoalContractCandidate, IntentBundleItemGroundingResults, IntentValidationMismatch } from "@parlance/intent-engine";
 import type { StoredApprovalEvidence } from "../webauthn/types.js";
 import type { ConversationalInputProvenance } from "./input-provenance.js";
@@ -27,7 +27,7 @@ export interface StoredClarificationRequest {
   version: number;
   createdAt: string;
   originalText: string;
-  intentDraft: IntentDraftV1;
+  intentDraft: InterpretedIntentDraftV1;
   groundingResults: readonly EntityGroundingResult[];
   clarifications: readonly ClarificationItem[];
   inputProvenance?: ConversationalInputProvenance;
@@ -101,7 +101,7 @@ export interface BundleConfirmationRepository {
 export interface GoalConfirmationRepository {
   saveClarification(input: StoredClarificationRequest & { inputProvenance: ConversationalInputProvenance; traceId: string }): Promise<StoredClarificationRequest>;
   getClarification(clarificationId: string): Promise<StoredClarificationRequest | null>;
-  advanceClarification(input: { clarificationId: string; answerText: string; groundingResults: readonly EntityGroundingResult[]; clarifications: readonly ClarificationItem[]; candidate?: GoalContractCandidate; semanticValidation?: SemanticValidationEvidence; traceId: string }): Promise<ClarificationProgress>;
+  advanceClarification(input: { clarificationId: string; answerText: string; intentDraft: InterpretedIntentDraftV1; groundingResults: readonly EntityGroundingResult[]; clarifications: readonly ClarificationItem[]; candidate?: GoalContractCandidate; semanticValidation?: SemanticValidationEvidence; traceId: string }): Promise<ClarificationProgress>;
   saveGoalCandidate(input: StoredGoalCandidate & { originalText: string; inputProvenance: ConversationalInputProvenance; intentDraft: IntentDraftV1; semanticValidation: SemanticValidationEvidence; traceId: string }): Promise<StoredGoalCandidate>;
   rejectSemanticValidation(input: { recordId: string; userId: string; schemaVersion: string; createdAt: string; originalText: string; inputProvenance: ConversationalInputProvenance; answerText?: string; validation: SemanticValidationEvidence; traceId: string }): Promise<void>;
   getGoalCandidate(candidateId: string): Promise<StoredGoalCandidate | null>;

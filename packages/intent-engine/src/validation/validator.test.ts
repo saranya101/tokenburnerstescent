@@ -202,6 +202,61 @@ describe("independent read-only intent validation", () => {
     expect(validator.validate({ sourceText, draft, candidate: goalCandidate })).toEqual({ status: "PASS", mismatches: [] });
   });
 
+  it("preserves conditional SGD funding and its minimum reserve as independently verified meaning", () => {
+    const sourceText = "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$1,000 available in my SGD account.";
+    const draft = {
+      schemaVersion: "1", originalText: sourceText,
+      goal: { type: "ACQUIRE_ASSET", assetReference: "Apple (AAPL)", quantity: "1" },
+      constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountReference: "my SGD account" }],
+      preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }], references: [],
+    } as const;
+    const goalCandidate = candidate({
+      goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" },
+      constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }],
+      preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }],
+      entityBindings: [
+        { schemaVersion: "1", reference: "Apple (AAPL)", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS", confirmed: false },
+        { schemaVersion: "1", reference: "my SGD account", entityType: "ACCOUNT", entityId: "acc-sgd", resolutionMethod: "ALIAS", confirmed: false },
+      ],
+    });
+    expect(validator.validate({ sourceText, draft, candidate: goalCandidate })).toEqual({ status: "PASS", mismatches: [] });
+
+    const omittedPreference = { ...draft, preferences: [] };
+    const omittedCandidate = candidate({ ...goalCandidate, preferences: [] });
+    expect(validator.validate({ sourceText, draft: omittedPreference, candidate: omittedCandidate }).mismatches)
+      .toContainEqual(expect.objectContaining({ code: "OMITTED_EXPLICIT_PREFERENCE", expected: "PREFER_ACCOUNT" }));
+
+    const omittedReserve = { ...draft, constraints: [] };
+    const omittedReserveCandidate = candidate({ ...goalCandidate, constraints: [] });
+    expect(validator.validate({ sourceText, draft: omittedReserve, candidate: omittedReserveCandidate }).mismatches)
+      .toContainEqual(expect.objectContaining({ code: "OMITTED_EXPLICIT_CONSTRAINT", expected: "MIN_AVAILABLE_BALANCE" }));
+
+    const wrongReserve = {
+      ...draft,
+      constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "50000" }, accountReference: "my SGD account" }],
+    } as const;
+    const wrongReserveCandidate = candidate({
+      ...goalCandidate,
+      constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "50000" }, accountId: "acc-sgd" }],
+    });
+    expect(validator.validate({ sourceText, draft: wrongReserve, candidate: wrongReserveCandidate }).mismatches)
+      .toContainEqual(expect.objectContaining({ code: "MONEY_NOT_SUPPORTED_BY_SOURCE", field: "constraints[0].money" }));
+  });
+
+  it("does not infer conditional funding permission from insufficient funds alone", () => {
+    const sourceText = "Buy 1 share of Apple (AAPL). My USD balance is insufficient.";
+    const draft = {
+      schemaVersion: "1", originalText: sourceText,
+      goal: { type: "ACQUIRE_ASSET", assetReference: "Apple (AAPL)", quantity: "1" },
+      constraints: [], preferences: [], references: [],
+    } as const;
+    const goalCandidate = candidate({
+      goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [],
+      entityBindings: [{ schemaVersion: "1", reference: "Apple (AAPL)", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS", confirmed: false }],
+    });
+    expect(validator.validate({ sourceText, draft, candidate: goalCandidate })).toEqual({ status: "PASS", mismatches: [] });
+  });
+
   it("fails when the NTU transfer is reinterpreted as an asset acquisition", () => {
     const sourceText = "Send USD 7000.00 to Nanyang Technological University";
     const draft = {

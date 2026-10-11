@@ -42,6 +42,7 @@ describe("customer object isolation", () => {
     const values = isolatedServices(); const app = buildApp(values.services, authorization); const headers = headersFor("user-bob");
     const requests = [
       { method: "POST" as const, url: "/v1/goals/goal-alice/compile" },
+      { method: "POST" as const, url: "/v1/goals/goal-alice/funding-candidate", payload: { sourceAccountId: "acc-sgd" } },
       { method: "POST" as const, url: "/v1/goal-bundles/bundle-alice/compile" },
       { method: "POST" as const, url: "/v1/plans/plan-alice/approval-options", payload: {} },
       { method: "POST" as const, url: "/v1/plans/plan-alice/approval-verify", payload: { challengeId: "challenge-alice", credential } },

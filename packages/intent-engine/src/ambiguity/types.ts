@@ -1,10 +1,12 @@
-import type { IntentDraftV1 } from "@parlance/contracts";
+import type { InterpretedIntentDraftV1 } from "@parlance/contracts";
 import type { EntityGroundingResult, GroundableEntityType } from "../grounding/types.js";
 
 export type AmbiguityReasonCode =
   | "AMBIGUOUS_ENTITY"
   | "ENTITY_NOT_FOUND"
-  | "MULTIPLE_SEMANTIC_CANDIDATES";
+  | "MULTIPLE_SEMANTIC_CANDIDATES"
+  | "MISSING_FIELD"
+  | "INVALID_FIELD";
 
 export interface ClarificationOption {
   entityId: string;
@@ -19,7 +21,8 @@ export interface ClarificationItem {
   reason: AmbiguityReasonCode;
   field: string;
   originalReference: string;
-  questionKey: "clarify.entity.ambiguous" | "clarify.entity.candidates" | "clarify.entity.not_found";
+  questionKey: "clarify.entity.ambiguous" | "clarify.entity.candidates" | "clarify.entity.not_found"
+    | "clarify.transfer.recipient" | "clarify.transfer.amount" | "clarify.transfer.currency";
   options: readonly ClarificationOption[];
 }
 
@@ -28,7 +31,7 @@ export type AmbiguityAnalysisResult =
   | { status: "NEEDS_CLARIFICATION"; clarifications: readonly ClarificationItem[] };
 
 export interface IntentAmbiguityAnalysisInput {
-  draft: IntentDraftV1;
+  draft: InterpretedIntentDraftV1;
   groundingResults: readonly EntityGroundingResult[];
 }
 

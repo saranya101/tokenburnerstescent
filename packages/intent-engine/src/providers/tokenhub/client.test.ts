@@ -257,6 +257,35 @@ it("keeps an explicitly requested shortfall account as a soft preference", () =>
   });
 });
 
+it("keeps conditional SGD funding as a grounded preference instead of dropping it", () => {
+  const originalText = "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$1,000 available in my SGD account.";
+  expect(projectTokenHubTransportCandidate({
+    preferences: transportPreferences({ preferredAccounts: ["my SGD account"] }),
+  }, originalText)).toEqual({
+    preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
+  });
+});
+
+it("normalizes a conditional funding clause to the source-backed reserve account before grounding", () => {
+  const originalText = "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$17,000 available in my SGD account.";
+  expect(projectTokenHubTransportCandidate({
+    constraints: transportConstraints({ minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: "1700000" }, accountReference: "my SGD account" }] }),
+    preferences: transportPreferences({ preferredAccounts: ["SGD if necessary", "my SGD account"] }),
+    references: [
+      { reference: "Apple (AAPL)", expectedEntityType: "ASSET" },
+      { reference: "my SGD account", expectedEntityType: "ACCOUNT" },
+      { reference: "SGD if necessary", expectedEntityType: "ACCOUNT" },
+    ],
+  }, originalText)).toEqual({
+    constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "1700000" }, accountReference: "my SGD account" }],
+    preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
+    references: [
+      { reference: "Apple (AAPL)", expectedEntityType: "ASSET" },
+      { reference: "my SGD account", expectedEntityType: "ACCOUNT" },
+    ],
+  });
+});
+
 it.each([
   ["don't use my USD account", "my USD account"],
   ["avoid my savings account", "my savings account"],
@@ -506,7 +535,7 @@ it("keeps a valid stock goal when TokenHub adds a non-verbatim supplemental comp
     schemaVersion: "1",
     goal: transportGoal({ assetReference: "Apple", budget: null, quantity: "1" }),
     constraints: transportConstraints({ minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: "100000" }, accountReference: "SGD account" }] }),
-    preferences: transportPreferences({ preferredAccounts: ["USD account"] }),
+    preferences: transportPreferences({ preferredAccounts: ["my SGD account"] }),
     references: [
       { reference: "Apple", expectedEntityType: "ASSET" },
       { reference: "AAPL", expectedEntityType: "ASSET" },
@@ -520,7 +549,7 @@ it("keeps a valid stock goal when TokenHub adds a non-verbatim supplemental comp
   await expect(interpreter.interpretUserRequest({ text: originalText, userId: "stock-regression" })).resolves.toMatchObject({
     goal: { type: "ACQUIRE_ASSET", assetReference: "Apple", quantity: "1" },
     constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountReference: "SGD account" }],
-    preferences: [],
+    preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
     references: [
       { reference: "Apple", expectedEntityType: "ASSET" },
       { reference: "AAPL", expectedEntityType: "ASSET" },
@@ -606,6 +635,20 @@ it("does not permit an empty goal under its intended provider structure", () => 
 
 it("keeps successful DELIVER_MONEY interpreter candidates valid", () => {
   expect(IntentDraftV1.safeParse(draftFor({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "500000" }, recipientReference: "NTU" })).success).toBe(true);
+});
+
+it("projects null transfer fields as missing instead of inventing executable values", () => {
+  expect(projectGoal({
+    selectedGoalType: "DELIVER_MONEY",
+    goalSlots: {
+      deliverMoney: { amount: null, recipientReference: "John" },
+      acquireAsset: null, payBill: null, moveFunds: null,
+    },
+  })).toEqual({ type: "DELIVER_MONEY", recipientReference: "John" });
+  const deliverMoney = goalSlotsSchema().properties.deliverMoney as { properties: { amount: { type: unknown }; recipientReference: { type: unknown } } };
+  expect(deliverMoney.properties.amount.type).toEqual(["object", "null"]);
+  expect(deliverMoney.properties.recipientReference.type).toEqual(["string", "null"]);
+  expect(INTENT_V1_SYSTEM_PROMPT).toContain("never use zero as a missing-value placeholder");
 });
 
 it("keeps ACQUIRE_ASSET quantity-only, budget-only, and combined forms valid", () => {

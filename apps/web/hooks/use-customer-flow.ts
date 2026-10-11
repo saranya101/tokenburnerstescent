@@ -24,11 +24,13 @@ export function useCustomerFlow() {
     answerClarification: useCallback((clarification: Parameters<CustomerFlowController["answerClarification"]>[0], option: Parameters<CustomerFlowController["answerClarification"]>[1]) => controller.current!.answerClarification(clarification, option), []),
     answerClarificationText: useCallback((clarification: Parameters<CustomerFlowController["answerClarificationText"]>[0], answer: string) => controller.current!.answerClarificationText(clarification, answer), []),
     confirmMeaning: useCallback(() => controller.current!.confirmMeaning(), []),
+    reviewInvestmentFunding: useCallback((sourceAccountId: string, minimumSgdReserveMinorUnits?: string) => controller.current!.reviewInvestmentFunding(sourceAccountId, minimumSgdReserveMinorUnits), []),
     authorizeAndExecute: useCallback(() => controller.current!.authorizeAndExecute(), []),
     continueAuthorizedExecution: useCallback(() => controller.current!.continueAuthorizedExecution(), []),
     checkExecutionStatus: useCallback(() => controller.current!.checkExecutionStatus(), []),
     reviewUpdatedPlan: useCallback(() => controller.current!.reviewUpdatedPlan(), []),
     passkeyEnrolled: useCallback(() => controller.current!.passkeyEnrolled(), []),
+    amendRequest: useCallback(() => controller.current!.amendRequest(), []),
     reset: useCallback(() => controller.current!.reset(), []),
   };
 }

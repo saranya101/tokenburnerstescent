@@ -55,11 +55,11 @@ describe.skipIf(!testDatabaseUrl)("Prisma PostgreSQL restart safety", () => {
   it("persists and idempotently continues clarification without creating financial authority", async () => {
     const draft: IntentDraftV1 = { schemaVersion: "1", originalText: "Send John USD 500", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "John" }, constraints: [], preferences: [], references: [] };
     const generated = ["it-clarification-john", "it-goal-john"]; const repository = new PrismaParlanceRepository(db);
-    const messages = new MessageOrchestrationService(repository, { interpretUserRequest: async () => draft }, () => ({ ground: async (input: EntityGroundingInput) => ({ status: "AMBIGUOUS", reference: input.reference, expectedEntityType: "BENEFICIARY", candidates: [{ entityType: "BENEFICIARY", entityId: "ben-john-1", canonicalName: "John Tan" }, { entityType: "BENEFICIARY", entityId: "ben-john-2", canonicalName: "John Lim" }] }) }), undefined, undefined, () => new Date("2026-09-25T10:00:00Z"), () => generated.shift()!);
+    const messages = new MessageOrchestrationService(repository, { interpretUserRequest: async () => draft }, () => ({ ground: async (input: EntityGroundingInput) => ({ status: "AMBIGUOUS", reference: input.reference, expectedEntityType: "BENEFICIARY", candidates: [{ entityType: "BENEFICIARY", entityId: "ben-john-tan", canonicalName: "John Tan" }, { entityType: "BENEFICIARY", entityId: "ben-john-lim", canonicalName: "John Lim" }] }) }), undefined, undefined, () => new Date("2026-09-25T10:00:00Z"), () => generated.shift()!);
     const pending = await messages.receive({ userId: ids.user, text: draft.originalText }, ids.trace); expect(pending).toMatchObject({ status: "NEEDS_CLARIFICATION", clarificationId: "it-clarification-john" });
-    const first = await messages.answerClarification("it-clarification-john", { selectedCandidateId: "ben-john-2" }, ids.trace);
-    const duplicate = await messages.answerClarification("it-clarification-john", { selectedCandidateId: "ben-john-2" }, ids.trace);
-    expect(first).toEqual(duplicate); expect(first).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { recipientId: "ben-john-2", amount: { minorUnits: "50000" } } } });
+    const first = await messages.answerClarification("it-clarification-john", { selectedCandidateId: "ben-john-lim" }, ids.trace);
+    const duplicate = await messages.answerClarification("it-clarification-john", { selectedCandidateId: "ben-john-lim" }, ids.trace);
+    expect(first).toEqual(duplicate); expect(first).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { recipientId: "ben-john-lim", amount: { minorUnits: "50000" } } } });
     expect(await db.message.count({ where: { conversation: { userId: ids.user }, content: "John Lim" } })).toBe(1);
     expect(await db.goalContract.count({ where: { sourceIntentDraftId: "it-clarification-john" } })).toBe(0);
     expect(await db.financialPlan.count({ where: { goalContractKey: "it-goal-john" } })).toBe(0);

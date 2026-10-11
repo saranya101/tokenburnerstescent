@@ -31,7 +31,24 @@ it("validates a DELIVER_MONEY outcome and preserves the exact raw input", async 
   const draft = await interpreterFor({ ...deliveryCandidate, originalText: "model rewrite" })
     .interpretUserRequest({ text: rawInput, userId: "u1" });
   expect(draft).toMatchObject({ originalText: rawInput, goal: { type: "DELIVER_MONEY", recipientReference: "NTU" } });
-  expect(draft.goal.type === "DELIVER_MONEY" && draft.goal.amount.minorUnits).toBe("500000");
+  expect(draft.goal.type === "DELIVER_MONEY" && draft.goal.amount?.minorUnits).toBe("500000");
+});
+
+it("preserves an incomplete transfer as non-executable structured interpretation", async () => {
+  const draft = await interpreterFor({
+    schemaVersion: "1", goal: { type: "DELIVER_MONEY", recipientReference: "John" },
+    constraints: [], preferences: [], references: [],
+  }).interpretUserRequest({ text: "Send money to John", userId: "u1" });
+  expect(draft).toEqual({
+    schemaVersion: "1", originalText: "Send money to John", goal: { type: "DELIVER_MONEY", recipientReference: "John" },
+    constraints: [], preferences: [], references: [],
+  });
+});
+
+it("preserves a transfer missing both recipient and money for bounded clarification", async () => {
+  await expect(interpreterFor({
+    schemaVersion: "1", goal: { type: "DELIVER_MONEY" }, constraints: [], preferences: [], references: [],
+  }).interpretUserRequest({ text: "Send money", userId: "u1" })).resolves.toMatchObject({ goal: { type: "DELIVER_MONEY" } });
 });
 
 it("sends only interpretation data to the model client", async () => {

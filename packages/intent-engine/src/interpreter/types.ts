@@ -1,4 +1,4 @@
-import type { IntentDraftV1 } from "@parlance/contracts";
+import type { InterpretedIntentDraftV1 } from "@parlance/contracts";
 
 export interface InterpretUserRequestInput {
   text: string;
@@ -30,7 +30,7 @@ export interface ModelClientDiagnosticError extends Error {
 }
 
 export interface IntentInterpreter {
-  interpretUserRequest(input: InterpretUserRequestInput): Promise<IntentDraftV1>;
+  interpretUserRequest(input: InterpretUserRequestInput): Promise<InterpretedIntentDraftV1>;
 }
 
 export type IntentValidationIssue = {

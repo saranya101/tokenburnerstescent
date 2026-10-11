@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
-  CompileGoalBundleResultV1, CompilerResultV1, ExecutionResultV1, GoalContractV1,
-  type BankStateSnapshotV1, type BundleSatisfactionProofV1, type FinancialPlanStepV1, type FinancialPlanV1, type GoalBundleContractV1,
+  CompileGoalBundleResultV1, CompilerResultV1, ExecutionResultV1, GoalContractV1, IntentDraftV1, InterpretedIntentDraftV1,
+  type BankStateSnapshotV1, type BundleSatisfactionProofV1, type FinancialPlanStepV1, type FinancialPlanV1, type GoalBundleContractV1, type InterpretedIntentDraftV1 as InterpretedIntentDraft,
 } from "@parlance/contracts";
 import { hashGoalBundleContract } from "@parlance/contracts/server";
 import {
-  DeterministicGoalContractBuilder, DeterministicIntentAmbiguityDetector, DeterministicReadOnlyIntentValidator, GoalContractCandidateV1, intentReferenceOccurrences,
+  DeterministicGoalContractBuilder, DeterministicIntentAmbiguityDetector, DeterministicReadOnlyIntentValidator, GoalContractCandidateV1, intentReferenceOccurrences, sourceContainsReference, sourceSupportsMoney,
   type ClarificationItem, type EntityGrounder, type EntityGroundingResult, type GoalContractBuilder, type GroundableEntityType, type IndependentIntentValidator, type IntentAmbiguityDetector, type IntentInterpreter,
 } from "@parlance/intent-engine";
 import { z } from "zod";
@@ -23,6 +23,10 @@ const ClarificationAnswerInput = z.union([
   z.object({ selectedCandidateId: z.string().min(1) }).strict(),
   z.object({ answerText: z.string().trim().min(1) }).strict(),
 ]);
+const InvestmentFundingInput = z.object({
+  sourceAccountId: z.string().min(1),
+  minimumSgdReserveMinorUnits: z.string().regex(/^\d+$/u).optional(),
+}).strict();
 export type EntityGrounderFactory = (userId: string) => EntityGrounder;
 
 export class MessageOrchestrationService {
@@ -40,33 +44,46 @@ export class MessageOrchestrationService {
   async receive(value: unknown, traceId: string) {
     const input = ConversationalMessageInput.parse(value);
     const provenance = inputProvenance(input);
-    const intentDraft = await this.interpreter.interpretUserRequest(input);
+    let semanticRetryUsed = false;
+    while (true) {
+      const intentDraft = clarifiableInterpretation(await this.interpreter.interpretUserRequest(input));
     const grounder = this.grounderForUser(input.userId);
-    const occurrences = [...new Map(intentReferenceOccurrences(intentDraft).map((item) => [`${item.reference}\u0000${item.expectedEntityType ?? ""}`, item])).values()];
-    const groundingResults = await Promise.all(occurrences.map((item) => grounder.ground(item.expectedEntityType === undefined
-      ? { reference: item.reference }
-      : { reference: item.reference, expectedEntityType: item.expectedEntityType })));
+    const groundingResults = await groundingForIntent(intentDraft, [], grounder);
     const ambiguity = this.ambiguityDetector.analyze({ draft: intentDraft, groundingResults });
-    if (ambiguity.status === "NEEDS_CLARIFICATION") {
+    const clarifications = clarificationQueue(intentDraft, ambiguity);
+    if (clarifications.length > 0) {
       const stored = await this.repository.saveClarification({
         clarificationId: this.newId(), goalContractId: this.newId(), userId: input.userId, version: 1,
         createdAt: this.now().toISOString(), originalText: input.text, intentDraft, groundingResults,
-        clarifications: ambiguity.clarifications, inputProvenance: provenance, clarificationAnswers: [], traceId,
+        clarifications, inputProvenance: provenance, clarificationAnswers: [], traceId,
       });
       return { status: "NEEDS_CLARIFICATION" as const, clarificationId: stored.clarificationId, clarifications: stored.clarifications };
     }
-    const candidate = GoalContractCandidateV1.parse(this.goalBuilder.build({ draft: intentDraft, groundingResults }));
+    const completeDraft = IntentDraftV1.parse(intentDraft);
+    const candidate = GoalContractCandidateV1.parse(this.goalBuilder.build({ draft: completeDraft, groundingResults }));
     const candidateId = this.newId(); const goalContractId = this.newId(); const createdAt = this.now().toISOString();
-    const validation = this.intentValidator.validate({ sourceText: input.text, draft: intentDraft, candidate });
+    const validation = this.intentValidator.validate({ sourceText: input.text, draft: completeDraft, candidate });
     if (validation.status === "FAIL") {
-      await this.repository.rejectSemanticValidation({ recordId: candidateId, userId: input.userId, schemaVersion: intentDraft.schemaVersion, createdAt, originalText: input.text, inputProvenance: provenance, validation: semanticValidationEvidence(validation, provenance), traceId });
+      const onlyOmittedPreference =
+        validation.mismatches.length > 0
+        && validation.mismatches.every(
+          (mismatch) => mismatch.code === "OMITTED_EXPLICIT_PREFERENCE"
+        );
+
+      if (onlyOmittedPreference && !semanticRetryUsed) {
+        semanticRetryUsed = true;
+        continue;
+      }
+
+      await this.repository.rejectSemanticValidation({ recordId: candidateId, userId: input.userId, schemaVersion: completeDraft.schemaVersion, createdAt, originalText: input.text, inputProvenance: provenance, validation: semanticValidationEvidence(validation, provenance), traceId });
       return semanticValidationFailed();
     }
     const stored = await this.repository.saveGoalCandidate({
       candidateId, goalContractId, userId: input.userId, version: 1,
-      createdAt, candidate, originalText: input.text, intentDraft, inputProvenance: provenance, semanticValidation: semanticValidationEvidence(validation, provenance), traceId,
+      createdAt, candidate, originalText: input.text, intentDraft: completeDraft, inputProvenance: provenance, semanticValidation: semanticValidationEvidence(validation, provenance), traceId,
     });
     return { status: "AWAITING_GOAL_CONFIRMATION" as const, candidateId: stored.candidateId, goalCandidate: stored.candidate };
+    }
   }
 
   async answerClarification(clarificationId: string, value: unknown, traceId: string) {
@@ -79,33 +96,45 @@ export class MessageOrchestrationService {
     }
     const clarification = pending.clarifications[0];
     if (clarification === undefined) throw new Error("CLARIFICATION_NOT_ANSWERABLE");
-    const requirement = intentReferenceOccurrences(pending.intentDraft).find((item) => item.field === clarification.field && item.reference === clarification.originalReference);
-    if (requirement === undefined) throw new Error("CLARIFICATION_REQUIREMENT_NOT_FOUND");
-
     const grounder = this.grounderForUser(pending.userId);
-    const resolved = "selectedCandidateId" in answer
-      ? selectedGrounding(clarification, answer.selectedCandidateId, requirement.expectedEntityType)
-      : rebaseGrounding(await grounder.ground(requirement.expectedEntityType === undefined
-        ? { reference: answer.answerText }
-        : { reference: answer.answerText, expectedEntityType: requirement.expectedEntityType }), clarification.originalReference, requirement.expectedEntityType);
-    const groundingResults = replaceGrounding(pending.groundingResults, clarification, resolved);
-    const ambiguity = this.ambiguityDetector.analyze({ draft: pending.intentDraft, groundingResults });
-    const candidate = ambiguity.status === "CLEAR"
-      ? GoalContractCandidateV1.parse(this.goalBuilder.build({ draft: pending.intentDraft, groundingResults }))
-      : undefined;
     const answerText = "selectedCandidateId" in answer
       ? clarification.options.find((option) => option.entityId === answer.selectedCandidateId)?.displayName ?? answer.selectedCandidateId
       : answer.answerText;
+    let nextDraft = pending.intentDraft;
+    let groundingResults = [...pending.groundingResults];
+    let invalidField: string | undefined;
+    if (isMissingFieldClarification(clarification)) {
+      if (!("answerText" in answer)) throw new Error("CLARIFICATION_ANSWER_INVALID");
+      const updated = applyMissingFieldAnswer(nextDraft, clarification, answer.answerText);
+      nextDraft = updated.draft;
+      if (!updated.accepted) invalidField = clarification.field;
+      groundingResults = await groundingForIntent(nextDraft, groundingResults, grounder);
+    } else {
+      const requirement = intentReferenceOccurrences(nextDraft).find((item) => item.field === clarification.field && item.reference === clarification.originalReference);
+      if (requirement === undefined) throw new Error("CLARIFICATION_REQUIREMENT_NOT_FOUND");
+      const resolved = "selectedCandidateId" in answer
+        ? selectedGrounding(clarification, answer.selectedCandidateId, requirement.expectedEntityType)
+        : rebaseGrounding(await grounder.ground(requirement.expectedEntityType === undefined
+          ? { reference: answer.answerText }
+          : { reference: answer.answerText, expectedEntityType: requirement.expectedEntityType }), clarification.originalReference, requirement.expectedEntityType);
+      groundingResults = replaceGrounding(groundingResults, clarification, resolved);
+    }
     const provenance = pending.inputProvenance ?? { inputMode: "TYPED" as const, submittedText: pending.originalText, edited: false as const };
     const clarificationAnswers = [...(pending.clarificationAnswers ?? []), answerText];
-    const validation = candidate === undefined ? undefined : this.intentValidator.validate({ sourceText: pending.originalText, draft: pending.intentDraft, candidate });
+    nextDraft = InterpretedIntentDraftV1.parse({ ...nextDraft, originalText: conversationEvidence(pending.originalText, clarificationAnswers, nextDraft) });
+    const ambiguity = this.ambiguityDetector.analyze({ draft: nextDraft, groundingResults });
+    const clarifications = clarificationQueue(nextDraft, ambiguity, invalidField);
+    const completeDraft = clarifications.length === 0 ? IntentDraftV1.parse(nextDraft) : undefined;
+    const candidate = completeDraft === undefined
+      ? undefined
+      : GoalContractCandidateV1.parse(this.goalBuilder.build({ draft: completeDraft, groundingResults }));
+    const validation = candidate === undefined || completeDraft === undefined ? undefined : this.intentValidator.validate({ sourceText: completeDraft.originalText, draft: completeDraft, candidate });
     if (validation?.status === "FAIL") {
-      await this.repository.rejectSemanticValidation({ recordId: clarificationId, userId: pending.userId, schemaVersion: pending.intentDraft.schemaVersion, createdAt: pending.createdAt, originalText: pending.originalText, inputProvenance: provenance, answerText, validation: semanticValidationEvidence(validation, provenance, clarificationAnswers), traceId });
+      await this.repository.rejectSemanticValidation({ recordId: clarificationId, userId: pending.userId, schemaVersion: nextDraft.schemaVersion, createdAt: pending.createdAt, originalText: pending.originalText, inputProvenance: provenance, answerText, validation: semanticValidationEvidence(validation, provenance, clarificationAnswers), traceId });
       return semanticValidationFailed();
     }
     const progress = await this.repository.advanceClarification({
-      clarificationId, answerText, groundingResults,
-      clarifications: ambiguity.status === "CLEAR" ? [] : ambiguity.clarifications,
+      clarificationId, answerText, intentDraft: nextDraft, groundingResults, clarifications,
       ...(candidate === undefined ? {} : { candidate, semanticValidation: semanticValidationEvidence(validation!, provenance, clarificationAnswers) }), traceId,
     });
     return progress.status === "AWAITING_GOAL_CONFIRMATION"
@@ -135,6 +164,247 @@ export class MessageOrchestrationService {
       contractHash: confirmed.contract.contractHash, confirmedAt: confirmed.contract.confirmedAt!, confirmationType: "EXPLICIT_USER_CONFIRMATION",
     };
     return { status: "CONFIRMED" as const, goalContract: confirmed.contract, confirmation: authoritativeConfirmation };
+  }
+}
+
+function clarifiableInterpretation(value: InterpretedIntentDraft): InterpretedIntentDraft {
+  if (value.goal.type !== "DELIVER_MONEY") return value;
+  const amount = value.goal.amount;
+  const supportedAmount = amount !== undefined
+    && amount.currency !== undefined
+    && amount.minorUnits !== undefined
+    && sourceSupportsMoney(value.originalText, { currency: amount.currency, minorUnits: amount.minorUnits });
+  const sourceAmount = supportedAmount ? amount : partialTransferMoneyFromSource(value.originalText);
+  const recipientReference = value.goal.recipientReference;
+  const supportedRecipient = recipientReference !== undefined && sourceContainsReference(value.originalText, recipientReference);
+  return InterpretedIntentDraftV1.parse({
+    ...value,
+    goal: {
+      type: "DELIVER_MONEY",
+      ...(sourceAmount === undefined ? {} : { amount: sourceAmount }),
+      ...(supportedRecipient ? { recipientReference } : {}),
+    },
+  });
+}
+
+async function groundingForIntent(draft: InterpretedIntentDraft, existing: readonly EntityGroundingResult[], grounder: EntityGrounder): Promise<EntityGroundingResult[]> {
+  const occurrences = [...new Map(intentReferenceOccurrences(draft).map((item) => [`${item.reference}\u0000${item.expectedEntityType ?? ""}`, item])).values()];
+  return Promise.all(occurrences.map(async (item) => {
+    const preserved = existing.find((result) => result.reference === item.reference && groundingMatchesType(result, item.expectedEntityType));
+    if (preserved !== undefined) return preserved;
+    return grounder.ground(item.expectedEntityType === undefined
+      ? { reference: item.reference }
+      : { reference: item.reference, expectedEntityType: item.expectedEntityType });
+  }));
+}
+
+function groundingMatchesType(result: EntityGroundingResult, expectedEntityType: GroundableEntityType | undefined): boolean {
+  if (expectedEntityType === undefined) return true;
+  if (result.status === "RESOLVED") return result.entityType === expectedEntityType;
+  if (result.expectedEntityType === expectedEntityType) return true;
+  return result.status !== "NOT_FOUND" && result.candidates.some((candidate) => candidate.entityType === expectedEntityType);
+}
+
+function clarificationQueue(
+  draft: InterpretedIntentDraft,
+  ambiguity: ReturnType<IntentAmbiguityDetector["analyze"]>,
+  invalidField?: string,
+): ClarificationItem[] {
+  const entityClarifications = ambiguity.status === "NEEDS_CLARIFICATION" ? [...ambiguity.clarifications] : [];
+  if (draft.goal.type !== "DELIVER_MONEY") return entityClarifications;
+  const missing: ClarificationItem[] = [];
+  if (draft.goal.recipientReference === undefined) {
+    missing.push({
+      reason: invalidField === "goal.recipientReference" ? "INVALID_FIELD" : "MISSING_FIELD",
+      field: "goal.recipientReference", originalReference: "transfer recipient",
+      questionKey: "clarify.transfer.recipient", options: [],
+    });
+  }
+  if (draft.goal.amount?.minorUnits === undefined) {
+    missing.push({
+      reason: invalidField === "goal.amount" ? "INVALID_FIELD" : "MISSING_FIELD",
+      field: "goal.amount", originalReference: "transfer amount",
+      questionKey: "clarify.transfer.amount", options: [],
+    });
+  } else if (draft.goal.amount.currency === undefined) {
+    missing.push({
+      reason: invalidField === "goal.amount.currency" ? "INVALID_FIELD" : "MISSING_FIELD",
+      field: "goal.amount.currency", originalReference: "transfer currency",
+      questionKey: "clarify.transfer.currency", options: [],
+    });
+  }
+  return [...entityClarifications, ...missing];
+}
+
+function isMissingFieldClarification(clarification: ClarificationItem): boolean {
+  return clarification.reason === "MISSING_FIELD" || clarification.reason === "INVALID_FIELD";
+}
+
+function applyMissingFieldAnswer(draft: InterpretedIntentDraft, clarification: ClarificationItem, answerText: string): { draft: InterpretedIntentDraft; accepted: boolean } {
+  if (draft.goal.type !== "DELIVER_MONEY") return { draft, accepted: false };
+  if (clarification.field === "goal.recipientReference") {
+    return {
+      draft: InterpretedIntentDraftV1.parse({ ...draft, goal: { ...draft.goal, recipientReference: answerText.trim() } }),
+      accepted: true,
+    };
+  }
+  if (clarification.field === "goal.amount") {
+    const amount = parseTransferAmount(answerText, knownExplicitCurrency(draft.originalText));
+    if (amount === undefined) return { draft, accepted: false };
+    return { draft: InterpretedIntentDraftV1.parse({ ...draft, goal: { ...draft.goal, amount } }), accepted: true };
+  }
+  if (clarification.field === "goal.amount.currency") {
+    const currency = parseCurrencyAnswer(answerText);
+    if (currency === undefined || draft.goal.amount?.minorUnits === undefined) return { draft, accepted: false };
+    return {
+      draft: InterpretedIntentDraftV1.parse({ ...draft, goal: { ...draft.goal, amount: { currency, minorUnits: draft.goal.amount.minorUnits } } }),
+      accepted: true,
+    };
+  }
+  return { draft, accepted: false };
+}
+
+function parseTransferAmount(value: string, establishedCurrency?: string): { currency?: string; minorUnits: string } | undefined {
+  const match = value.trim().match(/^(?:(SGD|USD|S\$|US\$|\$)\s*)?((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)(?:\s*(SGD|USD))?$/iu);
+  if (match === null) return undefined;
+  const prefix = match[1]; const suffix = match[3];
+  const prefixCurrency = prefix === undefined || prefix === "$" ? undefined : /^(?:SGD|S\$)$/iu.test(prefix) ? "SGD" : "USD";
+  const suffixCurrency = suffix?.toUpperCase();
+  if (prefixCurrency !== undefined && suffixCurrency !== undefined && prefixCurrency !== suffixCurrency) return undefined;
+  const currency = prefixCurrency ?? suffixCurrency ?? establishedCurrency;
+  const normalized = match[2]!.replaceAll(",", "");
+  const [whole, fraction = ""] = normalized.split(".");
+  const minorUnits = (BigInt(whole!) * 100n + BigInt(fraction.padEnd(2, "0"))).toString();
+  if (minorUnits === "0") return undefined;
+  return currency === undefined ? { minorUnits } : { currency, minorUnits };
+}
+
+function partialTransferMoneyFromSource(value: string): { currency?: string; minorUnits: string } | undefined {
+  const match = value.match(/\b(?:send|deliver|remit|wire|transfer)\s+(?:money\s+)?(?:(SGD|USD|S\$|US\$|\$)\s*)?((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)(?:\s*(SGD|USD))?\b/iu);
+  if (match === null) return undefined;
+  return parseTransferAmount(`${match[1] ?? ""}${match[2] ?? ""}${match[3] ?? ""}`, undefined);
+}
+
+function parseCurrencyAnswer(value: string): string | undefined {
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "SGD" || normalized === "S$") return "SGD";
+  if (normalized === "USD" || normalized === "US$") return "USD";
+  return undefined;
+}
+
+function knownExplicitCurrency(text: string): string | undefined {
+  const currencies = new Set<string>();
+  if (/\bSGD\b|S\$/iu.test(text)) currencies.add("SGD");
+  if (/\bUSD\b|US\$/iu.test(text)) currencies.add("USD");
+  return currencies.size === 1 ? [...currencies][0] : undefined;
+}
+
+function conversationEvidence(originalText: string, answers: readonly string[], draft: InterpretedIntentDraft): string {
+  let evidence = [originalText.trim().replace(/[.!?]+$/u, ""), ...answers].join(" ");
+  if (draft.goal.type === "DELIVER_MONEY" && draft.goal.amount?.currency !== undefined && draft.goal.amount.minorUnits !== undefined) {
+    const money = { currency: draft.goal.amount.currency, minorUnits: draft.goal.amount.minorUnits };
+    if (!sourceSupportsMoney(evidence, money)) evidence += ` ${money.currency} ${minorUnitsForEvidence(money.minorUnits)}`;
+  }
+  return evidence;
+}
+
+function minorUnitsForEvidence(minorUnits: string): string {
+  const value = BigInt(minorUnits); const whole = value / 100n; const fraction = (value % 100n).toString().padStart(2, "0");
+  return `${whole}.${fraction}`;
+}
+
+export class InvestmentFundingService {
+  constructor(
+    private readonly repository: GoalConfirmationRepository & ParlanceRepository,
+    private readonly bank: BankPort,
+    private readonly now: () => Date = () => new Date(),
+    private readonly newId: () => string = randomUUID,
+  ) {}
+
+  async propose(goalId: string, value: unknown, traceId: string) {
+    const input = InvestmentFundingInput.parse(value);
+    const stored = await this.repository.getConfirmedGoal(goalId);
+    if (!stored) throw new Error("CONFIRMED_GOAL_NOT_FOUND");
+    const contract = GoalContractV1.parse(stored.contract);
+    if (contract.goal.type !== "ACQUIRE_ASSET") throw new Error("INVESTMENT_FUNDING_NOT_APPLICABLE");
+    const snapshot = await this.bank.getState(contract.userId, traceId);
+    if (snapshot.userId !== contract.userId) throw new Error("STATE_USER_MISMATCH");
+    const source = snapshot.accounts.find((account) => account.id === input.sourceAccountId);
+    if (!source || source.status !== "ACTIVE" || source.currency !== "SGD" || !source.capabilities.includes("CONVERT_FX")) {
+      throw new Error("FUNDING_ACCOUNT_NOT_ELIGIBLE");
+    }
+    const existingMinimums = contract.constraints.flatMap((constraint) =>
+      constraint.type === "MIN_AVAILABLE_BALANCE"
+      && constraint.money.currency === "SGD"
+      && (constraint.accountId === undefined || constraint.accountId === source.id) ? [constraint] : []);
+    if (input.minimumSgdReserveMinorUnits !== undefined) {
+      const requested = BigInt(input.minimumSgdReserveMinorUnits);
+      if (existingMinimums.some((constraint) => requested < BigInt(constraint.money.minorUnits))) {
+        throw new Error("FUNDING_RESERVE_CANNOT_WEAKEN_CONSTRAINT");
+      }
+    }
+
+    const bindingReference = (entityId: string, fallback: string) => contract.entityBindings.find((binding) => binding.entityId === entityId)?.reference ?? fallback;
+    const sourceReference = bindingReference(source.id, source.id);
+    const assetReference = bindingReference(contract.goal.assetId, contract.goal.assetId);
+    const constraints = [...contract.constraints];
+    if (input.minimumSgdReserveMinorUnits !== undefined
+      && !existingMinimums.some((constraint) => constraint.accountId === source.id && constraint.money.minorUnits === input.minimumSgdReserveMinorUnits)) {
+      constraints.push({ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: input.minimumSgdReserveMinorUnits }, accountId: source.id });
+    }
+    const preferences = contract.preferences.some((preference) => preference.type === "PREFER_ACCOUNT" && preference.accountId === source.id)
+      ? [...contract.preferences]
+      : [...contract.preferences, { type: "PREFER_ACCOUNT" as const, accountId: source.id }];
+    const entityBindings = contract.entityBindings.map((binding) => ({ ...binding, confirmed: false as const }));
+    if (!entityBindings.some((binding) => binding.entityType === "ACCOUNT" && binding.entityId === source.id)) {
+      entityBindings.push({ schemaVersion: "1", reference: sourceReference, entityType: "ACCOUNT", entityId: source.id, resolutionMethod: "USER_CONFIRMED", confirmed: false });
+    }
+    const candidate = GoalContractCandidateV1.parse({
+      schemaVersion: "1", goal: contract.goal, constraints, preferences, entityBindings,
+    });
+    const intentDraft: IntentDraftV1 = {
+      schemaVersion: "1",
+      originalText: "Review SGD funding for the confirmed investment.",
+      goal: {
+        type: "ACQUIRE_ASSET", assetReference,
+        ...(contract.goal.budget === undefined ? {} : { budget: contract.goal.budget }),
+        ...(contract.goal.quantity === undefined ? {} : { quantity: contract.goal.quantity }),
+      },
+      constraints: constraints.map((constraint) => {
+        if (constraint.type === "EXCLUDED_ACCOUNT") return { type: constraint.type, accountReference: bindingReference(constraint.accountId, constraint.accountId) };
+        if (constraint.type === "MIN_AVAILABLE_BALANCE") return { type: constraint.type, money: constraint.money, ...(constraint.accountId ? { accountReference: bindingReference(constraint.accountId, constraint.accountId) } : {}) };
+        return constraint;
+      }),
+      preferences: preferences.map((preference) => preference.type === "PREFER_ACCOUNT"
+        ? { type: preference.type, accountReference: bindingReference(preference.accountId, preference.accountId) }
+        : preference),
+      references: [],
+    };
+    const originalText = input.minimumSgdReserveMinorUnits === undefined
+      ? "Review converting SGD to USD to fund my confirmed investment."
+      : `Review converting SGD to USD to fund my confirmed investment while keeping at least SGD ${input.minimumSgdReserveMinorUnits} minor units available.`;
+    intentDraft.originalText = originalText;
+    const rebuilt = new DeterministicGoalContractBuilder().build({
+      draft: intentDraft,
+      groundingResults: entityBindings.map((binding) => ({
+        status: "RESOLVED" as const, reference: binding.reference, entityType: binding.entityType,
+        entityId: binding.entityId, resolutionMethod: binding.resolutionMethod === "SEMANTIC" ? "USER_CONFIRMED" as const : binding.resolutionMethod,
+      })),
+    });
+    if (canonicalHash({ goal: rebuilt.goal, constraints: rebuilt.constraints, preferences: rebuilt.preferences })
+      !== canonicalHash({ goal: candidate.goal, constraints: candidate.constraints, preferences: candidate.preferences })) {
+      throw new Error("FUNDING_CANDIDATE_VALIDATION_FAILED");
+    }
+    const candidateId = this.newId();
+    const createdAt = this.now().toISOString();
+    const saved = await this.repository.saveGoalCandidate({
+      candidateId, goalContractId: contract.id, userId: contract.userId, version: contract.version + 1,
+      createdAt, candidate, originalText, intentDraft,
+      inputProvenance: { inputMode: "TYPED", submittedText: originalText, edited: false },
+      semanticValidation: { decision: "PASS", mismatches: [], input: { inputMode: "TYPED", submittedText: originalText, edited: false }, clarificationAnswers: [] },
+      traceId,
+    });
+    return { status: "AWAITING_GOAL_CONFIRMATION" as const, candidateId: saved.candidateId, goalCandidate: saved.candidate };
   }
 }
 

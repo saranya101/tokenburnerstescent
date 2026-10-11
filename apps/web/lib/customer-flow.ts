@@ -6,9 +6,9 @@ type Context = { requestText: string; plan: FinancialPlanV1 } & ({ goal: GoalCon
 type ExecutionContext = Context & { executionId: string };
 export type CustomerFlowState =
   | { phase: "RESTORING_EXECUTION" }
-  | { phase: "COMPOSE" }
+  | { phase: "COMPOSE"; draftText?: string }
   | { phase: "INTERPRETING"; requestText: string }
-  | { phase: "CLARIFICATION"; requestText: string; clarificationId: string; clarifications: Clarification[]; answers: ClarificationAnswer[]; bundle: boolean }
+  | { phase: "CLARIFICATION"; requestText: string; clarificationId: string; clarifications: Clarification[]; answers: ClarificationAnswer[]; bundle: boolean; submitting?: boolean; error?: string }
   | { phase: "SEMANTIC_VALIDATION_FAILED"; requestText: string; message: string }
   | { phase: "GOAL_REVIEW"; requestText: string; candidateId: string; candidate: GoalCandidate; answers: ClarificationAnswer[] }
   | { phase: "BUNDLE_REVIEW"; requestText: string; candidateId: string; candidate: GoalBundleCandidate; answers: ClarificationAnswer[] }
@@ -32,7 +32,7 @@ export type CustomerFlowState =
   | ({ phase: "REAPPROVAL_REQUIRED"; result: ExecutionResultV1 } & ExecutionContext)
   | ({ phase: "PARTIALLY_COMPLETED"; result: ExecutionResultV1 } & ExecutionContext)
   | ({ phase: "RECOVERY_PENDING"; executionId: string; requestText: string } & Partial<Pick<Context, "plan" | "goal" | "bundle">>)
-  | { phase: "UNAVAILABLE"; requestText: string; kind: "UNSAT" | "POLICY_BLOCKED"; message: string }
+  | { phase: "UNAVAILABLE"; requestText: string; kind: "UNSAT" | "POLICY_BLOCKED"; reasonCode: string; message: string; details?: Readonly<Record<string, unknown>>; goal?: GoalContractV1; bundle?: GoalBundleContractV1 }
   | ({ phase: "EXECUTION_ERROR"; message: string; result?: ExecutionResultV1 } & ExecutionContext)
   | { phase: "ERROR"; requestText?: string; message: string };
 
@@ -117,10 +117,19 @@ export class CustomerFlowController {
   private async continueClarification(clarification: Clarification, answer: { selectedCandidateId: string } | { answerText: string }, displayAnswer: string): Promise<void> {
     if (this.clarificationInFlight) return;
     if (this.state.phase !== "CLARIFICATION") throw new Error("INVALID_FLOW_STATE");
-    const { requestText, clarificationId, answers, bundle } = this.state; this.clarificationInFlight = true;
+    const { requestText, clarificationId, clarifications, answers, bundle } = this.state; this.clarificationInFlight = true;
+    this.transition({ phase: "CLARIFICATION", requestText, clarificationId, clarifications, answers, bundle, submitting: true });
     try {
       const response = bundle ? await this.api.answerBundleClarification(clarificationId, answer) : await this.api.answerClarification(clarificationId, answer);
-      this.applyInterpretation(response, requestText, [...answers, { reference: clarification.originalReference, answer: displayAnswer }]);
+      if ((response.status === "NEEDS_CLARIFICATION" || response.status === "NEEDS_BUNDLE_CLARIFICATION") && sameClarification(clarification, response.clarifications[0])) {
+        this.transition({
+          phase: "CLARIFICATION", requestText, clarificationId: response.clarificationId, clarifications: response.clarifications,
+          answers, bundle: response.status === "NEEDS_BUNDLE_CLARIFICATION", submitting: false,
+          error: "We couldn’t match that answer to an eligible banking record. Check the name and try again, or start over.",
+        });
+      } else {
+        this.applyInterpretation(response, requestText, [...answers, { reference: clarification.originalReference, answer: displayAnswer }]);
+      }
     } catch (error) { this.transition({ phase: "ERROR", requestText, message: message(error) }); }
     finally { this.clarificationInFlight = false; }
   }
@@ -144,7 +153,7 @@ export class CustomerFlowController {
         try {
           const result = await this.api.compileGoalBundle(bundle.bundleId);
           if ("financialPlan" in result) this.transition({ phase: "PLAN_REVIEW", requestText, bundle, plan: result.financialPlan });
-          else if (result.status !== "SAT") this.transition({ phase: "UNAVAILABLE", requestText, kind: result.status, message: result.reason.message });
+          else if (result.status !== "SAT") this.transition({ phase: "UNAVAILABLE", requestText, kind: result.status, reasonCode: result.reason.code, message: result.reason.message, ...(result.reason.details ? { details: result.reason.details } : {}), bundle });
           else throw new Error("BUNDLE_COMPILER_RESPONSE_INVALID");
         } catch (error) { this.transition({ phase: "ERROR", requestText, message: message(error) }); }
       } else {
@@ -154,10 +163,22 @@ export class CustomerFlowController {
         try {
           const result = await this.api.compileGoal(goal.id);
           if (result.status === "SAT") this.transition({ phase: "PLAN_REVIEW", requestText, goal, plan: result.plan });
-          else this.transition({ phase: "UNAVAILABLE", requestText, kind: result.status, message: result.reason.message });
+          else this.transition({ phase: "UNAVAILABLE", requestText, kind: result.status, reasonCode: result.reason.code, message: result.reason.message, ...(result.reason.details ? { details: result.reason.details } : {}), goal });
         } catch (error) { this.transition({ phase: "ERROR", requestText, message: message(error) }); }
       }
     } finally { this.meaningConfirmationInFlight = false; }
+  }
+
+  async reviewInvestmentFunding(sourceAccountId: string, minimumSgdReserveMinorUnits?: string): Promise<void> {
+    if (this.state.phase !== "UNAVAILABLE" || this.state.reasonCode !== "INSUFFICIENT_FUNDS" || this.state.goal?.goal.type !== "ACQUIRE_ASSET") throw new Error("INVALID_FLOW_STATE");
+    const { requestText, goal } = this.state;
+    this.transition({ phase: "INTERPRETING", requestText });
+    try {
+      const response = await this.api.proposeInvestmentFunding(goal.id, sourceAccountId, minimumSgdReserveMinorUnits);
+      this.applyInterpretation(response, requestText, []);
+    } catch (error) {
+      this.transition({ phase: "ERROR", requestText, message: message(error) });
+    }
   }
 
   async authorizeAndExecute(): Promise<void> {
@@ -262,15 +283,32 @@ export class CustomerFlowController {
       if ("bundle" in context) {
         const result = await this.api.compileGoalBundle(context.bundle.bundleId);
         if ("financialPlan" in result) { if (clearRecovery) this.resumeStore?.clear(); this.transition({ phase: "PLAN_REVIEW", requestText: context.requestText, bundle: context.bundle, plan: result.financialPlan, refreshed: true }); }
-        else if (result.status !== "SAT") this.transition({ phase: "UNAVAILABLE", requestText: context.requestText, kind: result.status, message: result.reason.message }); else throw new Error("BUNDLE_COMPILER_RESPONSE_INVALID");
+        else if (result.status !== "SAT") this.transition({ phase: "UNAVAILABLE", requestText: context.requestText, kind: result.status, reasonCode: result.reason.code, message: result.reason.message, ...(result.reason.details ? { details: result.reason.details } : {}), bundle: context.bundle }); else throw new Error("BUNDLE_COMPILER_RESPONSE_INVALID");
       } else {
         const result = await this.api.compileGoal(context.goal.id);
         if (result.status === "SAT") { if (clearRecovery) this.resumeStore?.clear(); this.transition({ phase: "PLAN_REVIEW", requestText: context.requestText, goal: context.goal, plan: result.plan, refreshed: true }); }
-        else this.transition({ phase: "UNAVAILABLE", requestText: context.requestText, kind: result.status, message: result.reason.message });
+        else this.transition({ phase: "UNAVAILABLE", requestText: context.requestText, kind: result.status, reasonCode: result.reason.code, message: result.reason.message, ...(result.reason.details ? { details: result.reason.details } : {}), goal: context.goal });
       }
     } catch (error) { this.transition({ phase: "ERROR", requestText: context.requestText, message: message(error) }); }
   }
+  amendRequest(): void {
+    if (this.state.phase !== "UNAVAILABLE") throw new Error("INVALID_FLOW_STATE");
+    this.resumeStore?.clear(); this.transition({ phase: "COMPOSE", draftText: this.state.requestText });
+  }
   reset(): void { this.resumeStore?.clear(); this.transition({ phase: "COMPOSE" }); }
+}
+
+function sameClarification(previous: Clarification, next: Clarification | undefined): boolean {
+  if (next === undefined) return false;
+  return previous.reason === next.reason
+    && previous.field === next.field
+    && previous.originalReference === next.originalReference
+    && previous.questionKey === next.questionKey
+    && previous.options.length === next.options.length
+    && previous.options.every((option, index) => {
+      const candidate = next.options[index];
+      return candidate?.entityId === option.entityId && candidate.entityType === option.entityType;
+    });
 }
 
 function contextFrom(state: Extract<CustomerFlowState, { plan: FinancialPlanV1 }>): Context {

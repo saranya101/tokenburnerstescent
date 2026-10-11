@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Id, MoneyV1, NonNegativeDecimalString, SchemaVersionV1 } from "./common.js";
+import { CurrencyCode, Id, MoneyV1, NonNegativeDecimalString, NonNegativeMinorUnits, SchemaVersionV1 } from "./common.js";
 
 export const AcquireAssetIntentGoalV1 = z.object({
   type: z.literal("ACQUIRE_ASSET"), assetReference: Id,
@@ -43,3 +43,34 @@ export const IntentDraftV1 = z.object({
   constraints: z.array(IntentGoalConstraintV1), preferences: z.array(IntentPreferenceV1), references: z.array(IntentReferenceV1),
 }).strict();
 export type IntentDraftV1 = z.infer<typeof IntentDraftV1>;
+
+/**
+ * Untrusted, non-executable interpretation used only while a transfer is incomplete.
+ * The complete IntentDraftV1 remains the required boundary for goal construction.
+ */
+export const PartialMoneyV1 = z.object({
+  currency: CurrencyCode.optional(),
+  minorUnits: NonNegativeMinorUnits.optional(),
+}).strict();
+export type PartialMoneyV1 = z.infer<typeof PartialMoneyV1>;
+
+export const IncompleteTransferIntentDraftV1 = z.object({
+  schemaVersion: SchemaVersionV1,
+  originalText: z.string().min(1),
+  goal: z.object({
+    type: z.literal("DELIVER_MONEY"),
+    amount: PartialMoneyV1.optional(),
+    recipientReference: Id.optional(),
+  }).strict(),
+  constraints: z.array(IntentGoalConstraintV1),
+  preferences: z.array(IntentPreferenceV1),
+  references: z.array(IntentReferenceV1),
+}).strict().superRefine((draft, context) => {
+  if (IntentDraftV1.safeParse(draft).success) {
+    context.addIssue({ code: "custom", message: "IncompleteTransferIntentDraftV1 must have a missing transfer field" });
+  }
+});
+export type IncompleteTransferIntentDraftV1 = z.infer<typeof IncompleteTransferIntentDraftV1>;
+
+export const InterpretedIntentDraftV1 = z.union([IntentDraftV1, IncompleteTransferIntentDraftV1]);
+export type InterpretedIntentDraftV1 = z.infer<typeof InterpretedIntentDraftV1>;

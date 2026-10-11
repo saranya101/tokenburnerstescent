@@ -9,6 +9,7 @@ export const customerDesktopNavigation: BankingNavItem[] = [
   { id: "cards", label: "Cards", href: "/#accounts", icon: "card" },
   { id: "invest", label: "Invest", href: "/invest", icon: "invest" },
   { id: "parlance", label: "Pay & Transfer", href: "/chat", icon: "transfer" },
+  { id: "pay", label: "Saved payees", href: "/payees", icon: "recipient" },
 ];
 
 export const customerMobileNavigation = ["home", "parlance", "accounts", "invest"].map((id) => customerDesktopNavigation.find((item) => item.id === id)!).filter(Boolean);

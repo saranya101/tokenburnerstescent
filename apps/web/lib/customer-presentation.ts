@@ -1,10 +1,10 @@
-import type { FinancialPlanStepV1, FinancialPlanV1, GoalBundleContractV1, GoalContractV1, MoneyV1 } from "@parlance/contracts";
+import type { BankStateSnapshotV1, FinancialPlanStepV1, FinancialPlanV1, GoalBundleContractV1, GoalContractV1, MoneyV1 } from "@parlance/contracts";
 
 export type GoalDetail = { label: string; value: string };
 export type GoalSummary = { eyebrow: string; title: string; description: string; details: GoalDetail[]; constraints: string[]; preferences: string[] };
 export type PresentedPlanStep = { id: string; kind: string; title: string; summary: string; meta: Array<{ label: string; value: string }>; dependsOn?: string };
 export type FundingItem = { account: string; amount: string; detail: string };
-export type PlanPresentation = { goal: GoalSummary; planTitle: string; planSummary: string; steps: PresentedPlanStep[]; funding: FundingItem[]; preservedConstraints: string[] };
+export type PlanPresentation = { goal: GoalSummary; planTitle: string; planSummary: string; steps: PresentedPlanStep[]; funding: FundingItem[]; preservedConstraints: string[]; acquiredAssets?: Array<{ assetId: string; asset: string; quantity: string }>; projectedBalances?: Array<{ account: string; amount: string }>; projectedHoldings?: Array<{ assetId: string; asset: string; quantity: string }>; validUntil?: string };
 export type BundleSummary = { items: Array<{ itemId: string; text: string; ordered: boolean }>; constraints: string[] };
 
 export function formatMoney(money: MoneyV1): string {
@@ -38,7 +38,41 @@ function customerName(id: string, reference: string | undefined, entityType: Goa
 function names(goal: Pick<GoalContractV1, "entityBindings">, referenceLabels: ReadonlyMap<string, string> = new Map()): Map<string, string> {
   return new Map(goal.entityBindings.map((binding) => [binding.entityId, customerName(binding.entityId, referenceLabels.get(binding.reference) ?? binding.reference, binding.entityType)]));
 }
+
+function authoritativeReferenceLabels(goal: Pick<GoalContractV1, "entityBindings">, state?: BankStateSnapshotV1): Map<string, string> {
+  if (!state) return new Map();
+  return new Map(goal.entityBindings.flatMap((binding): Array<[string, string]> => {
+    if (binding.entityType === "BENEFICIARY") {
+      const beneficiary = state.beneficiaries.find((candidate) => candidate.id === binding.entityId);
+      return beneficiary ? [[binding.reference, beneficiary.name]] : [];
+    }
+    if (binding.entityType === "ASSET") {
+      const asset = state.assets.find((candidate) => candidate.id === binding.entityId);
+      return asset ? [[binding.reference, asset.name]] : [];
+    }
+    return [];
+  }));
+}
 const named = (map: Map<string, string>, id: string, entityType: GoalContractV1["entityBindings"][number]["entityType"] | "ACCOUNT" = "ACCOUNT"): string => map.get(id) ?? customerName(id, undefined, entityType);
+
+function addDecimalQuantities(left: string, right: string): string {
+  const parts = (value: string) => { const [whole = "0", fraction = ""] = value.split("."); return { whole, fraction }; };
+  const a = parts(left); const b = parts(right); const scale = Math.max(a.fraction.length, b.fraction.length);
+  const units = (value: { whole: string; fraction: string }) => BigInt(`${value.whole}${value.fraction.padEnd(scale, "0")}`);
+  const digits = (units(a) + units(b)).toString().padStart(scale + 1, "0");
+  if (scale === 0) return digits;
+  const fraction = digits.slice(-scale).replace(/0+$/u, "");
+  return fraction.length === 0 ? digits.slice(0, -scale) : `${digits.slice(0, -scale)}.${fraction}`;
+}
+
+function convertedMinorUnits(sourceMinorUnits: string, rate: string): string | undefined {
+  const match = /^(\d+)(?:\.(\d+))?$/u.exec(rate);
+  if (!match) return undefined;
+  const fraction = match[2] ?? ""; const denominator = 10n ** BigInt(fraction.length);
+  const numerator = BigInt(`${match[1]}${fraction}`); const product = BigInt(sourceMinorUnits) * numerator;
+  const quotient = product / denominator; const remainder = product % denominator; const doubled = remainder * 2n;
+  return (doubled > denominator || (doubled === denominator && quotient % 2n !== 0n) ? quotient + 1n : quotient).toString();
+}
 
 function constraintText(constraint: GoalContractV1["constraints"][number], map: Map<string, string>): string {
   if (constraint.type === "MAX_TOTAL_COST") return `Spend no more than ${formatMoney(constraint.money)}`;
@@ -63,10 +97,20 @@ export function presentGoal(goal: Pick<GoalContractV1, "goal" | "constraints" | 
   return { eyebrow, title, description, details, constraints: goal.constraints.map((item) => constraintText(item, map)), preferences: goal.preferences.map((item) => preferenceText(item, map)) };
 }
 
-function presentStep(step: FinancialPlanStepV1, map: Map<string, string>): PresentedPlanStep {
+function fxQuoteMeta(step: Extract<FinancialPlanStepV1, { action: "FX_CONVERT" }>, snapshot?: BankStateSnapshotV1): Array<{ label: string; value: string }> {
+  const quote = snapshot?.fxQuotes.find((item) => item.id === step.parameters.quoteId);
+  if (!quote) return [];
+  return [
+    { label: "Exchange rate", value: `1 ${quote.fromCurrency} = ${quote.rate} ${quote.toCurrency}` },
+    { label: "Conversion fee", value: quote.fee ? formatMoney(quote.fee) : "No fee" },
+    ...(convertedMinorUnits(step.parameters.sourceMoney.minorUnits, quote.rate) ? [{ label: `${quote.toCurrency} proceeds`, value: formatMoney({ currency: quote.toCurrency, minorUnits: convertedMinorUnits(step.parameters.sourceMoney.minorUnits, quote.rate)! }) }] : []),
+  ];
+}
+
+function presentStep(step: FinancialPlanStepV1, map: Map<string, string>, snapshot?: BankStateSnapshotV1): PresentedPlanStep {
   const dependency = step.dependsOn.length ? step.dependsOn.join(", ") : undefined;
   if (step.action === "TRANSFER") return { id: step.id, kind: "Payment", title: `Send ${formatMoney(step.parameters.amount)}`, summary: `${named(map, step.parameters.sourceAccountId)} to ${named(map, step.parameters.beneficiaryId, "BENEFICIARY")}`, meta: [{ label: "From", value: named(map, step.parameters.sourceAccountId) }, { label: "To", value: named(map, step.parameters.beneficiaryId, "BENEFICIARY") }], ...(dependency ? { dependsOn: dependency } : {}) };
-  if (step.action === "FX_CONVERT") return { id: step.id, kind: "Currency conversion", title: `Convert ${formatMoney(step.parameters.sourceMoney)} to ${step.parameters.targetCurrency}`, summary: `${named(map, step.parameters.sourceAccountId)} to ${named(map, step.parameters.destinationAccountId)}`, meta: [{ label: "From", value: named(map, step.parameters.sourceAccountId) }, { label: "To", value: named(map, step.parameters.destinationAccountId) }], ...(dependency ? { dependsOn: dependency } : {}) };
+  if (step.action === "FX_CONVERT") return { id: step.id, kind: "Currency conversion", title: `Convert ${formatMoney(step.parameters.sourceMoney)} to ${step.parameters.targetCurrency}`, summary: `${named(map, step.parameters.sourceAccountId)} to ${named(map, step.parameters.destinationAccountId)}`, meta: [{ label: "From", value: named(map, step.parameters.sourceAccountId) }, { label: "To", value: named(map, step.parameters.destinationAccountId) }, ...fxQuoteMeta(step, snapshot)], ...(dependency ? { dependsOn: dependency } : {}) };
   if (step.action === "MOVE_FUNDS") return { id: step.id, kind: "Move", title: formatMoney(step.parameters.amount), summary: `${named(map, step.parameters.sourceAccountId)} → ${named(map, step.parameters.destinationAccountId)}`, meta: [{ label: "Source", value: named(map, step.parameters.sourceAccountId) }, { label: "Destination", value: named(map, step.parameters.destinationAccountId) }], ...(dependency ? { dependsOn: dependency } : {}) };
   if (step.action === "PAY_BILL") return { id: step.id, kind: "Payment", title: formatMoney(step.parameters.amount), summary: `${named(map, step.parameters.sourceAccountId)} → ${named(map, step.parameters.obligationId, "OBLIGATION")}`, meta: [{ label: "Obligation", value: named(map, step.parameters.obligationId, "OBLIGATION") }], ...(dependency ? { dependsOn: dependency } : {}) };
   if (step.action === "BUY_ASSET") {
@@ -89,14 +133,29 @@ function presentStep(step: FinancialPlanStepV1, map: Map<string, string>): Prese
   return { id: step.id, kind: "Sell", title: `${step.parameters.quantity} ${named(map, step.parameters.assetId, "ASSET")}`, summary: `Investment holding → ${named(map, step.parameters.destinationAccountId)}`, meta: [{ label: "Quantity", value: step.parameters.quantity }], ...(dependency ? { dependsOn: dependency } : {}) };
 }
 
-export function presentPlan(goal: GoalContractV1, plan: FinancialPlanV1): PlanPresentation {
-  const map = names(goal); const warnings = plan.projectedOutcome.warnings;
-  const funding = plan.steps.flatMap((step): FundingItem[] => step.action === "FX_CONVERT" ? [{ account: named(map, step.parameters.sourceAccountId), amount: formatMoney(step.parameters.sourceMoney), detail: `Converted to ${step.parameters.targetCurrency}` }] : []);
+export function presentPlan(goal: GoalContractV1, plan: FinancialPlanV1, liveState?: BankStateSnapshotV1): PlanPresentation {
+  const referenceLabels = authoritativeReferenceLabels(goal, liveState);
+  const map = names(goal, referenceLabels); const warnings = plan.projectedOutcome.warnings;
+  const snapshot = liveState?.stateVersion === plan.bankStateVersion ? liveState : undefined;
+  const funding = plan.steps.flatMap((step): FundingItem[] => {
+    if (step.action !== "FX_CONVERT") return [];
+    const quote = snapshot?.fxQuotes.find((item) => item.id === step.parameters.quoteId);
+    const quoteDetail = quote ? `Rate 1 ${quote.fromCurrency} = ${quote.rate} ${quote.toCurrency}${quote.fee ? ` · fee ${formatMoney(quote.fee)}` : " · no fee"}` : `Converted to ${step.parameters.targetCurrency}`;
+    return [{ account: named(map, step.parameters.sourceAccountId), amount: formatMoney(step.parameters.sourceMoney), detail: quoteDetail }];
+  });
   return {
-    goal: presentGoal(goal), planTitle: goal.goal.type === "DELIVER_MONEY" ? "Review payment details" : "Review transaction details",
+    goal: presentGoal(goal, referenceLabels), planTitle: goal.goal.type === "DELIVER_MONEY" ? "Review payment details" : goal.goal.type === "ACQUIRE_ASSET" ? "Review your investment" : "Review transaction details",
     planSummary: "Review how this transaction will be completed using your latest account information.",
-    steps: plan.steps.map((step) => presentStep(step, map)), funding,
+    steps: plan.steps.map((step) => presentStep(step, map, snapshot)), funding,
     preservedConstraints: [...goal.constraints.map((item) => constraintText(item, map)), ...warnings],
+    acquiredAssets: plan.projectedOutcome.acquiredAssets.map((item) => ({ assetId: item.assetId, asset: named(map, item.assetId, "ASSET"), quantity: item.quantity })),
+    projectedBalances: plan.projectedOutcome.projectedAvailableBalances.map((item) => ({ account: named(map, item.accountId), amount: formatMoney(item.money) })),
+    ...(plan.validity.validUntil ? { validUntil: plan.validity.validUntil } : {}),
+    ...(snapshot === undefined ? {} : { projectedHoldings: plan.projectedOutcome.acquiredAssets.map((item) => ({
+      assetId: item.assetId,
+      asset: named(map, item.assetId, "ASSET"),
+      quantity: addDecimalQuantities(snapshot.holdings.find((holding) => holding.assetId === item.assetId)?.quantity ?? "0", item.quantity),
+    })) }),
   };
 }
 
@@ -111,14 +170,15 @@ export function presentBundle(bundle: Pick<GoalBundleContractV1, "items" | "glob
   };
 }
 
-export function presentBundlePlan(bundle: GoalBundleContractV1, plan: FinancialPlanV1): PlanPresentation {
+export function presentBundlePlan(bundle: GoalBundleContractV1, plan: FinancialPlanV1, liveState?: BankStateSnapshotV1): PlanPresentation {
   const entityBindings = bundle.items.flatMap(({ bindings }) => bindings);
   const map = names({ entityBindings }); const warnings = plan.projectedOutcome.warnings; const summary = presentBundle(bundle);
   const funding = plan.steps.flatMap((step): FundingItem[] => step.action === "FX_CONVERT" ? [{ account: named(map, step.parameters.sourceAccountId), amount: formatMoney(step.parameters.sourceMoney), detail: `Converted to ${step.parameters.targetCurrency}` }] : []);
   return {
     goal: { eyebrow: "Combined request", title: `${bundle.items.length} requested actions`, description: summary.items.map((item) => `${item.ordered ? "Then " : ""}${item.text}`).join(" · "), details: [], constraints: summary.constraints, preferences: [] },
     planTitle: "Review combined transaction details", planSummary: "One plan covers every confirmed action in this request.",
-    steps: plan.steps.map((step) => presentStep(step, map)), funding,
+    steps: plan.steps.map((step) => presentStep(step, map, liveState?.stateVersion === plan.bankStateVersion ? liveState : undefined)), funding,
     preservedConstraints: [...summary.constraints, ...warnings],
+    projectedBalances: plan.projectedOutcome.projectedAvailableBalances.map((item) => ({ account: named(map, item.accountId), amount: formatMoney(item.money) })),
   };
 }

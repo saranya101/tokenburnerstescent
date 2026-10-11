@@ -24,7 +24,7 @@ from app.models.contracts import (
 )
 from app.operations.library import operation_sort_key
 from app.operations.models import BuyAsset, FxConvert, InternalOperation, MoveFunds, Transfer
-from app.planner.acquire import compile_acquire_operation
+from app.planner.acquire import compile_acquire_route
 from app.planner.search import SearchDiagnostics, SearchNode, search_routes
 from app.policy.engine import PolicyEngine
 from app.simulator.apply import apply_operation
@@ -515,19 +515,22 @@ def compile_with_diagnostics(
         return CompileOutcome(_unsat("HARD_RULE_USER_MISMATCH"), None)
     policy = policy or PolicyEngine()
     if isinstance(goal.goal, AcquireAssetGroundedGoalV1):
-        operation = compile_acquire_operation(goal, snapshot, policy, hard_rules)
-        if not isinstance(operation, BuyAsset):
-            return CompileOutcome(operation, None)
-        applied = apply_operation(SimulatedState.from_snapshot(snapshot), operation)
-        if not applied.success:
-            return CompileOutcome(
-                _unsat(
-                    "COMPOSITE_SIMULATION_FAILED",
-                    violations=[violation.code for violation in applied.violations],
-                ),
-                None,
-            )
-        node = SearchNode(applied.state, (operation,))
+        route = compile_acquire_route(goal, snapshot, policy, hard_rules)
+        if not isinstance(route, tuple):
+            return CompileOutcome(route, None)
+        state = SimulatedState.from_snapshot(snapshot)
+        for operation in route:
+            applied = apply_operation(state, operation)
+            if not applied.success:
+                return CompileOutcome(
+                    _unsat(
+                        "COMPOSITE_SIMULATION_FAILED",
+                        violations=[violation.code for violation in applied.violations],
+                    ),
+                    None,
+                )
+            state = applied.state
+        node = SearchNode(state, route)
         plan = _build_plan(goal, snapshot, hard_rules, policy, node)
         return CompileOutcome(CompilerSatV1(schemaVersion="1", status="SAT", plan=plan), None)
     search = search_routes(goal, snapshot, hard_rules, policy, max_depth, max_states)

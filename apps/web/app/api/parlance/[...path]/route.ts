@@ -9,6 +9,7 @@ const postRoutes = [
   /^goal-candidates\/[^/]+\/confirm$/u,
   /^goal-bundle-candidates\/[^/]+\/confirm$/u,
   /^goals\/[^/]+\/compile$/u,
+  /^goals\/[^/]+\/funding-candidate$/u,
   /^goal-bundles\/[^/]+\/compile$/u,
   /^plans\/[^/]+\/approval-options$/u,
   /^plans\/[^/]+\/approval-verify$/u,

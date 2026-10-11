@@ -5,6 +5,7 @@ import { PlanRoute } from "../plan/plan-route";
 import { Icon } from "../ui/icon";
 
 export function SafeStopCard({ scenario, result, onDone, onStartOver, onCheckStatus }: { scenario: PlanPresentation; result: ExecutionResultV1; onDone(): void; onStartOver(): void; onCheckStatus(): void }) {
+  const investment = scenario.goal.details.some((detail) => detail.label === "Investment");
   const stepResults = scenario.steps.map((step) => result.steps.find((item) => item.stepId === step.id));
   const states = stepResults.map((stepResult) => {
     const status = stepResult?.status;
@@ -35,11 +36,11 @@ export function SafeStopCard({ scenario, result, onDone, onStartOver, onCheckSta
   const headingText = confirming
     ? "Confirming transaction status"
     : definitivePreWriteStop
-      ? "Payment stopped safely"
+      ? `${investment ? "Investment" : "Payment"} stopped safely`
       : reconciliationConflict
         ? "Bank result could not be confirmed"
         : completedBankEffect
-          ? "Payment completed"
+          ? `${investment ? "Investment" : "Payment"} completed`
           : "Transaction status needs review";
   const stopMessage = customerExecutionMessage(stoppedStep?.errorCode, "PAUSED");
   const statusLabels = stepResults.map((stepResult) => {
@@ -49,7 +50,7 @@ export function SafeStopCard({ scenario, result, onDone, onStartOver, onCheckSta
   return <div className="safe-stop-layout">
     <section className="product-card stopped-plan-card" aria-labelledby="safe-stop-plan-heading"><div className="card-heading-row"><div><p className="eyebrow">Your approved plan</p><h2 id="safe-stop-plan-heading">{scenario.planTitle}</h2></div><span className="stopped-status"><Icon name="shield" />{statusText}</span></div><PlanRoute scenario={scenario} states={states} statusLabels={statusLabels} /></section>
     <section className="product-card safe-stop-card" aria-labelledby="safe-stop-heading">
-      <div className="safe-stop-symbol"><Icon name="shield" /></div><p className="eyebrow">Payment protection</p><h2 id="safe-stop-heading">{headingText}</h2>
+      <div className="safe-stop-symbol"><Icon name="shield" /></div><p className="eyebrow">{investment ? "Investment" : "Payment"} protection</p><h2 id="safe-stop-heading">{headingText}</h2>
       <p className="safe-stop-lead"><strong>{stopMessage}.</strong>{definitivePreWriteStop && <><br />We stopped before any unapproved action could continue.</>}</p>
       <div className="safe-stop-detail"><p><Icon name="check" />No unapproved action will continue</p><p><Icon name="check" />Latest account state checked</p></div>
       <div className="safe-stop-actions">{confirming ? <button className="button bank-primary" type="button" onClick={onCheckStatus}>Check status</button> : <><button className="button bank-primary" type="button" onClick={onDone}>Done</button>{retryAllowed && <button className="button secondary" type="button" onClick={onStartOver}>Start another request</button>}</>}</div>

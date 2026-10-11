@@ -130,7 +130,8 @@ export function sourceSignalsPreference(sourceText: string, type: "FASTEST" | "M
 }
 
 export function sourceSignalsPreferredAccount(sourceText: string): boolean {
-  return /\bprefer(?:ably)?\s+(?:using\s+|use\s+)?\S|\buse\b[\s\S]{1,60}\bif\s+possible\b/iu.test(sourceText);
+  return /\bprefer(?:ably)?\s+(?:using\s+|use\s+)?\S|\buse\b[\s\S]{1,60}\bif\s+possible\b/iu.test(sourceText)
+    || sourceConditionalFundingCurrencies(sourceText).size > 0;
 }
 
 export function sourceContainsReference(sourceText: string, reference: string): boolean {
@@ -157,7 +158,28 @@ function sourceSupportsPreferredReference(sourceText: string, reference: string)
     ) return true;
     index = source.indexOf(target, index + target.length);
   }
-  return false;
+  const referenceCurrencies = new Set(reference.match(/\b(?:USD|SGD)\b/giu)?.map((currency) => currency.toUpperCase()) ?? []);
+  return [...sourceConditionalFundingCurrencies(sourceText)].some((currency) => referenceCurrencies.has(currency));
+}
+
+/**
+ * Returns only currencies that the customer explicitly made a conditional funding source.
+ * This validates evidence; it never selects an account or creates an FX operation.
+ */
+export function sourceConditionalFundingCurrencies(sourceText: string): ReadonlySet<string> {
+  const currencies = new Set<string>();
+  const patterns = [
+    /\b(?:use|using)\s+(?:my\s+)?(USD|SGD)(?:\s+account)?\s+(?:if|when)\s+(?:necessary|needed|required|the\s+[^.;!?]{0,50}\s+is\s+insufficient)\b/giu,
+    /\b(?:if|when)\s+[^.;!?]{0,90}\b(?:insufficient|not\s+enough|short)\b[^.;!?]{0,90}\b(?:convert|use|using)\s+(?:my\s+)?(USD|SGD)\b/giu,
+    /\b(?:convert|use|using)\s+(?:my\s+)?(USD|SGD)(?:\s+account)?\s+(?:as\s+needed|if\s+necessary|if\s+needed|to\s+cover\s+(?:the\s+)?shortfall)\b/giu,
+  ];
+  for (const pattern of patterns) {
+    for (const match of sourceText.matchAll(pattern)) {
+      const currency = match[1]?.toUpperCase();
+      if (currency !== undefined) currencies.add(currency);
+    }
+  }
+  return currencies;
 }
 
 function moneyEvidence(sourceText: string): readonly MoneyEvidence[] {

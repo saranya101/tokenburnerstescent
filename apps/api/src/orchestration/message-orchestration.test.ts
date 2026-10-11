@@ -1,13 +1,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { BankStateSnapshotV1, GoalContractV1, type IntentDraftV1 } from "@parlance/contracts";
+import { BankStateSnapshotV1, GoalContractV1, type IntentDraftV1, type InterpretedIntentDraftV1 } from "@parlance/contracts";
 import { GoalContractCandidateV1, type EntityGrounder, type EntityGroundingInput, type EntityGroundingResult, type GoalContractBuilder, type IntentInterpreter } from "@parlance/intent-engine";
 import { describe, expect, it, vi } from "vitest";
 import { hashGoalContract } from "../security/canonical-hash.js";
 import type { GoalConfirmationMetadata, GoalConfirmationRepository, ParlanceRepository, StoredClarificationRequest, StoredGoal, StoredGoalCandidate } from "./ports.js";
-import { CompilationService, MessageOrchestrationService } from "./services.js";
+import { CompilationService, InvestmentFundingService, MessageOrchestrationService } from "./services.js";
 
 const snapshot = BankStateSnapshotV1.parse(JSON.parse(readFileSync(join(process.cwd(), "../../packages/contracts/fixtures/01-ntu-transfer/bank-state.json"), "utf8")));
+const appleSnapshot = BankStateSnapshotV1.parse(JSON.parse(readFileSync(join(process.cwd(), "../../packages/contracts/fixtures/02-apple-investment/bank-state.json"), "utf8")));
 const transferDraft: IntentDraftV1 = {
   schemaVersion: "1", originalText: "send USD 500 to NTU",
   goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "NTU" },
@@ -31,7 +32,7 @@ class CandidateRepository implements GoalConfirmationRepository {
       this.candidate = { candidateId: this.clarification.clarificationId, goalContractId: this.clarification.goalContractId, userId: this.clarification.userId, version: this.clarification.version, createdAt: this.clarification.createdAt, candidate: input.candidate, ...(this.clarification.inputProvenance ? { inputProvenance: this.clarification.inputProvenance } : {}) };
       this.clarification = undefined; return { status: "AWAITING_GOAL_CONFIRMATION" as const, candidate: this.candidate! };
     }
-    this.clarification = { ...this.clarification, groundingResults: input.groundingResults, clarifications: input.clarifications };
+    this.clarification = { ...this.clarification, intentDraft: input.intentDraft, groundingResults: input.groundingResults, clarifications: input.clarifications, clarificationAnswers: [...(this.clarification.clarificationAnswers ?? []), input.answerText] };
     return { status: "NEEDS_CLARIFICATION" as const, request: this.clarification };
   }
   async saveGoalCandidate(input: Parameters<GoalConfirmationRepository["saveGoalCandidate"]>[0]) {
@@ -51,7 +52,7 @@ class CandidateRepository implements GoalConfirmationRepository {
 }
 
 class FixedInterpreter implements IntentInterpreter {
-  constructor(private readonly draft: IntentDraftV1) {}
+  constructor(private readonly draft: InterpretedIntentDraftV1) {}
   async interpretUserRequest() { return this.draft; }
 }
 
@@ -77,27 +78,199 @@ function confirmedGoal(overrides: Partial<GoalContractV1> = {}): GoalContractV1 
   return GoalContractV1.parse({ ...raw, contractHash: hashGoalContract(raw) });
 }
 
+function confirmedAppleGoal(overrides: Partial<GoalContractV1> = {}): GoalContractV1 {
+  const raw = GoalContractV1.parse({
+    schemaVersion: "1", id: "goal-apple", userId: "user-1", version: 1, sourceIntentDraftId: "candidate-apple",
+    goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [],
+    entityBindings: [{ schemaVersion: "1", reference: "Apple (AAPL)", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS", confirmed: true }],
+    status: "CONFIRMED", contractHash: "0".repeat(64), createdAt: "2026-09-25T10:00:00Z", confirmedAt: "2026-09-25T10:01:00Z", ...overrides,
+  });
+  return GoalContractV1.parse({ ...raw, contractHash: hashGoalContract(raw) });
+}
+
 function compilationRepository(goal: GoalContractV1): ParlanceRepository {
   return {
     getConfirmedGoal: async () => ({ rowId: "goal-row", contract: goal }), saveSnapshot: async () => {}, saveCompilationFailure: async () => {},
   } as unknown as ParlanceRepository;
 }
 
+
+describe("bounded conditional-funding reinterpretation", () => {
+  const text =
+    "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$1,000 available in my SGD account.";
+
+  const reserve = {
+    type: "MIN_AVAILABLE_BALANCE" as const,
+    money: { currency: "SGD", minorUnits: "100000" },
+    accountReference: "my SGD account",
+  };
+
+  const initialDraft: IntentDraftV1 = {
+    schemaVersion: "1",
+    originalText: text,
+    goal: {
+      type: "ACQUIRE_ASSET",
+      assetReference: "Apple",
+      quantity: "1",
+    },
+    constraints: [reserve],
+    preferences: [],
+    references: [],
+  };
+
+  const correctedDraft: IntentDraftV1 = {
+    ...initialDraft,
+    preferences: [{
+      type: "PREFER_ACCOUNT",
+      accountReference: "my SGD account",
+    }],
+  };
+
+  function setup(secondDraft: IntentDraftV1) {
+    const repository = new CandidateRepository();
+    const interpretUserRequest = vi.fn()
+      .mockResolvedValueOnce(initialDraft)
+      .mockResolvedValueOnce(secondDraft);
+
+    const interpreter: IntentInterpreter = { interpretUserRequest };
+
+    const grounder = new FixedGrounder((input) =>
+      input.expectedEntityType === "ASSET"
+        ? {
+            status: "RESOLVED",
+            reference: input.reference,
+            entityType: "ASSET",
+            entityId: "asset-aapl",
+            resolutionMethod: "ALIAS",
+          }
+        : {
+            status: "RESOLVED",
+            reference: input.reference,
+            entityType: "ACCOUNT",
+            entityId: "acc-sgd",
+            resolutionMethod: "ALIAS",
+          }
+    );
+
+    const messages = new MessageOrchestrationService(
+      repository,
+      interpreter,
+      () => grounder,
+    );
+
+    return { messages, repository, interpretUserRequest };
+  }
+
+  it("retries once and preserves funding plus the hard reserve", async () => {
+    const { messages, repository, interpretUserRequest } =
+      setup(correctedDraft);
+
+    const result = await messages.receive(
+      { userId: "user-1", text },
+      "trace-retry-success",
+    );
+
+    expect(interpretUserRequest).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: "AWAITING_GOAL_CONFIRMATION",
+      goalCandidate: {
+        goal: {
+          type: "ACQUIRE_ASSET",
+          assetId: "asset-aapl",
+          quantity: "1",
+        },
+        constraints: [{
+          type: "MIN_AVAILABLE_BALANCE",
+          accountId: "acc-sgd",
+          money: { currency: "SGD", minorUnits: "100000" },
+        }],
+        preferences: [{
+          type: "PREFER_ACCOUNT",
+          accountId: "acc-sgd",
+        }],
+      },
+    });
+
+    expect(repository.goal).toBeUndefined();
+    expect(repository.validationAudits).toEqual([
+      expect.objectContaining({
+        decision: "PASS",
+        mismatches: [],
+      }),
+    ]);
+  });
+
+  it("fails closed after a second omission", async () => {
+    const { messages, repository, interpretUserRequest } =
+      setup(initialDraft);
+
+    const result = await messages.receive(
+      { userId: "user-1", text },
+      "trace-retry-failure",
+    );
+
+    expect(interpretUserRequest).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: "SEMANTIC_VALIDATION_FAILED",
+    });
+    expect(repository.validationAudits).toEqual([
+      expect.objectContaining({
+        decision: "FAIL",
+        mismatches: expect.arrayContaining([
+          expect.objectContaining({
+            code: "OMITTED_EXPLICIT_PREFERENCE",
+            field: "preferences",
+          }),
+        ]),
+      }),
+    ]);
+    expect(repository.candidate).toBeUndefined();
+    expect(repository.goal).toBeUndefined();
+  });
+});
+
 describe("Person B to Person A confirmation boundary", () => {
+  it("grounds the exact Apple conditional-funding request without clarifying the source clause", async () => {
+    const text = "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$17,000 available in my SGD account.";
+    const draft: IntentDraftV1 = {
+      schemaVersion: "1", originalText: text,
+      goal: { type: "ACQUIRE_ASSET", assetReference: "Apple (AAPL)", quantity: "1" },
+      constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "1700000" }, accountReference: "my SGD account" }],
+      preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }], references: [],
+    };
+    const repository = new CandidateRepository();
+    const grounder = new FixedGrounder((input) => input.expectedEntityType === "ASSET"
+      ? { status: "RESOLVED", reference: input.reference, entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS" }
+      : { status: "RESOLVED", reference: input.reference, entityType: "ACCOUNT", entityId: "acc-sgd", resolutionMethod: "ALIAS" });
+    const messages = new MessageOrchestrationService(repository, new FixedInterpreter(draft), () => grounder);
+
+    await expect(messages.receive({ userId: "user-1", text }, "trace-exact-browser-regression")).resolves.toMatchObject({
+      status: "AWAITING_GOAL_CONFIRMATION",
+      goalCandidate: {
+        goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" },
+        constraints: [{ type: "MIN_AVAILABLE_BALANCE", accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "1700000" } }],
+        preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }],
+      },
+    });
+    expect(repository.goal).toBeUndefined();
+  });
+
   it.each([
     {
       text: "Buy 1 share of Apple (AAPL).",
       constraints: [] as IntentDraftV1["constraints"],
+      preferences: [] as IntentDraftV1["preferences"],
     },
     {
       text: "Buy 1 share of Apple (AAPL). If my USD balance is insufficient, convert SGD as needed. Keep at least S$1,000 available in my SGD account.",
-      constraints: [{ type: "MIN_AVAILABLE_BALANCE" as const, money: { currency: "SGD", minorUnits: "100000" }, accountReference: "SGD account" }],
+      constraints: [{ type: "MIN_AVAILABLE_BALANCE" as const, money: { currency: "SGD", minorUnits: "100000" }, accountReference: "my SGD account" }],
+      preferences: [{ type: "PREFER_ACCOUNT" as const, accountReference: "my SGD account" }],
     },
-  ])("grounds the stock request and stops at explicit goal confirmation: $text", async ({ text, constraints }) => {
+  ])("grounds the complete stock request and stops at explicit goal confirmation: $text", async ({ text, constraints, preferences }) => {
     const draft: IntentDraftV1 = {
       schemaVersion: "1", originalText: text,
       goal: { type: "ACQUIRE_ASSET", assetReference: "Apple", quantity: "1" },
-      constraints, preferences: [], references: [],
+      constraints, preferences, references: [],
     };
     const repository = new CandidateRepository();
     const grounder = new FixedGrounder((input) => input.expectedEntityType === "ASSET"
@@ -110,10 +283,35 @@ describe("Person B to Person A confirmation boundary", () => {
       goalCandidate: {
         goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" },
         constraints: constraints.length === 0 ? [] : [{ type: "MIN_AVAILABLE_BALANCE", accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "100000" } }],
+        preferences: preferences.length === 0 ? [] : [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }],
       },
     });
     expect(repository.validationAudits).toEqual([expect.objectContaining({ decision: "PASS", mismatches: [] })]);
     expect(repository.goal).toBeUndefined();
+  });
+
+  it("clarifies an ambiguous conditional SGD funding account before creating a goal candidate", async () => {
+    const text = "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$1,000 available in my SGD account.";
+    const draft: IntentDraftV1 = {
+      schemaVersion: "1", originalText: text,
+      goal: { type: "ACQUIRE_ASSET", assetReference: "Apple (AAPL)", quantity: "1" },
+      constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountReference: "my SGD account" }],
+      preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }], references: [],
+    };
+    const repository = new CandidateRepository();
+    const grounder = new FixedGrounder((input) => input.expectedEntityType === "ASSET"
+      ? { status: "RESOLVED", reference: input.reference, entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS" }
+      : { status: "AMBIGUOUS", reference: input.reference, expectedEntityType: "ACCOUNT", candidates: [
+        { entityType: "ACCOUNT", entityId: "acc-sgd-main", canonicalName: "DBS Multiplier Account", account: { currency: "SGD", accountType: "CHECKING", availableMinorUnits: "500000" } },
+        { entityType: "ACCOUNT", entityId: "acc-sgd-save", canonicalName: "DBS Savings Account", account: { currency: "SGD", accountType: "SAVINGS", availableMinorUnits: "300000" } },
+      ] });
+    const messages = new MessageOrchestrationService(repository, new FixedInterpreter(draft), () => grounder);
+    const result = await messages.receive({ userId: "user-1", text }, "trace-ambiguous-sgd");
+    expect(result).toMatchObject({ status: "NEEDS_CLARIFICATION", clarifications: [expect.objectContaining({ options: [
+      expect.objectContaining({ entityId: "acc-sgd-main" }),
+      expect.objectContaining({ entityId: "acc-sgd-save" }),
+    ] })] });
+    expect(repository.candidate).toBeUndefined();
   });
 
   it("grounds, waits for explicit confirmation, persists a semantic hash, and sends only GoalContractV1 to Person C", async () => {
@@ -154,22 +352,135 @@ describe("Person B to Person A confirmation boundary", () => {
   it("returns clarification for two matching Johns and creates no candidate or compiler call", async () => {
     const draft = {
       ...transferDraft,
-      originalText: "Send John USD 350.",
-      goal: { ...transferDraft.goal, amount: { currency: "USD", minorUnits: "35000" }, recipientReference: "John" },
+      originalText: "Send S$500 to John.",
+      goal: { ...transferDraft.goal, amount: { currency: "SGD", minorUnits: "50000" }, recipientReference: "John" },
     } as IntentDraftV1;
     const repository = new CandidateRepository(); const compile = vi.fn();
     const messages = new MessageOrchestrationService(repository, new FixedInterpreter(draft), () => new FixedGrounder((input) => ({
       status: "AMBIGUOUS", reference: input.reference, expectedEntityType: "BENEFICIARY", candidates: [
-        { entityType: "BENEFICIARY", entityId: "ben-john-1", canonicalName: "John Tan" },
-        { entityType: "BENEFICIARY", entityId: "ben-john-2", canonicalName: "John Lim" },
+        { entityType: "BENEFICIARY", entityId: "ben-john-tan", canonicalName: "John Tan" },
+        { entityType: "BENEFICIARY", entityId: "ben-john-lim", canonicalName: "John Lim" },
       ],
     })));
     const result = await messages.receive({ userId: "user-1", text: draft.originalText }, "trace-ambiguous");
     expect(result).toMatchObject({ status: "NEEDS_CLARIFICATION", clarificationId: expect.any(String) }); expect(repository.candidate).toBeUndefined(); expect(repository.goal).toBeUndefined(); expect(compile).not.toHaveBeenCalled();
     if (result.status !== "NEEDS_CLARIFICATION") throw new Error("Expected clarification");
-    const continued = await messages.answerClarification(result.clarificationId, { selectedCandidateId: "ben-john-2" }, "trace-answer");
-    expect(continued).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { recipientId: "ben-john-2", amount: { currency: "USD", minorUnits: "35000" } } } });
+    await expect(messages.answerClarification(result.clarificationId, { selectedCandidateId: "ben-other-user" }, "trace-invalid-answer")).rejects.toThrow("CLARIFICATION_OPTION_INVALID");
+    expect(repository.candidate).toBeUndefined(); expect(repository.goal).toBeUndefined();
+    const continued = await messages.answerClarification(result.clarificationId, { selectedCandidateId: "ben-john-lim" }, "trace-answer");
+    expect(continued).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { recipientId: "ben-john-lim", amount: { currency: "SGD", minorUnits: "50000" } } } });
     expect(repository.goal).toBeUndefined(); expect(repository.confirmations).toBe(0);
+  });
+
+  function incompleteTransferFlow(draft: InterpretedIntentDraftV1) {
+    const repository = new CandidateRepository();
+    const grounder = new FixedGrounder((input) => input.reference === "John"
+      ? { status: "AMBIGUOUS", reference: input.reference, expectedEntityType: "BENEFICIARY", candidates: [
+        { entityType: "BENEFICIARY", entityId: "ben-john-tan", canonicalName: "John Tan" },
+        { entityType: "BENEFICIARY", entityId: "ben-john-lim", canonicalName: "John Lim" },
+      ] }
+      : input.reference === "John Lim"
+        ? { status: "RESOLVED", reference: input.reference, entityType: "BENEFICIARY", entityId: "ben-john-lim", resolutionMethod: "EXACT" }
+        : { status: "NOT_FOUND", reference: input.reference, expectedEntityType: "BENEFICIARY" });
+    const generated = ["clarification-incomplete", "goal-incomplete"];
+    const messages = new MessageOrchestrationService(repository, new FixedInterpreter(draft), () => grounder, undefined, undefined, undefined, () => generated.shift()!);
+    return { messages, repository };
+  }
+
+  it("collects an ambiguous beneficiary and missing money across turns without creating financial authority", async () => {
+    const draft: InterpretedIntentDraftV1 = {
+      schemaVersion: "1", originalText: "Send money to John", goal: { type: "DELIVER_MONEY", recipientReference: "John" },
+      constraints: [], preferences: [], references: [],
+    };
+    const { messages, repository } = incompleteTransferFlow(draft);
+    const initial = await messages.receive({ userId: "user-1", text: draft.originalText }, "trace-incomplete");
+    expect(initial).toMatchObject({ status: "NEEDS_CLARIFICATION", clarifications: [
+      { reason: "AMBIGUOUS_ENTITY", field: "goal.recipientReference", options: [{ entityId: "ben-john-lim" }, { entityId: "ben-john-tan" }] },
+      { reason: "MISSING_FIELD", field: "goal.amount", questionKey: "clarify.transfer.amount" },
+    ] });
+    const beneficiary = await messages.answerClarification("clarification-incomplete", { selectedCandidateId: "ben-john-lim" }, "trace-beneficiary");
+    expect(beneficiary).toMatchObject({ status: "NEEDS_CLARIFICATION", clarifications: [{ field: "goal.amount", questionKey: "clarify.transfer.amount" }] });
+    expect(repository.candidate).toBeUndefined(); expect(repository.goal).toBeUndefined();
+    const completed = await messages.answerClarification("clarification-incomplete", { answerText: "S$500" }, "trace-money");
+    expect(completed).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: {
+      type: "DELIVER_MONEY", recipientId: "ben-john-lim", amount: { currency: "SGD", minorUnits: "50000" },
+    } } });
+    expect(repository.validationAudits).toEqual([expect.objectContaining({ decision: "PASS" })]);
+    expect(repository.goal).toBeUndefined(); expect(repository.confirmations).toBe(0);
+  });
+
+  it("retains a bare amount but requires an explicit currency before goal confirmation", async () => {
+    const draft: InterpretedIntentDraftV1 = {
+      schemaVersion: "1", originalText: "Send money to John", goal: { type: "DELIVER_MONEY", recipientReference: "John" },
+      constraints: [], preferences: [], references: [],
+    };
+    const { messages, repository } = incompleteTransferFlow(draft);
+    await messages.receive({ userId: "user-1", text: draft.originalText }, "trace-incomplete");
+    await messages.answerClarification("clarification-incomplete", { selectedCandidateId: "ben-john-lim" }, "trace-beneficiary");
+    const needsCurrency = await messages.answerClarification("clarification-incomplete", { answerText: "500" }, "trace-amount");
+    expect(needsCurrency).toMatchObject({ status: "NEEDS_CLARIFICATION", clarifications: [{ field: "goal.amount.currency", questionKey: "clarify.transfer.currency" }] });
+    expect(repository.candidate).toBeUndefined();
+    const completed = await messages.answerClarification("clarification-incomplete", { answerText: "SGD" }, "trace-currency");
+    expect(completed).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { amount: { currency: "SGD", minorUnits: "50000" } } } });
+  });
+
+  it("keeps invalid money answers in clarification and creates no candidate", async () => {
+    const draft: InterpretedIntentDraftV1 = {
+      schemaVersion: "1", originalText: "Send money to John Lim", goal: { type: "DELIVER_MONEY", recipientReference: "John Lim" },
+      constraints: [], preferences: [], references: [],
+    };
+    const { messages, repository } = incompleteTransferFlow(draft);
+    await messages.receive({ userId: "user-1", text: draft.originalText }, "trace-incomplete");
+    const result = await messages.answerClarification("clarification-incomplete", { answerText: "about five hundred" }, "trace-invalid-money");
+    expect(result).toMatchObject({ status: "NEEDS_CLARIFICATION", clarifications: [{ reason: "INVALID_FIELD", field: "goal.amount", questionKey: "clarify.transfer.amount" }] });
+    expect(repository.candidate).toBeUndefined(); expect(repository.goal).toBeUndefined(); expect(repository.validationAudits).toEqual([]);
+  });
+
+  it("accepts a bare amount only when the customer already established the currency", async () => {
+    const draft: InterpretedIntentDraftV1 = {
+      schemaVersion: "1", originalText: "Send SGD money to John Lim", goal: { type: "DELIVER_MONEY", recipientReference: "John Lim" },
+      constraints: [], preferences: [], references: [],
+    };
+    const { messages } = incompleteTransferFlow(draft);
+    await messages.receive({ userId: "user-1", text: draft.originalText }, "trace-incomplete");
+    const result = await messages.answerClarification("clarification-incomplete", { answerText: "500" }, "trace-established-currency");
+    expect(result).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { amount: { currency: "SGD", minorUnits: "50000" } } } });
+  });
+
+  it("turns the model's unsupported zero placeholder into missing-field clarification", async () => {
+    const placeholder: IntentDraftV1 = {
+      schemaVersion: "1", originalText: "Send money to John", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "0" }, recipientReference: "John" },
+      constraints: [], preferences: [], references: [],
+    };
+    const { messages, repository } = incompleteTransferFlow(placeholder);
+    const result = await messages.receive({ userId: "user-1", text: placeholder.originalText }, "trace-placeholder");
+    expect(result.status).toBe("NEEDS_CLARIFICATION");
+    if (result.status !== "NEEDS_CLARIFICATION") throw new Error("Expected clarification");
+    expect(result.clarifications).toEqual(expect.arrayContaining([expect.objectContaining({ field: "goal.amount", questionKey: "clarify.transfer.amount" })]));
+    expect(repository.validationAudits).toEqual([]); expect(repository.candidate).toBeUndefined();
+  });
+
+  it("preserves a source-supported bare amount while requiring its missing currency", async () => {
+    const guessedCurrency: IntentDraftV1 = {
+      schemaVersion: "1", originalText: "Send 500 to John Lim", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "John Lim" },
+      constraints: [], preferences: [], references: [],
+    };
+    const { messages } = incompleteTransferFlow(guessedCurrency);
+    const result = await messages.receive({ userId: "user-1", text: guessedCurrency.originalText }, "trace-bare-source-amount");
+    expect(result).toMatchObject({ status: "NEEDS_CLARIFICATION", clarifications: [{ field: "goal.amount.currency", questionKey: "clarify.transfer.currency" }] });
+  });
+
+  it("collects a missing recipient before grounding it and then asks for money", async () => {
+    const draft: InterpretedIntentDraftV1 = {
+      schemaVersion: "1", originalText: "Send money", goal: { type: "DELIVER_MONEY" }, constraints: [], preferences: [], references: [],
+    };
+    const { messages } = incompleteTransferFlow(draft);
+    const initial = await messages.receive({ userId: "user-1", text: draft.originalText }, "trace-no-recipient");
+    expect(initial.status).toBe("NEEDS_CLARIFICATION");
+    if (initial.status !== "NEEDS_CLARIFICATION") throw new Error("Expected clarification");
+    expect(initial.clarifications[0]).toMatchObject({ field: "goal.recipientReference", questionKey: "clarify.transfer.recipient" });
+    const grounded = await messages.answerClarification("clarification-incomplete", { answerText: "John Lim" }, "trace-recipient");
+    expect(grounded).toMatchObject({ status: "NEEDS_CLARIFICATION", clarifications: [{ field: "goal.amount", questionKey: "clarify.transfer.amount" }] });
   });
 
   it("keeps raw and edited voice text as validator evidence while interpreting submitted text", async () => {
@@ -268,5 +579,45 @@ describe("Person A to Person C compiler boundary", () => {
     const getState = vi.fn(); const compile = vi.fn();
     await expect(new CompilationService(compilationRepository(tampered), { getState } as never, { compile }).compile(tampered.id, "trace")).rejects.toThrow("GOAL_HASH_MISMATCH");
     expect(getState).not.toHaveBeenCalled(); expect(compile).not.toHaveBeenCalled();
+  });
+});
+
+describe("confirmed investment funding amendment", () => {
+  function setup(goal = confirmedAppleGoal()) {
+    const candidates = new CandidateRepository();
+    const repository = Object.assign(candidates, { getConfirmedGoal: vi.fn(async () => ({ rowId: "goal-row", contract: goal })) });
+    const state = BankStateSnapshotV1.parse({
+      ...appleSnapshot,
+      accounts: [
+        ...appleSnapshot.accounts,
+        { id: "acc-sgd", type: "CHECKING", currency: "SGD", ledgerMinorUnits: "500000", availableMinorUnits: "500000", status: "ACTIVE", capabilities: ["CONVERT_FX", "SEND_TRANSFER"] },
+      ],
+    });
+    const getState = vi.fn(async () => state);
+    const funding = new InvestmentFundingService(repository as never, { getState } as never, () => new Date("2026-10-10T10:00:00Z"), () => "funding-candidate");
+    return { candidates, funding, getState };
+  }
+
+  it("preserves the exact investment objective and adds only confirmed-review funding terms", async () => {
+    const { candidates, funding } = setup();
+    const response = await funding.propose("goal-apple", { sourceAccountId: "acc-sgd", minimumSgdReserveMinorUnits: "100000" }, "trace-funding");
+    expect(response).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "funding-candidate", goalCandidate: {
+      goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" },
+      constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }],
+      preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }],
+    } });
+    expect(response.goalCandidate.entityBindings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityType: "ASSET", entityId: "asset-aapl", confirmed: false }),
+      expect.objectContaining({ entityType: "ACCOUNT", entityId: "acc-sgd", resolutionMethod: "USER_CONFIRMED", confirmed: false }),
+    ]));
+    expect(candidates.goal).toBeUndefined();
+  });
+
+  it("never weakens an existing reserve and never persists an ineligible account choice", async () => {
+    const goal = confirmedAppleGoal({ constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "200000" }, accountId: "acc-sgd" }] });
+    const { candidates, funding } = setup(goal);
+    await expect(funding.propose("goal-apple", { sourceAccountId: "acc-sgd", minimumSgdReserveMinorUnits: "100000" }, "trace-funding")).rejects.toThrow("FUNDING_RESERVE_CANNOT_WEAKEN_CONSTRAINT");
+    await expect(funding.propose("goal-apple", { sourceAccountId: "acc-brokerage" }, "trace-funding")).rejects.toThrow("FUNDING_ACCOUNT_NOT_ELIGIBLE");
+    expect(candidates.candidate).toBeUndefined();
   });
 });

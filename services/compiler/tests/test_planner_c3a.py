@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 from app.models.contracts import (
     AccountV1,
     BankStateSnapshotV1,
+    FxQuoteV1,
     GoalContractV1,
     GroundedGoalConstraintV1,
     GroundedPreferenceV1,
@@ -89,6 +90,28 @@ def test_direct_transfer_and_deterministic_plan():
     assert first.plan.validity.required_quote_ids == []
     assert first.plan.validity.valid_until is None
     assert state.model_dump(mode="json") == before
+
+
+def test_direct_sgd_transfer_to_selected_saved_payee():
+    goal, state = fixture()
+    goal.goal.amount.currency = "SGD"
+    goal.goal.amount.minor_units = "50000"
+    goal.goal.recipient_id = "ben-john-lim"
+    beneficiary_binding = next(
+        binding for binding in goal.entity_bindings if binding.entity_type == "BENEFICIARY"
+    )
+    beneficiary_binding.entity_id = "ben-john-lim"
+    state.beneficiaries[0].id = "ben-john-lim"
+    state.beneficiaries[0].name = "John Lim"
+    state.beneficiaries[0].supported_currencies = ["SGD"]
+
+    result = compile_goal(goal, state)
+
+    assert actions(result) == ["TRANSFER"]
+    transfer = result.plan.steps[0]
+    assert transfer.parameters.beneficiary_id == "ben-john-lim"
+    assert transfer.parameters.amount.currency == "SGD"
+    assert transfer.parameters.amount.minor_units == "50000"
 
 
 def test_fx_then_transfer_discovered_from_golden_fixture():
@@ -348,10 +371,116 @@ def test_single_stock_purchase_requires_settled_usd_and_does_not_synthesize_fx()
     assert result.reason.code == "INSUFFICIENT_FUNDS"
 
 
-def test_conditional_fx_stock_request_preserves_sgd_minimum_and_never_invents_funding():
-    # The confirmed V1 contract represents the requested acquisition and reserve.
-    # Automatic conditional FX is intentionally unsupported, so insufficient USD
-    # must return a controlled result even when ample SGD and FX are available.
+def fundable_apple_goal():
+    goal, state = fixture("02-apple-investment")
+    goal.goal.budget = None
+    goal.goal.quantity = "1"
+    state.accounts[0].available_minor_units = "20000"
+    state.accounts[0].ledger_minor_units = "20000"
+    state.accounts[0].capabilities.append("RECEIVE_TRANSFER")
+    account(state, "acc-sgd", "SGD", 500000, ["CONVERT_FX", "SEND_TRANSFER"])
+    state.fx_quotes.append(
+        FxQuoteV1.model_validate(
+            {
+                "id": "quote-sgd-usd-investment",
+                "fromCurrency": "SGD",
+                "toCurrency": "USD",
+                "rate": "0.75",
+                "fee": {"currency": "SGD", "minorUnits": "50"},
+                "expiresAt": "2099-01-01T00:00:00.000Z",
+            }
+        )
+    )
+    preference(goal, {"type": "PREFER_ACCOUNT", "accountId": "acc-sgd"})
+    return goal, state
+
+
+def test_confirmed_sgd_funding_preference_builds_one_bound_fx_purchase_plan():
+    goal, state = fundable_apple_goal()
+    result = compile_goal(goal, state)
+    assert actions(result) == ["FX_CONVERT", "BUY_ASSET"]
+    fx, purchase = result.plan.steps
+    assert fx.parameters.source_account_id == "acc-sgd"
+    assert fx.parameters.destination_account_id == "acc-brokerage"
+    assert fx.parameters.source_money.minor_units == "133"
+    assert purchase.parameters.source_account_id == "acc-brokerage"
+    assert purchase.depends_on == [fx.id]
+    assert result.plan.validity.required_quote_ids == [
+        "asset-quote-aapl-usd-v1",
+        "quote-sgd-usd-investment",
+    ]
+
+
+def test_confirmed_conditional_funding_and_reserve_compile_as_one_coordinated_plan():
+    goal, state = fundable_apple_goal()
+    constraint(
+        goal,
+        {
+            "type": "MIN_AVAILABLE_BALANCE",
+            "money": {"currency": "SGD", "minorUnits": "100000"},
+            "accountId": "acc-sgd",
+        },
+    )
+    result = compile_goal(goal, state)
+    assert actions(result) == ["FX_CONVERT", "BUY_ASSET"]
+    assert result.plan.steps[1].depends_on == [result.plan.steps[0].id]
+    projected_sgd = next(
+        item.money.minor_units
+        for item in result.plan.projected_outcome.projected_available_balances
+        if item.account_id == "acc-sgd"
+    )
+    assert int(projected_sgd) >= 100000
+
+
+def test_funding_route_respects_minimum_sgd_reserve_and_source_funds():
+    goal, state = fundable_apple_goal()
+    constraint(
+        goal,
+        {
+            "type": "MIN_AVAILABLE_BALANCE",
+            "money": {"currency": "SGD", "minorUnits": "499818"},
+            "accountId": "acc-sgd",
+        },
+    )
+    limited = compile_goal(goal, state)
+    assert limited.status == "UNSAT"
+    assert limited.reason.code == "MIN_AVAILABLE_BALANCE_VIOLATED"
+    assert limited.reason.details["bankStateVersion"] == state.state_version
+
+    goal.constraints.clear()
+    state.accounts[-1].available_minor_units = "183"
+    state.accounts[-1].ledger_minor_units = "183"
+    assert actions(compile_goal(goal, state)) == ["FX_CONVERT", "BUY_ASSET"]
+    state.accounts[-1].available_minor_units = "182"
+    state.accounts[-1].ledger_minor_units = "182"
+    insufficient = compile_goal(goal, state)
+    assert insufficient.status == "UNSAT"
+    assert insufficient.reason.code == "INSUFFICIENT_FUNDING_FUNDS"
+
+
+def test_funding_route_fails_before_fx_for_asset_or_quote_problems():
+    goal, state = fundable_apple_goal()
+    state.assets[0].tradable = False
+    unavailable = compile_goal(goal, state)
+    assert unavailable.status == "POLICY_BLOCKED"
+    assert unavailable.reason.code == "ASSET_NOT_TRADABLE"
+
+    state.assets[0].tradable = True
+    state.fx_quotes[0].expires_at = state.captured_at
+    expired = compile_goal(goal, state)
+    assert expired.status == "UNSAT"
+    assert expired.reason.code == "QUOTE_EXPIRED"
+
+
+def test_sufficient_usd_never_adds_unnecessary_funding_fx():
+    goal, state = fundable_apple_goal()
+    state.accounts[0].available_minor_units = "500000"
+    state.accounts[0].ledger_minor_units = "500000"
+    assert actions(compile_goal(goal, state)) == ["BUY_ASSET"]
+
+
+def test_sgd_reserve_without_confirmed_funding_preference_never_invents_fx_permission():
+    # A reserve alone is not permission to fund an acquisition from this account.
     goal, state = fixture("02-apple-investment")
     goal.goal.budget = None
     goal.goal.quantity = "1"

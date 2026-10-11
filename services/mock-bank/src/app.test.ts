@@ -56,13 +56,44 @@ describe("mock bank", () => {
     expect((await missingDemoAdmin.inject({ method: "GET", url: "/ready" })).statusCode).toBe(503);
   });
   it("returns string minor units", async () => { const response = await bankApp().inject({ method: "GET", url: "/v1/state/u1", headers: bankHeaders }); expect(response.json().accounts[0].availableMinorUnits).toBe("2000000"); });
-  it("exposes every seeded demo beneficiary as an active USD transfer recipient", async () => {
+  it("exposes seeded beneficiaries with their authoritative supported currencies", async () => {
     const response = await bankApp().inject({ method: "GET", url: "/v1/state/u1", headers: bankHeaders });
     expect(response.json().beneficiaries).toEqual([
       { id: "ben-ntu", name: "Nanyang Technological University", supportedCurrencies: ["USD"], status: "ACTIVE" },
-      { id: "ben-john-1", name: "John Tan", supportedCurrencies: ["USD"], status: "ACTIVE" },
-      { id: "ben-john-2", name: "John Lim", supportedCurrencies: ["USD"], status: "ACTIVE" },
+      { id: "ben-john-tan", name: "John Tan", supportedCurrencies: ["SGD"], status: "ACTIVE" },
+      { id: "ben-john-lim", name: "John Lim", supportedCurrencies: ["SGD"], status: "ACTIVE" },
     ]);
+  });
+  it("enforces the advertised beneficiary currencies before mutating a transfer", async () => {
+    const accepted = bankApp();
+    const johnTransfer = await accepted.inject({
+      method: "POST",
+      url: "/v1/execute/transfer",
+      headers: { ...bankHeaders, "idempotency-key": "john-sgd" },
+      payload: { userId: "u1", sourceAccountId: "acc-sgd", beneficiaryId: "ben-john-tan", amount: { currency: "SGD", minorUnits: "50000" } },
+    });
+    expect(johnTransfer.statusCode).toBe(200);
+    expect((await bankState(accepted, "u1")).accounts[0].availableMinorUnits).toBe("1950000");
+
+    for (const [idempotencyKey, beneficiaryId, currency, sourceAccountId, code] of [
+      ["john-usd", "ben-john-tan", "USD", "acc-usd", "BENEFICIARY_CURRENCY_UNSUPPORTED"],
+      ["unknown-beneficiary", "ben-missing", "SGD", "acc-sgd", "BENEFICIARY_NOT_FOUND"],
+      ["source-currency", "ben-john-tan", "SGD", "acc-usd", "ACCOUNT_CURRENCY_MISMATCH"],
+    ] as const) {
+      const app = bankApp();
+      const before = await bankState(app, "u1");
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/execute/transfer",
+        headers: { ...bankHeaders, "idempotency-key": idempotencyKey },
+        payload: { userId: "u1", sourceAccountId, beneficiaryId, amount: { currency, minorUnits: "50000" } },
+      });
+      const after = await bankState(app, "u1");
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({ code });
+      expect(after.stateVersion).toBe(before.stateVersion);
+      expect(after.accounts).toEqual(before.accounts);
+    }
   });
   it("returns the active mock scenarios to an authorized operator in demo mode", async () => { const app = demoBank(); await app.inject({ method: "POST", url: "/v1/admin/scenarios/buyer", headers: adminHeaders, payload: { scenarios: ["ASSET_UNAVAILABLE"] } }); const response = await app.inject({ method: "GET", url: "/v1/admin/scenarios/buyer", headers: adminHeaders }); expect(response.json()).toEqual({ scenarios: ["ASSET_UNAVAILABLE"] }); });
   it("rejects missing, customer, disabled-mode, and out-of-scope mock-bank administration", async () => {

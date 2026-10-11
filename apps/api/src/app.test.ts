@@ -33,13 +33,14 @@ describe("API status handling", () => {
     vi.stubEnv("PARLANCE_CUSTOMER_USER_ID", "configured-user");
     const getState = vi.fn().mockResolvedValue(BankStateSnapshotV1.parse({
       schemaVersion: "1", userId: "configured-user", stateVersion: 7, capturedAt: "2026-10-03T00:00:00Z",
-      accounts: [], beneficiaries: [], assets: [], holdings: [], obligations: [],
+      accounts: [], beneficiaries: [{ id: "ben-john-tan", name: "John Tan", supportedCurrencies: ["SGD"], status: "ACTIVE" }], assets: [], holdings: [], obligations: [],
       serviceAvailability: { transfers: true, fx: true, billPayments: true, investments: true }, fxQuotes: [], assetQuotes: [],
     }));
     const injected = services(); injected.dependencies.bank = { ...injected.dependencies.bank, getState } as unknown as ApiServices["dependencies"]["bank"];
     const app = appFor(injected);
     const response = await asCustomer(app, { method: "GET", url: "/v1/customer/state?userId=attacker-selected", headers: { "x-parlance-customer-id": "configured-user" } });
     expect(response.statusCode).toBe(200); expect(response.json().userId).toBe("configured-user");
+    expect(response.json().beneficiaries).toEqual([{ id: "ben-john-tan", name: "John Tan", supportedCurrencies: ["SGD"], status: "ACTIVE" }]);
     expect(getState).toHaveBeenCalledWith("configured-user", expect.any(String));
     expect(getState).not.toHaveBeenCalledWith("attacker-selected", expect.anything()); await app.close();
   });

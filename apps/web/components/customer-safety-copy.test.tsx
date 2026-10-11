@@ -1,4 +1,4 @@
-import { ExecutionResultV1 } from "@parlance/contracts";
+import { BankStateSnapshotV1, ExecutionResultV1 } from "@parlance/contracts";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
@@ -27,10 +27,32 @@ const scenario: PlanPresentation = {
   steps: [{ id: "send", kind: "Payment", title: "Send USD 70.00", summary: "USD Account to Nanyang Technological University", meta: [] }],
 };
 
+const investmentScenario: PlanPresentation = {
+  goal: { eyebrow: "Buy an investment", title: "Buy 1 Apple share", description: "Check what you asked us to buy.", details: [{ label: "Investment", value: "Apple" }, { label: "Quantity", value: "1" }], constraints: [], preferences: [] },
+  planTitle: "Review investment details", planSummary: "Latest account information checked", funding: [], preservedConstraints: [],
+  steps: [{ id: "buy", kind: "Buy", title: "1 Apple", summary: "USD Account → Investment holding", meta: [] }],
+};
+
 it("presents the conversational route as Pay & Transfer in desktop and mobile banking navigation", () => {
   expect(customerDesktopNavigation.find((item) => item.href === "/chat")?.label).toBe("Pay & Transfer");
+  expect(customerDesktopNavigation.find((item) => item.href === "/payees")?.label).toBe("Saved payees");
   expect(customerMobileNavigation.find((item) => item.href === "/chat")?.label).toBe("Pay & Transfer");
   expect(customerDesktopNavigation.map((item) => item.label)).not.toContain("Parlance");
+});
+
+it("prefills a saved-payee draft without submitting or authorizing it", () => {
+  const onSubmit = vi.fn();
+  const html = renderToStaticMarkup(createElement(ConversationComposer, { initialValue: "Send money to John Tan", onSubmit }));
+  expect(html).toContain("Send money to John Tan");
+  expect(html).toContain("Nothing moves without your approval");
+  expect(onSubmit).not.toHaveBeenCalled();
+});
+
+it("scopes the dark wealth navigation to the Investments shell", () => {
+  const investments = renderToStaticMarkup(createElement(BankingShell, { active: "invest", children: createElement("div") }));
+  const home = renderToStaticMarkup(createElement(BankingShell, { active: "home", children: createElement("div") }));
+  expect(investments).toContain("is-invest-shell");
+  expect(home).not.toContain("is-invest-shell");
 });
 
 it("renders a banking task entry instead of an AI prompt gallery", () => {
@@ -202,6 +224,48 @@ it("renders completion as a customer payment receipt without execution enums", (
   expect(html).not.toMatch(/SETTLED|ExecutionRun|state version/u);
 });
 
+it("uses investment language throughout stock plan review and completion", () => {
+  const preview = renderToStaticMarkup(createElement(FinancialPlanPreview, { scenario: investmentScenario, onCancel: vi.fn(), onApprove: vi.fn() }));
+  const timeline = renderToStaticMarkup(createElement(ExecutionTimeline, {
+    scenario: investmentScenario, steps: investmentScenario.steps,
+    items: [
+      { label: "Latest account state checked", status: "complete" as const },
+      { label: "Investment approval checked", status: "complete" as const },
+      { label: "1 Apple", status: "complete" as const },
+      { label: "Confirmed with bank", status: "complete" as const },
+    ],
+  }));
+  const meaning = renderToStaticMarkup(createElement(UnderstoodGoalCard, { goal: investmentScenario.goal, onEdit: vi.fn(), onConfirm: vi.fn() }));
+  expect(preview).toContain("Investment details");
+  expect(preview).toContain("<small>Investment</small>");
+  expect(timeline).toContain("Investment completed");
+  expect(meaning).toContain("Confirming the request does not authorize a purchase");
+  expect(`${preview}${timeline}${meaning}`).not.toMatch(/Payment details|Payment completed|approve a payment/iu);
+});
+
+it("keeps quote expiry visible and disables passkey approval until review data is ready", () => {
+  const html = renderToStaticMarkup(createElement(FinancialPlanPreview, { scenario: { ...investmentScenario, validUntil: "2026-10-11T10:00:00.000Z" }, onCancel: vi.fn(), onApprove: vi.fn(), reviewReady: false }));
+  expect(html).toContain("Quotes valid until");
+  expect(html).toContain("review a new plan");
+  expect(html).toContain("Checking quote…");
+  expect(html).toMatch(/button[^>]*disabled=""[^>]*>Checking quote/u);
+});
+
+it("renders the completed investment receipt from authoritative current state", () => {
+  const currentState = BankStateSnapshotV1.parse({
+    schemaVersion: "1", userId: "user", stateVersion: 11, capturedAt: "2026-10-11T09:00:00.000Z",
+    accounts: [{ id: "acc-sgd", type: "CHECKING", currency: "SGD", ledgerMinorUnits: "1705201", availableMinorUnits: "1705201", status: "ACTIVE", capabilities: ["CONVERT_FX"] }, { id: "acc-usd", type: "BROKERAGE", currency: "USD", ledgerMinorUnits: "0", availableMinorUnits: "0", status: "ACTIVE", capabilities: ["TRADE_ASSET"] }],
+    beneficiaries: [], assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: true, settlementCurrency: "USD" }], holdings: [{ assetId: "asset-aapl", quantity: "1" }], obligations: [], serviceAvailability: { transfers: true, fx: true, billPayments: true, investments: true }, fxQuotes: [], assetQuotes: [],
+  });
+  const receiptScenario: PlanPresentation = { ...investmentScenario, projectedHoldings: [{ assetId: "asset-aapl", asset: "Apple", quantity: "1" }] };
+  const html = renderToStaticMarkup(createElement(ExecutionTimeline, { scenario: receiptScenario, steps: receiptScenario.steps, currentState, reference: "execution-reference", items: [{ label: "State checked", status: "complete" as const }, { label: "Approval checked", status: "complete" as const }, { label: "Buy", status: "complete" as const }, { label: "Bank confirmed", status: "complete" as const }] }));
+  expect(html).toContain("Investment successful");
+  expect(html).toContain("1 share");
+  expect(html).toContain("S$17,052.01");
+  expect(html).toContain("US$0.00");
+  expect(html).toContain("execution-reference");
+});
+
 describe("ClarificationCard", () => {
   const base = { reason: "UNRESOLVED_REFERENCE", field: "recipientReference", originalReference: "NTU", questionKey: "recipient" };
 
@@ -214,14 +278,29 @@ describe("ClarificationCard", () => {
 
   it("communicates ambiguity when there are multiple options", () => {
     const options = [
-      { entityId: "ben-1", entityType: "BENEFICIARY" as const, displayName: "NTU Bursary" },
-      { entityId: "ben-2", entityType: "BENEFICIARY" as const, displayName: "NTU Tuition" },
+      { entityId: "ben-john-tan", entityType: "BENEFICIARY" as const, displayName: "John Tan" },
+      { entityId: "ben-john-lim", entityType: "BENEFICIARY" as const, displayName: "John Lim" },
     ];
-    const legacyOptions = options.map((option, index) => ({ id: option.entityId, name: option.displayName, bank: "DBS beneficiary", account: `•••• 000${index}` }));
-    const props = { clarification: { ...base, options }, options: legacyOptions, reference: "NTU", onSelect: vi.fn(), onCancel: vi.fn() };
+    const props = { clarification: { ...base, originalReference: "John", options }, beneficiaries: [
+      { id: "ben-john-tan", name: "John Tan", supportedCurrencies: ["SGD"], status: "ACTIVE" as const },
+      { id: "ben-john-lim", name: "John Lim", supportedCurrencies: ["SGD"], status: "ACTIVE" as const },
+    ], onSelect: vi.fn(), onCancel: vi.fn() };
     const html = renderToStaticMarkup(createElement(ClarificationCard, props));
-    expect(html).toContain("more than one possible match");
-    expect(html).toContain("different financial outcomes");
+    expect(html).toContain("Which John would you like to pay?");
+    expect(html).toContain("more than one saved payee matching John");
+    expect(html).toContain("John Tan");
+    expect(html).toContain("John Lim");
+    expect(html).toContain("Saved payee · SGD transfers");
+  });
+
+  it("uses an actionable saved-payee prompt when no beneficiary matches", () => {
+    const html = renderToStaticMarkup(createElement(ClarificationCard, {
+      clarification: { ...base, originalReference: "Unknown John", options: [] },
+      onSelect: vi.fn(), onAnswerText: vi.fn(), onCancel: vi.fn(),
+    }));
+    expect(html).toContain("Enter a saved payee name");
+    expect(html).toContain("For example, John Tan");
+    expect(html).not.toContain("DBS Multiplier Account");
   });
 
   it("shows real account balances and keeps typed clarification available", () => {
@@ -234,5 +313,30 @@ describe("ClarificationCard", () => {
     expect(html).toContain("Which SGD account would you like me to use for the shortfall?");
     expect(html).toContain("DBS Multiplier Account"); expect(html).toContain("SGD 17,333.34"); expect(html).toContain("Savings Account"); expect(html).toContain("SGD 8,420.00");
     expect(html).toContain("Or type the name you use for it"); expect(html).toContain("Start over");
+  });
+
+  it("uses investment-specific wording for an unresolved asset", () => {
+    const props = {
+      clarification: { ...base, field: "goal.assetReference", originalReference: "Unknown Corp", options: [] },
+      onSelect: vi.fn(), onAnswerText: vi.fn(), onCancel: vi.fn(),
+    };
+    const html = renderToStaticMarkup(createElement(ClarificationCard, props));
+    expect(html).toContain("Enter a company name or ticker");
+    expect(html).toContain("Enter a company name or ticker, e.g. AAPL");
+    expect(html).not.toContain("DBS Multiplier Account");
+  });
+
+  it("labels ambiguous asset candidates as supported investments", () => {
+    const props = {
+      clarification: { ...base, field: "goal.assetReference", originalReference: "Apple", options: [
+        { entityId: "asset-aapl", entityType: "ASSET" as const, displayName: "Apple Inc." },
+        { entityId: "asset-aple", entityType: "ASSET" as const, displayName: "Apple Hospitality REIT" },
+      ] },
+      onSelect: vi.fn(), onAnswerText: vi.fn(), onCancel: vi.fn(),
+    };
+    const html = renderToStaticMarkup(createElement(ClarificationCard, props));
+    expect(html).toContain("Which Apple did you mean?");
+    expect(html.match(/Supported investment/gu)).toHaveLength(2);
+    expect(html).not.toContain("Available account");
   });
 });
