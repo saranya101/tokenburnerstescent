@@ -7,6 +7,7 @@
     "dev:safe": "node --env-file=.env scripts/dev-safe.mjs",
     "dev:restart": "node --env-file=.env scripts/dev-safe.mjs --restart",
     "test:dev-safe": "node --test scripts/dev-safe.test.mjs",
+    "security:assurance": "node scripts/security-assurance.mjs",
     "db:setup": "node --env-file=.env packages/db/node_modules/prisma/build/index.js migrate deploy --schema packages/db/prisma/schema.prisma && pnpm db:seed",
     "db:seed": "node --env-file=.env packages/db/prisma/seed.mjs",
     "build": "turbo build",
