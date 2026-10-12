@@ -1,16 +1,22 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON, VerifiedAuthenticationResponse, VerifiedRegistrationResponse } from "@simplewebauthn/server";
-import { BankStateSnapshotV1, ExecutionResultV1, FinancialPlanV1, GoalContractV1 } from "@parlance/contracts";
+import { BankStateSnapshotV1, ExecutionResultV1, FinancialPlanV1, GoalBundleContractV1, GoalContractV1 } from "@parlance/contracts";
+import { hashGoalBundleContract } from "@parlance/contracts/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp, type ApiServices } from "../app.js";
-import type { BankPort, ParlanceRepository, StoredGoal, StoredPlan } from "../orchestration/ports.js";
-import { hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
+import type { BankPort, ParlanceRepository, StoredGoal, StoredGoalBundle, StoredPlan } from "../orchestration/ports.js";
+import { canonicalHash, hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
 import { WebAuthnService } from "./service.js";
+import { buildApprovalPayload } from "./approval-payload.js";
+import { committedApprovalChallenge } from "./challenge-commitment.js";
 import type { AuthenticationVerifier, NewWebAuthnChallenge, NewWebAuthnCredential, RegistrationVerifier, StoredApprovalEvidence, StoredWebAuthnChallenge, StoredWebAuthnCredential, VerifiedPasskeyAuthorizationInput, WebAuthnRepository } from "./types.js";
+import type { ApprovalRiskGate } from "../risk/gate.js";
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(join(process.cwd(), "../../packages/contracts/fixtures/01-ntu-transfer", name), "utf8"));
 const fixedNow = new Date("2026-09-23T10:00:00.000Z");
+const routeAuthorization = { internalApiToken: "test-internal-token", opsApiToken: "test-ops-token" };
+const routeHeaders = { "x-parlance-internal-token": routeAuthorization.internalApiToken, "x-parlance-customer-id": "demo-user" };
 
 function authoritativeRecords(): { goal: StoredGoal; plan: StoredPlan; state: BankStateSnapshotV1 } {
   const rawGoal = GoalContractV1.parse({ ...(fixture("goal-contract.json") as object), userId: "demo-user", contractHash: "0".repeat(64) });
@@ -19,7 +25,7 @@ function authoritativeRecords(): { goal: StoredGoal; plan: StoredPlan; state: Ba
     validity: { ...(FinancialPlanV1.parse(fixture("financial-plan.json")).validity), validUntil: new Date(fixedNow.getTime() + 60 * 60_000).toISOString() }, planHash: "0".repeat(64) });
   const financialPlan = FinancialPlanV1.parse({ ...rawPlan, planHash: hashFinancialPlan(rawPlan) });
   const state = BankStateSnapshotV1.parse({ ...(fixture("bank-state.json") as object), userId: "demo-user", stateVersion: 7 });
-  return { goal: { rowId: "goal-row", contract: goalContract }, plan: { goalRowId: "goal-row", plan: financialPlan }, state };
+  return { goal: { rowId: "goal-row", contract: goalContract }, plan: { goalRowId: "goal-row", status: "READY", plan: financialPlan }, state };
 }
 
 class MemoryRepository {
@@ -27,16 +33,21 @@ class MemoryRepository {
   readonly challenges = new Map<string, StoredWebAuthnChallenge>();
   readonly credentials = new Map<string, StoredWebAuthnCredential>();
   readonly evidences = new Map<string, StoredApprovalEvidence>();
+  readonly planAudits: unknown[] = [];
   snapshots = 0; approvals = 0; executions = 0;
   approvalRecord?: VerifiedPasskeyAuthorizationInput["approval"];
+  authorizationOwnerType?: VerifiedPasskeyAuthorizationInput["ownerType"];
   executionResult?: ExecutionResultV1;
+  bundle?: StoredGoalBundle;
   constructor(readonly goal: StoredGoal, readonly plan: StoredPlan) {}
   async getConfirmedGoal(id: string) { return id === this.goal.contract.id ? this.goal : null; }
+  async getConfirmedGoalBundle(id: string) { return id === this.bundle?.contract.bundleId ? this.bundle : null; }
   async getPlan(id: string) { return id === this.plan.plan.id ? this.plan : null; }
   async saveSnapshot() { this.snapshots += 1; }
+  async recordPlanAudit(input: unknown) { this.planAudits.push(input); }
   async webAuthnUserExists(id: string) { return this.users.has(id); }
   async createWebAuthnChallenge(input: NewWebAuthnChallenge) {
-    const row: StoredWebAuthnChallenge = { ...input, userHandle: input.userHandle ?? null, status: "ISSUED", financialPlanId: input.financialPlanId ?? null, approvalPayload: input.approvalPayload ?? null, approvalPayloadHash: input.approvalPayloadHash ?? null, consumedAt: null, revokedAt: null, createdAt: fixedNow };
+    const row: StoredWebAuthnChallenge = { ...input, challengeNonce: input.challengeNonce ?? null, userHandle: input.userHandle ?? null, status: "ISSUED", financialPlanId: input.financialPlanId ?? null, approvalPayload: input.approvalPayload ?? null, approvalPayloadHash: input.approvalPayloadHash ?? null, consumedAt: null, revokedAt: null, createdAt: fixedNow };
     this.challenges.set(row.id, row); return row;
   }
   async getWebAuthnChallenge(id: string) { return this.challenges.get(id) ?? null; }
@@ -58,10 +69,11 @@ class MemoryRepository {
   async revokeWebAuthnCredential(id: string, userId: string, now: Date) { const row = this.credentials.get(id); if (!row || row.userId !== userId || row.revokedAt) return false; row.revokedAt = now; return true; }
   async authorizeVerifiedPasskey(input: VerifiedPasskeyAuthorizationInput) {
     const challenge = this.challenges.get(input.challengeId); const credential = [...this.credentials.values()].find((item) => item.id === input.credentialId);
+    if (this.plan.status !== "READY") throw new Error("FINANCIAL_PLAN_NOT_READY");
     if (!challenge || challenge.status !== "ISSUED" || challenge.revokedAt || challenge.expiresAt <= input.now || challenge.financialPlanId !== input.approval.financialPlanId) throw new Error("WEBAUTHN_APPROVAL_CHALLENGE_ALREADY_USED");
     if (!credential || credential.revokedAt || credential.signCount !== input.expectedCounter) throw new Error("WEBAUTHN_CREDENTIAL_STATE_CHANGED");
     challenge.status = "CONSUMED"; challenge.consumedAt = input.now; credential.signCount = input.newCounter; credential.lastUsedAt = input.now;
-    this.evidences.set(input.evidence.id, input.evidence); this.approvalRecord = input.approval; this.approvals += 1; this.executions += 1;
+    this.evidences.set(input.evidence.id, input.evidence); this.approvalRecord = input.approval; this.authorizationOwnerType = input.ownerType; this.approvals += 1; this.executions += 1;
     this.executionResult = ExecutionResultV1.parse({ schemaVersion: "1", executionId: input.executionId, planId: input.approval.financialPlanId, status: "PENDING", startedStateVersion: input.approval.bankStateVersion, steps: [], goalOutcome: { achieved: false, summary: "Execution has not completed." } });
     return { evidence: input.evidence, execution: this.executionResult };
   }
@@ -72,6 +84,7 @@ class ControlledBank implements BankPort {
   constructor(public state: BankStateSnapshotV1) {}
   async getState() { this.reads += 1; return this.state; }
   async execute() { this.writes += 1; return { accepted: true as const, bankReference: "unexpected", stateVersion: 8 }; }
+  async lookupByIdempotencyKey(idempotencyKey: string) { return { status: "NOT_FOUND" as const, idempotencyKey }; }
 }
 
 class TestAuthenticationVerifier implements AuthenticationVerifier {
@@ -106,10 +119,10 @@ class TestVerifier implements RegistrationVerifier {
 const response = (challenge: string, id = "browser-credential"): RegistrationResponseJSON => ({ id, rawId: id, type: "public-key", clientExtensionResults: {}, response: { clientDataJSON: challenge, attestationObject: "attestation", transports: ["internal"] } });
 const assertion = (challenge: string, id = "credential-1", signature = "valid"): AuthenticationResponseJSON => ({ id, rawId: id, type: "public-key", clientExtensionResults: {}, response: { clientDataJSON: challenge, authenticatorData: "authenticator-data", signature } });
 
-function setup() {
+function setup(riskGate?: ApprovalRiskGate) {
   const records = authoritativeRecords(); const repository = new MemoryRepository(records.goal, records.plan); const bank = new ControlledBank(records.state); const verifier = new TestVerifier(); const authenticationVerifier = new TestAuthenticationVerifier();
   let currentNow = new Date(fixedNow);
-  const service = new WebAuthnService(repository as unknown as ParlanceRepository & WebAuthnRepository, bank, verifier, authenticationVerifier, () => new Date(currentNow));
+  const service = new WebAuthnService(repository as unknown as ParlanceRepository & WebAuthnRepository, bank, verifier, authenticationVerifier, () => new Date(currentNow), riskGate);
   return { ...records, repository, bank, verifier, authenticationVerifier, service, setNow(value: Date) { currentNow = new Date(value); } };
 }
 
@@ -126,9 +139,120 @@ async function approvalCeremony(values: ReturnType<typeof setup>) {
 
 beforeEach(() => {
   vi.stubEnv("PARLANCE_WEBAUTHN_RP_ID", "localhost"); vi.stubEnv("PARLANCE_WEBAUTHN_ORIGIN", "http://localhost:3000");
-  vi.stubEnv("PARLANCE_DEMO_WEBAUTHN_ENROLLMENT", "true"); vi.stubEnv("PARLANCE_DEMO_USER_ID", "demo-user");
+  vi.stubEnv("PARLANCE_DEMO_WEBAUTHN_ENROLLMENT", "true"); vi.stubEnv("PARLANCE_DEMO_USER_ID", "demo-user"); vi.stubEnv("PARLANCE_CUSTOMER_USER_ID", "demo-user");
 });
 afterEach(() => vi.unstubAllEnvs());
+
+it("binds the existing passkey ceremony and execution creation to a bundle-owned READY plan", async () => {
+  const values = setup();
+  const unhashed = GoalBundleContractV1.parse({
+    schemaVersion: "1", bundleId: "bundle-passkey", bundleVersion: 2, contractHash: "0".repeat(64), globalConstraints: [], explicitDependencies: [],
+    items: [{ itemId: "item-1", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "700000" }, recipientId: "ben-ntu" }, constraints: [], preferences: [], bindings: [{ schemaVersion: "1", reference: "NTU", entityType: "BENEFICIARY", entityId: "ben-ntu", resolutionMethod: "EXACT", confirmed: true }] }],
+  });
+  const contract = GoalBundleContractV1.parse({ ...unhashed, contractHash: hashGoalBundleContract(unhashed) });
+  values.repository.bundle = { rowId: "bundle-row", userId: "demo-user", contract };
+  const planWithoutHash = FinancialPlanV1.parse({ ...values.plan.plan, goalContractId: contract.bundleId, goalContractVersion: contract.bundleVersion, planHash: "0".repeat(64) });
+  values.plan.plan = FinancialPlanV1.parse({ ...planWithoutHash, planHash: hashFinancialPlan(planWithoutHash) });
+  values.plan.goalRowId = "bundle-row"; values.plan.ownerType = "BUNDLE";
+  await values.repository.saveWebAuthnCredential({ id: "credential-row", userId: "demo-user", credentialId: "credential-1", publicKey: new Uint8Array([1, 2, 3]), userHandle: new Uint8Array([2]), signCount: 0, transports: ["internal"], deviceType: "multiDevice", backedUp: true });
+  const issued = await values.service.approvalOptions(values.plan.plan.id, "trace-bundle-options");
+  const challenge = values.repository.challenges.get(issued.challengeId)!;
+  expect(challenge.approvalPayload).toMatchObject({ goalContractId: contract.bundleId, goalContractVersion: contract.bundleVersion, goalContractHash: contract.contractHash });
+  await expect(values.service.verifyApproval(values.plan.plan.id, issued.challengeId, assertion(challenge.challenge), "trace-bundle-verify")).resolves.toMatchObject({ execution: { status: "PENDING" } });
+  expect(values.repository.authorizationOwnerType).toBe("BUNDLE");
+  expect(values.repository.approvalRecord).toMatchObject({ goalContractId: contract.bundleId, goalContractHash: contract.contractHash, financialPlanHash: values.plan.plan.planHash });
+  expect(values.repository).toMatchObject({ approvals: 1, executions: 1 }); expect(values.bank.writes).toBe(0);
+});
+
+it("does not reserve risk capacity when no passkey is enrolled", async () => {
+  const reserveForApproval = vi.fn();
+
+  const values = setup({
+    reserveForApproval,
+  });
+
+  await expect(
+    values.service.approvalOptions(
+      values.plan.plan.id,
+      "trace-no-passkey-risk",
+    ),
+  ).rejects.toThrow("PASSKEY_CREDENTIAL_NOT_FOUND");
+
+  expect(reserveForApproval).not.toHaveBeenCalled();
+  expect(values.repository.challenges.size).toBe(0);
+  expect(values.bank.writes).toBe(0);
+});
+
+it("does not issue a passkey challenge when deterministic risk requires review", async () => {
+  const reserveForApproval = vi.fn().mockRejectedValue(
+    new Error("RISK_REVIEW_REQUIRED"),
+  );
+
+  const values = setup({
+    reserveForApproval,
+  });
+
+  await values.repository.saveWebAuthnCredential({
+    id: "credential-row",
+    userId: values.goal.contract.userId,
+    credentialId: "credential-1",
+    publicKey: new Uint8Array([1, 2, 3]),
+    userHandle: new Uint8Array([2]),
+    signCount: 0,
+    transports: ["internal"],
+    deviceType: "multiDevice",
+    backedUp: true,
+  });
+
+  await expect(
+    values.service.approvalOptions(
+      values.plan.plan.id,
+      "trace-risk-review",
+    ),
+  ).rejects.toThrow("RISK_REVIEW_REQUIRED");
+
+  expect(reserveForApproval).toHaveBeenCalledWith({
+    userId: values.goal.contract.userId,
+    financialPlanId: values.plan.plan.id,
+    traceId: "trace-risk-review",
+    now: fixedNow,
+  });
+
+  expect(values.repository.challenges.size).toBe(0);
+  expect(values.bank.writes).toBe(0);
+});
+
+it("does not issue a passkey challenge when deterministic risk blocks the plan", async () => {
+  const reserveForApproval = vi.fn().mockRejectedValue(
+    new Error("RISK_BLOCKED"),
+  );
+
+  const values = setup({
+    reserveForApproval,
+  });
+
+  await values.repository.saveWebAuthnCredential({
+    id: "credential-row",
+    userId: values.goal.contract.userId,
+    credentialId: "credential-1",
+    publicKey: new Uint8Array([1, 2, 3]),
+    userHandle: new Uint8Array([2]),
+    signCount: 0,
+    transports: ["internal"],
+    deviceType: "multiDevice",
+    backedUp: true,
+  });
+
+  await expect(
+    values.service.approvalOptions(
+      values.plan.plan.id,
+      "trace-risk-block",
+    ),
+  ).rejects.toThrow("RISK_BLOCKED");
+
+  expect(values.repository.challenges.size).toBe(0);
+  expect(values.bank.writes).toBe(0);
+});
 
 describe("WebAuthn Phase 1 registration", () => {
   it("reports whether the configured customer already has an active passkey", async () => {
@@ -186,12 +310,19 @@ describe("WebAuthn Phase 1 registration", () => {
   it("fails closed unless demo enrollment is explicitly enabled and rejects caller-selected users", async () => {
     const disabled = setup(); vi.stubEnv("PARLANCE_DEMO_WEBAUTHN_ENROLLMENT", "false"); await expect(disabled.service.registrationOptions()).rejects.toThrow("DEMO_WEBAUTHN_ENROLLMENT_DISABLED");
     vi.stubEnv("PARLANCE_DEMO_WEBAUTHN_ENROLLMENT", "true"); const enabled = setup();
-    const app = buildApp({ webauthn: enabled.service } as unknown as ApiServices); const result = await app.inject({ method: "POST", url: "/v1/webauthn/registration/options", payload: { userId: "attacker" } });
+    const app = buildApp({ webauthn: enabled.service, repository: enabled.repository } as unknown as ApiServices, routeAuthorization); const result = await app.inject({ method: "POST", url: "/v1/webauthn/registration/options", headers: routeHeaders, payload: { userId: "attacker" } });
     expect(result.statusCode).toBe(400); expect(enabled.repository.challenges.size).toBe(0); await app.close();
   });
 });
 
 describe("WebAuthn Phase 1 approval options", () => {
+  it("rejects a non-ready persisted plan before issuing a challenge", async () => {
+    const values = setup(); values.plan.status = "SUPERSEDED";
+    await expect(values.service.approvalOptions(values.plan.plan.id, "trace-superseded-options")).rejects.toThrow("FINANCIAL_PLAN_NOT_READY");
+    expect(values.repository.challenges.size).toBe(0); expect(values.repository).toMatchObject({ approvals: 0, executions: 0 });
+    expect(values.repository.planAudits).toContainEqual(expect.objectContaining({ eventType: "PLAN_AUTHORIZATION_REJECTED", payload: expect.objectContaining({ status: "SUPERSEDED", boundary: "APPROVAL_OPTIONS" }) }));
+  });
+
   it("rejects an expired persisted plan before issuing a challenge or creating authorization records", async () => {
     const values = setup(); setPlanExpiry(values, fixedNow);
     await expect(values.service.approvalOptions(values.plan.plan.id, "trace-expired-options")).rejects.toThrow("FINANCIAL_PLAN_EXPIRED");
@@ -214,16 +345,36 @@ describe("WebAuthn Phase 1 approval options", () => {
     expect(stored.approvalPayload).toEqual(expect.objectContaining({ userId: goal.contract.userId, goalContractHash: goal.contract.contractHash, financialPlanHash: plan.plan.planHash, bankStateVersion: 7, approvalExpiresAt: result.approvalExpiresAt }));
     expect(stored.expiresAt.getTime() - fixedNow.getTime()).toBe(3 * 60_000); expect(Date.parse(result.approvalExpiresAt) - fixedNow.getTime()).toBe(10 * 60_000);
     expect(result.options).toMatchObject({ rpId: "localhost", userVerification: "required" }); expect(bank).toMatchObject({ reads: 1, writes: 0 }); expect(repository).toMatchObject({ snapshots: 1, approvals: 0, executions: 0 });
+    expect(stored.challengeNonce).toBeTruthy();
+    expect(stored.challenge).toBe(committedApprovalChallenge(stored.approvalPayloadHash!, stored.challengeNonce!));
+  });
+
+  it("changes the committed challenge when any approval-payload field changes", () => {
+    const values = setup(); const approvalExpiresAt = new Date(fixedNow.getTime() + 10 * 60_000);
+    const base = buildApprovalPayload({ goal: values.goal.contract, plan: values.plan.plan, bankStateVersion: values.state.stateVersion, approvalExpiresAt });
+    const nonce = Buffer.alloc(32, 7).toString("base64url"); const expected = committedApprovalChallenge(base.payloadHash, nonce);
+    for (const key of Object.keys(base.payload) as (keyof typeof base.payload)[]) {
+      const current = base.payload[key];
+      const changed = { ...base.payload, [key]: typeof current === "number" ? current + 1 : `${current}-changed` };
+      expect(committedApprovalChallenge(canonicalHash(changed), nonce), key).not.toBe(expected);
+    }
   });
 
   it("rejects caller-supplied financial authority fields before reading bank state", async () => {
-    const values = setup(); const app = buildApp({ webauthn: values.service } as unknown as ApiServices);
-    const result = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approval-options`, payload: { userId: "attacker", bankStateVersion: 999 } });
+    const values = setup(); const app = buildApp({ webauthn: values.service, repository: values.repository } as unknown as ApiServices, routeAuthorization);
+    const result = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approval-options`, headers: routeHeaders, payload: { userId: "attacker", bankStateVersion: 999 } });
     expect(result.statusCode).toBe(400); expect(values.bank).toMatchObject({ reads: 0, writes: 0 }); expect(values.repository.challenges.size).toBe(0); await app.close();
   });
 });
 
 describe("WebAuthn Phase 2A approval verification", () => {
+  it("rejects a plan superseded after challenge issuance", async () => {
+    const values = setup(); const { issued, challenge } = await approvalCeremony(values); values.plan.status = "SUPERSEDED";
+    await expect(values.service.verifyApproval(values.plan.plan.id, issued.challengeId, assertion(challenge.challenge), "trace-superseded-verify")).rejects.toThrow("FINANCIAL_PLAN_NOT_READY");
+    expect(values.repository.challenges.get(issued.challengeId)?.status).toBe("REVOKED");
+    expect(values.authenticationVerifier.calls).toHaveLength(0); expect(values.repository).toMatchObject({ approvals: 0, executions: 0 });
+  });
+
   it("rejects authorization when the plan expires after challenge issuance", async () => {
     const values = setup(); setPlanExpiry(values, new Date(fixedNow.getTime() + 1_000)); const { issued, challenge } = await approvalCeremony(values);
     values.setNow(new Date(fixedNow.getTime() + 1_000));
@@ -284,6 +435,24 @@ describe("WebAuthn Phase 2A approval verification", () => {
     const goal = setup(); const goalIssue = await approvalCeremony(goal); goal.goal.contract = GoalContractV1.parse({ ...goal.goal.contract, goal: { ...goal.goal.contract.goal, amount: { currency: "USD", minorUnits: "500001" } } }); await expect(goal.service.verifyApproval(goal.plan.plan.id, goalIssue.issued.challengeId, assertion(goalIssue.challenge.challenge), "trace")).rejects.toThrow("APPROVAL_GOAL_BINDING_INVALID");
   });
 
+  it.each([
+    ["amount", (plan: FinancialPlanV1) => ({ ...plan, steps: plan.steps.map((step) => step.action === "TRANSFER" ? { ...step, parameters: { ...step.parameters, amount: { ...step.parameters.amount, minorUnits: "700001" } } } : step) })],
+    ["beneficiary", (plan: FinancialPlanV1) => ({ ...plan, steps: plan.steps.map((step) => step.action === "TRANSFER" ? { ...step, parameters: { ...step.parameters, beneficiaryId: "ben-attacker" } } : step) })],
+    ["source account", (plan: FinancialPlanV1) => ({ ...plan, steps: plan.steps.map((step) => step.action === "TRANSFER" ? { ...step, parameters: { ...step.parameters, sourceAccountId: "acc-attacker" } } : step) })],
+    ["step sequence and dependencies", (plan: FinancialPlanV1) => ({ ...plan, steps: plan.steps.map((step, index) => index === 0 ? { ...step, sequence: step.sequence + 10, dependsOn: ["injected-dependency"] } : step) })],
+  ] as const)("rejects %s substitution after challenge issuance", async (_label, mutate) => {
+    const values = setup(); const issue = await approvalCeremony(values);
+    values.plan.plan = FinancialPlanV1.parse(mutate(values.plan.plan));
+    await expect(values.service.verifyApproval(values.plan.plan.id, issue.issued.challengeId, assertion(issue.challenge.challenge), "trace-plan-substitution")).rejects.toThrow("APPROVAL_PLAN_BINDING_INVALID");
+    expect(values.repository).toMatchObject({ approvals: 0, executions: 0 });
+  });
+
+  it("rejects a persisted challenge commitment that no longer matches its payload binding", async () => {
+    const values = setup(); const issue = await approvalCeremony(values); issue.challenge.challengeNonce = Buffer.alloc(32, 9).toString("base64url");
+    await expect(values.service.verifyApproval(values.plan.plan.id, issue.issued.challengeId, assertion(issue.challenge.challenge), "trace-commitment-mismatch")).rejects.toThrow("APPROVAL_CHALLENGE_BINDING_MISMATCH");
+    expect(values.authenticationVerifier.calls).toHaveLength(0); expect(values.repository.approvals).toBe(0);
+  });
+
   it("rejects bank-state drift and a route/challenge plan mismatch", async () => {
     const drift = setup(); const driftIssue = await approvalCeremony(drift); drift.bank.state = BankStateSnapshotV1.parse({ ...drift.bank.state, stateVersion: 8 }); await expect(drift.service.verifyApproval(drift.plan.plan.id, driftIssue.issued.challengeId, assertion(driftIssue.challenge.challenge), "trace")).rejects.toThrow("APPROVAL_STATE_CHANGED"); expect(drift.repository.approvals).toBe(0);
     const mismatch = setup(); const mismatchIssue = await approvalCeremony(mismatch); await expect(mismatch.service.verifyApproval("other-plan", mismatchIssue.issued.challengeId, assertion(mismatchIssue.challenge.challenge), "trace")).rejects.toThrow("WEBAUTHN_APPROVAL_PLAN_MISMATCH");
@@ -297,10 +466,10 @@ describe("WebAuthn Phase 2A approval verification", () => {
   });
 
   it("strictly rejects caller financial bindings and leaves the old direct approval path disabled", async () => {
-    const values = setup(); const { issued, challenge } = await approvalCeremony(values); const app = buildApp({ webauthn: values.service } as unknown as ApiServices);
-    const tampered = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approval-verify`, payload: { challengeId: issued.challengeId, credential: assertion(challenge.challenge), userId: "attacker", financialPlanHash: "caller", expiresAt: "2099-01-01T00:00:00Z" } });
+    const values = setup(); const { issued, challenge } = await approvalCeremony(values); const app = buildApp({ webauthn: values.service, repository: values.repository } as unknown as ApiServices, routeAuthorization);
+    const tampered = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approval-verify`, headers: routeHeaders, payload: { challengeId: issued.challengeId, credential: assertion(challenge.challenge), userId: "attacker", financialPlanHash: "caller", expiresAt: "2099-01-01T00:00:00Z" } });
     expect(tampered.statusCode).toBe(400); expect(values.repository.approvals).toBe(0);
-    const bypass = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approve`, payload: { userId: "demo-user", method: "PASSKEY", signatureReference: "caller" } });
+    const bypass = await app.inject({ method: "POST", url: `/v1/plans/${values.plan.plan.id}/approve`, headers: routeHeaders, payload: { userId: "demo-user", method: "PASSKEY", signatureReference: "caller" } });
     expect(bypass.statusCode).toBe(404); expect(values.repository.approvals).toBe(0); await app.close();
   });
 });

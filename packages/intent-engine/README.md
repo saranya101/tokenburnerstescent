@@ -5,6 +5,11 @@ human references, identifies ambiguity, builds a lifecycle-free `GoalContractCan
 deterministic explanations. It does not create financial-plan steps, approve anything, execute
 bank operations, or write to a bank.
 
+The separate `ModelBackedIntentBundleInterpreter` parses multi-goal language into the frozen
+`IntentBundleDraftV1` contract while the original single-intent API remains unchanged. Bundle item
+IDs are application-owned, plain `and` never creates a dependency, and ambiguity/clarification stays
+isolated per item.
+
 ## Trust boundaries and data flow
 
 ```text
@@ -16,6 +21,7 @@ user text
   -> exact / alias resolution or semantic candidates
   -> ambiguity gate
   -> lifecycle-free GoalContractCandidateV1
+  -> independent read-only intent validation
   -> Person A confirmation and canonical GoalContractV1
   -> deterministic explanation
 ```
@@ -36,6 +42,10 @@ user text
   unconfirmed, and it contains no ID, user ID, version, status, hash, timestamps, or persistence
   metadata. Person A alone confirms the candidate and creates the canonical `GoalContractV1`.
   Ambiguous, missing, and semantic candidate results stay in Person B/orchestration.
+- `DeterministicReadOnlyIntentValidator` independently compares the exact source text, validated
+  draft, and candidate. It returns only `PASS`/`FAIL` with structured mismatch reasons and has no
+  authority or dependency capable of mutation, confirmation, planning, approval, persistence, or
+  execution. A failure must stop the candidate before Person A confirmation.
 - Explanations are pure deterministic rendering of validated goals, plans, compiler results, or
   execution results. They do not call an LLM, add operations or reasons, or expose internal IDs
   when a human label is available.
@@ -45,10 +55,17 @@ user text
 Person A should compose through the package root:
 
 - `createTokenHubIntentInterpreter()` for language interpretation;
+- `createTokenHubIntentBundleInterpreter()` for the frozen multi-intent bundle shape;
+- `groundingRequirementsForIntentBundle()` and `DeterministicIntentBundleAmbiguityDetector` for
+  item-scoped grounding and clarification;
+- `replaceClarifiedIntentBundleItem()` for targeted clarification without regenerating siblings;
+- `DeterministicIntentBundleCoverageValidator` for missing/extra goal and explicit-order checks;
 - `createDbGroundingStack()` for user-scoped DB exact/alias and pgvector candidate retrieval;
 - `groundingRequirementsForIntent()` to derive authoritative grounding work;
 - `DeterministicIntentAmbiguityDetector` for the pre-contract clarification gate;
 - `DeterministicGoalContractBuilder` for the lifecycle-free canonical-ID candidate handoff;
+- `DeterministicReadOnlyIntentValidator` immediately after candidate construction and before
+  Person A stores or confirms it;
 - `DeterministicExplanationRenderer` and `renderExplanationText()` for deterministic prose.
 
 The package also exports provider-neutral interfaces and in-memory implementations for dependency

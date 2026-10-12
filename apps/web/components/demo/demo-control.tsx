@@ -7,13 +7,10 @@ import {
   SCENARIO_DETAILS,
   SUPPORTED_SCENARIOS,
   fetchDemoBankState,
-  isValidDemoUserId,
   updateDemoScenarios,
   type DemoBankState,
   type DemoScenarioName,
 } from "../../lib/demo-control";
-
-const USER_STORAGE_KEY = "parlance.demo.userId";
 
 function diagnostic(error: unknown): string {
   const code = error instanceof Error ? error.message : "MOCK_BANK_UNAVAILABLE";
@@ -34,45 +31,33 @@ function formatMinorUnits(value: string, currency: string): string {
   } catch { return `${currency} ${value}`; }
 }
 
-export function DemoControl() {
-  const [userId, setUserId] = useState("user-1");
-  const [rememberUser, setRememberUser] = useState(false);
+export function DemoControl({ userId }: { userId: string }) {
   const [executionId, setExecutionId] = useState("");
   const [state, setState] = useState<DemoBankState>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
 
-  const loadState = async (targetUserId = userId) => {
-    const normalized = targetUserId.trim();
-    if (!isValidDemoUserId(normalized)) { setError(diagnostic(new Error("INVALID_USER_ID"))); return; }
+  const loadState = async () => {
     setBusy(true); setError(undefined); setNotice(undefined);
     try {
-      const nextState = await fetchDemoBankState(normalized);
+      const nextState = await fetchDemoBankState();
       setState(nextState);
-      if (rememberUser) window.localStorage.setItem(USER_STORAGE_KEY, normalized);
-      else window.localStorage.removeItem(USER_STORAGE_KEY);
     } catch (nextError) { setError(diagnostic(nextError)); }
     finally { setBusy(false); }
   };
 
   useEffect(() => {
-    const remembered = window.localStorage.getItem(USER_STORAGE_KEY);
-    const initialUserId = remembered && isValidDemoUserId(remembered) ? remembered : "user-1";
-    if (remembered) { setUserId(initialUserId); setRememberUser(true); }
     setBusy(true);
-    fetchDemoBankState(initialUserId).then(setState).catch((nextError: unknown) => setError(diagnostic(nextError))).finally(() => setBusy(false));
+    fetchDemoBankState().then(setState).catch((nextError: unknown) => setError(diagnostic(nextError))).finally(() => setBusy(false));
   }, []);
 
   const applyScenarios = async (scenarios: readonly DemoScenarioName[], message: string) => {
-    const normalized = userId.trim();
-    if (!isValidDemoUserId(normalized)) { setError(diagnostic(new Error("INVALID_USER_ID"))); return; }
     setBusy(true); setError(undefined); setNotice(undefined);
     try {
-      const refreshed = await updateDemoScenarios(normalized, scenarios);
+      const refreshed = await updateDemoScenarios(scenarios);
       setState(refreshed);
       setNotice(message);
-      if (rememberUser) window.localStorage.setItem(USER_STORAGE_KEY, normalized);
     } catch (nextError) { setError(diagnostic(nextError)); }
     finally { setBusy(false); }
   };
@@ -94,9 +79,8 @@ export function DemoControl() {
     <section className="demo-panel demo-target" aria-labelledby="demo-target-heading">
       <div className="demo-panel-heading"><div><span>Target</span><h2 id="demo-target-heading">Demo user and trace links</h2></div>{state && <b>State version {state.stateVersion}</b>}</div>
       <div className="demo-target-grid">
-        <label><span>User ID</span><input value={userId} onChange={(event) => setUserId(event.target.value)} placeholder="user-1" /></label>
+        <p><span>Configured demo user</span><strong>{userId}</strong></p>
         <button className="demo-button is-primary" type="button" disabled={busy} onClick={() => void loadState()}>{busy ? "Refreshing…" : "Refresh state"}</button>
-        <label className="demo-checkbox"><input type="checkbox" checked={rememberUser} onChange={(event) => { setRememberUser(event.target.checked); if (!event.target.checked) window.localStorage.removeItem(USER_STORAGE_KEY); }} />Remember this non-secret demo user ID</label>
         <label><span>Execution ID <small>optional</small></span><input value={executionId} onChange={(event) => setExecutionId(event.target.value)} placeholder="Paste an execution ID" /></label>
         {executionId.trim() && <Link className="demo-button" href={`/execution/${encodeURIComponent(executionId.trim())}`}>Open execution</Link>}
       </div>

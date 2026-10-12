@@ -7,5 +7,6 @@
   "beneficiaries": [{ "id": "ben-ntu", "name": "Nanyang Technological University", "supportedCurrencies": ["USD", "SGD"], "status": "ACTIVE" }],
   "assets": [], "holdings": [], "obligations": [],
   "serviceAvailability": { "transfers": true, "fx": true, "billPayments": true, "investments": true },
-  "fxQuotes": [{ "id": "quote-sgd-usd-1", "fromCurrency": "SGD", "toCurrency": "USD", "rate": "0.75", "fee": { "currency": "SGD", "minorUnits": "100" }, "expiresAt": "2026-09-20T01:10:00Z" }]
+  "fxQuotes": [{ "id": "quote-sgd-usd-1", "fromCurrency": "SGD", "toCurrency": "USD", "rate": "0.75", "fee": { "currency": "SGD", "minorUnits": "100" }, "expiresAt": "2026-09-20T01:10:00Z" }],
+  "assetQuotes": []
 }

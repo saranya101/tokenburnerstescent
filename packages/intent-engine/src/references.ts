@@ -1,4 +1,4 @@
-import type { IntentDraftV1 } from "@parlance/contracts";
+import type { InterpretedIntentDraftV1 } from "@parlance/contracts";
 import { groundingRequirementsForIntent } from "./grounding/requirements.js";
 import type { GroundableEntityType } from "./grounding/types.js";
 
@@ -13,7 +13,7 @@ export interface IntentReferenceOccurrence {
  * single source of truth, so semantic goal/constraint/preference roles are authoritative and a
  * contradictory supplemental references[] entry cannot override or duplicate them.
  */
-export function intentReferenceOccurrences(draft: IntentDraftV1): readonly IntentReferenceOccurrence[] {
+export function intentReferenceOccurrences(draft: InterpretedIntentDraftV1): readonly IntentReferenceOccurrence[] {
   return groundingRequirementsForIntent(draft).map(({ field, reference, expectedEntityType }) =>
     expectedEntityType === undefined
       ? { field, reference }

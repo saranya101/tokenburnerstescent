@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import { BankStateSnapshotV1 } from "./bank-state.js";
 import { Hash, Id, SchemaVersionV1 } from "./common.js";
@@ -107,10 +106,6 @@ export function goalBundleSemanticPayload(bundle: GoalBundleContractV1): GoalBun
 
 export function canonicalGoalBundleJson(bundle: GoalBundleContractV1): string {
   return JSON.stringify(normalize(goalBundleSemanticPayload(bundle)));
-}
-
-export function hashGoalBundleContract(bundle: GoalBundleContractV1): string {
-  return createHash("sha256").update(canonicalGoalBundleJson(bundle)).digest("hex");
 }
 
 type BundleItem = { readonly itemId: string };

@@ -7,9 +7,9 @@ import {
   GoalContractV1,
   IntentBundleDraftV1,
   canonicalGoalBundleJson,
-  hashGoalBundleContract,
   type GoalBundleContractV1 as GoalBundle,
 } from "./index.js";
+import { hashGoalBundleContract } from "./server.js";
 
 const transferDraftItem = {
   itemId: "send-ntu",
@@ -123,6 +123,11 @@ describe("multi-intent bundle structural validation", () => {
 describe("canonical GoalBundleContract semantic hashing", () => {
   const original = goalBundle();
   const addedItem = { ...assetItem, itemId: "buy-more-apple", goal: { ...assetItem.goal, quantity: "1" } };
+
+  it("preserves the established canonical payload and SHA-256 output", () => {
+    expect(canonicalGoalBundleJson(original)).toBe('{"bundleId":"bundle-1","bundleVersion":1,"explicitDependencies":[{"afterItemId":"send-ntu","beforeItemId":"buy-apple","reason":"USER_EXPLICIT_ORDER"}],"globalConstraints":[{"money":{"currency":"USD","minorUnits":"900000"},"type":"MAX_TOTAL_COST"}],"items":[{"bindings":[{"confirmed":true,"entityId":"ben-ntu","entityType":"BENEFICIARY","reference":"NTU","resolutionMethod":"EXACT","schemaVersion":"1"}],"constraints":[],"goal":{"amount":{"currency":"USD","minorUnits":"700000"},"recipientId":"ben-ntu","type":"DELIVER_MONEY"},"itemId":"send-ntu","preferences":[]},{"bindings":[{"confirmed":true,"entityId":"asset-aapl","entityType":"ASSET","reference":"Apple","resolutionMethod":"EXACT","schemaVersion":"1"}],"constraints":[],"goal":{"assetId":"asset-aapl","quantity":"2","type":"ACQUIRE_ASSET"},"itemId":"buy-apple","preferences":[]}],"schemaVersion":"1"}');
+    expect(hashGoalBundleContract(original)).toBe("79c60c967a5e093de70c8e340664c80eeb6b25b43c505febbab4f75ec1b2c9b1");
+  });
 
   it.each([
     ["amount", { items: [{ ...transferItem, goal: { ...transferItem.goal, amount: { currency: "USD", minorUnits: "700001" } } }, assetItem] }],

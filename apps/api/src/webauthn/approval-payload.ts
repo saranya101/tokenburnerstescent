@@ -3,6 +3,8 @@ import { z } from "zod";
 import { canonicalHash, canonicalJson } from "../security/canonical-hash.js";
 import type { ApprovalPayload } from "./types.js";
 
+export interface ApprovalSubject { userId: string; id: string; version: number; contractHash: string }
+
 export const ApprovalPayloadV1 = z.object({
   purpose: z.literal("PARLANCE_FINANCIAL_PLAN_APPROVAL"), payloadVersion: z.literal(1), approvalMethod: z.literal("PASSKEY"),
   userId: z.string().min(1), goalContractId: z.string().min(1), goalContractVersion: z.number().int().positive(), goalContractHash: z.string().min(16),
@@ -10,19 +12,19 @@ export const ApprovalPayloadV1 = z.object({
 }).strict();
 
 export function buildApprovalPayload(input: {
-  goal: GoalContractV1;
   plan: FinancialPlanV1;
   bankStateVersion: number;
   approvalExpiresAt: Date;
-}): { payload: ApprovalPayload; canonicalPayload: string; payloadHash: string } {
+} & ({ goal: GoalContractV1; subject?: never } | { subject: ApprovalSubject; goal?: never })): { payload: ApprovalPayload; canonicalPayload: string; payloadHash: string } {
+  const subject = input.goal ?? input.subject;
   const payload: ApprovalPayload = {
     purpose: "PARLANCE_FINANCIAL_PLAN_APPROVAL",
     payloadVersion: 1,
     approvalMethod: "PASSKEY",
-    userId: input.goal.userId,
-    goalContractId: input.goal.id,
-    goalContractVersion: input.goal.version,
-    goalContractHash: input.goal.contractHash,
+    userId: subject.userId,
+    goalContractId: subject.id,
+    goalContractVersion: subject.version,
+    goalContractHash: subject.contractHash,
     financialPlanId: input.plan.id,
     financialPlanHash: input.plan.planHash,
     bankStateVersion: input.bankStateVersion,
