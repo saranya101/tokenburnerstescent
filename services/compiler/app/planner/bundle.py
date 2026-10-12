@@ -8,7 +8,7 @@ the deterministic tie-breaker between otherwise independent items.
 import hashlib
 import json
 from collections import deque
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from app.constraints.evaluator import evaluate_constraints
 from app.models.contracts import (
@@ -33,7 +33,7 @@ from app.models.contracts import (
 )
 from app.operations.library import operation_sort_key
 from app.operations.models import BuyAsset, FxConvert, InternalOperation, Money, MoveFunds, Transfer
-from app.planner.acquire import compile_acquire_operation
+from app.planner.acquire import compile_acquire_route
 from app.planner.candidates import enumerate_candidates
 from app.planner.compiler import (
     COMPILER_VERSION,
@@ -174,17 +174,6 @@ def _operation_from_step(step) -> InternalOperation:
             Money(parameters.maximum_spend.currency, int(parameters.maximum_spend.minor_units)),
         )
     raise ValueError(f"Bundle compiler cannot compose {step.action} steps")
-
-
-def _compile_acquire(
-    item: GoalBundleItemV1, snapshot: BankStateSnapshotV1, policy: PolicyEngine
-) -> BuyAsset | CompilerUnsatV1 | CompilerPolicyBlockedV1:
-    return compile_acquire_operation(
-        _item_goal_contract(item, snapshot),
-        snapshot,
-        policy,
-        context={"scope": "ITEM", "itemId": item.item_id},
-    )
 
 
 def _global_constraint_result(
@@ -343,6 +332,13 @@ def _build_bundle_plan(
     return plan, proof
 
 
+def _quantities_equal(left: str, right: str) -> bool:
+    try:
+        return Decimal(left) == Decimal(right)
+    except InvalidOperation:
+        return False
+
+
 def _step_satisfies_item(item: GoalBundleItemV1, step) -> bool:
     goal = item.goal
     parameters = step.parameters
@@ -366,7 +362,7 @@ def _step_satisfies_item(item: GoalBundleItemV1, step) -> bool:
         return (
             step.action == "BUY_ASSET"
             and parameters.asset_id == goal.asset_id
-            and (goal.quantity is None or parameters.quantity == goal.quantity)
+            and (goal.quantity is None or _quantities_equal(parameters.quantity, goal.quantity))
             and (
                 goal.budget is None
                 or (
@@ -399,8 +395,10 @@ def validate_bundle_plan(
     plan: FinancialPlanV1,
     proof: BundleSatisfactionProofV1,
     initial_state: BankStateSnapshotV1,
+    policy: PolicyEngine | None = None,
 ) -> bool:
     """Independently prove coverage, constraints, dependencies and irreversibility."""
+    policy = policy or PolicyEngine()
     if (
         proof.bundle_id != bundle.bundle_id
         or proof.bundle_contract_hash != bundle.contract_hash
@@ -444,8 +442,18 @@ def validate_bundle_plan(
         direct_steps.update(step_ids)
 
     dependencies = {step.id: list(step.depends_on) for step in plan.steps}
-    if any(dependency not in steps for values in dependencies.values() for dependency in values):
+    if any(
+        dependency not in steps or steps[dependency].sequence >= step.sequence
+        for step in plan.steps
+        for dependency in step.depends_on
+    ):
         return False
+    for step_ids in coverage.values():
+        if any(
+            before not in _ancestors(after, dependencies)
+            for before, after in zip(step_ids, step_ids[1:], strict=False)
+        ):
+            return False
     for dependency in bundle.explicit_dependencies:
         before_steps = coverage[dependency.before_item_id]
         after_steps = coverage[dependency.after_item_id]
@@ -481,8 +489,9 @@ def validate_bundle_plan(
     for item_id, step_ids in coverage.items():
         for step_id in step_ids:
             coverage_owners[step_id].add(item_id)
-    if any(not owners for owners in coverage_owners.values()):
+    if any(len(owners) != 1 for owners in coverage_owners.values()):
         return False
+    acquire_routes: dict[str, tuple[InternalOperation, ...]] = {}
     item_initial_states: dict[str, BankStateSnapshotV1] = {}
     item_operations: dict[str, list[InternalOperation]] = {
         item.item_id: [] for item in bundle.items
@@ -501,8 +510,19 @@ def validate_bundle_plan(
             supported = False
             for item in active_items:
                 if isinstance(item.goal, AcquireAssetGroundedGoalV1):
-                    candidate = _compile_acquire(item, simulated.to_snapshot(), PolicyEngine())
-                    if isinstance(candidate, BuyAsset) and candidate == operation:
+                    if item.item_id not in acquire_routes:
+                        candidate = compile_acquire_route(
+                            _item_goal_contract(item, simulated.to_snapshot()),
+                            simulated.to_snapshot(),
+                            policy,
+                        )
+                        if not isinstance(candidate, tuple):
+                            return False
+                        if len(candidate) != len(coverage[item.item_id]):
+                            return False
+                        acquire_routes[item.item_id] = candidate
+                    route = acquire_routes[item.item_id]
+                    if route[len(item_operations[item.item_id])] == operation:
                         supported = True
                         break
                 elif operation in enumerate_candidates(
@@ -511,7 +531,7 @@ def validate_bundle_plan(
                 ):
                     supported = True
                     break
-            if not supported:
+            if not supported or not policy.evaluate(simulated, operation).allowed:
                 return False
             for owner_id in owner_ids:
                 item_initial_states.setdefault(owner_id, simulated.to_snapshot())
@@ -535,7 +555,20 @@ def validate_bundle_plan(
     except (AttributeError, TypeError, ValueError):
         return False
     global_result = _global_constraint_result(bundle, initial_state, simulated, tuple(operations))
-    return global_result is None
+    if global_result is not None:
+        return False
+    ranges = {
+        item_id: (steps[ids[0]].sequence, steps[ids[-1]].sequence)
+        for item_id, ids in coverage.items()
+    }
+    expected, _ = _build_bundle_plan(
+        bundle, initial_state, simulated, policy, tuple(operations), ranges
+    )
+    return (
+        plan.id == expected.id
+        and plan.projected_outcome == expected.projected_outcome
+        and plan.validity == expected.validity
+    )
 
 
 def compile_goal_bundle(
@@ -548,32 +581,21 @@ def compile_goal_bundle(
     operations: list[InternalOperation] = []
     item_ranges: dict[str, tuple[int, int]] = {}
     for item in _ordered_items(bundle):
-        if isinstance(item.goal, AcquireAssetGroundedGoalV1):
-            operation = _compile_acquire(item, state.to_snapshot(), policy)
-            if not isinstance(operation, BuyAsset):
-                return operation
-            start = len(operations)
-            applied = apply_operation(state, operation)
-            if not applied.success:
-                return _unsat(
-                    "COMPOSITE_SIMULATION_FAILED",
-                    itemId=item.item_id,
-                    violations=[violation.code for violation in applied.violations],
-                )
-            state = applied.state
-            operations.append(operation)
-            item_ranges[item.item_id] = (start, start)
-            continue
         if isinstance(item.goal, PayBillGroundedGoalV1):
             return _unsat("UNSUPPORTED_GOAL", itemId=item.item_id, goalType=item.goal.type)
-        result = compile_goal(
-            _goal_contract(bundle, item, snapshot), state.to_snapshot(), policy=policy
+        contract = (
+            _item_goal_contract(item, snapshot)
+            if isinstance(item.goal, AcquireAssetGroundedGoalV1)
+            else _goal_contract(bundle, item, snapshot)
         )
+        result = compile_goal(contract, state.to_snapshot(), policy=policy)
         if result.status != "SAT":
             if result.reason.details is None:
                 result.reason.details = {"itemId": item.item_id}
             else:
                 result.reason.details.setdefault("itemId", item.item_id)
+            if isinstance(item.goal, AcquireAssetGroundedGoalV1):
+                result.reason.details.setdefault("scope", "ITEM")
             return result
         start = len(operations)
         for step in result.plan.steps:
@@ -594,6 +616,6 @@ def compile_goal_bundle(
     if global_failure is not None:
         return global_failure
     plan, proof = _build_bundle_plan(bundle, snapshot, state, policy, combined, item_ranges)
-    if not validate_bundle_plan(bundle, plan, proof, snapshot):
+    if not validate_bundle_plan(bundle, plan, proof, snapshot, policy):
         return _unsat("BUNDLE_SATISFACTION_PROOF_FAILED")
     return CompileGoalBundleResultV1(financialPlan=plan, satisfactionProof=proof)
