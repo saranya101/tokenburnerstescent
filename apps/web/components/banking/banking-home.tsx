@@ -13,7 +13,7 @@ export function BankingHome() {
 export function BankingHomeView({ state, activity, loading, error }: { state?: BankStateSnapshotV1 | undefined; activity?: CustomerActivityV1 | undefined; loading: boolean; error?: string | undefined }) {
   const capturedAt = state ? new Date(state.capturedAt).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Singapore" }) : undefined;
   return <div className="banking-home bank-overview">
-    <header className="home-heading"><div><p>Good afternoon, Alex</p><h1>Your financial overview</h1></div><span>{loading ? "Refreshing…" : capturedAt ? `Last updated ${capturedAt}` : ""}</span></header>
+    <header className="home-heading"><div><p>Welcome back</p><h1>Your financial overview</h1></div><span>{loading ? "Refreshing…" : capturedAt ? `Last updated ${capturedAt}` : ""}</span></header>
 
     <div className="bank-overview-grid">
       <section className="bank-section account-overview" id="accounts" aria-labelledby="home-accounts-heading">

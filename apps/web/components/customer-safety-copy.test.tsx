@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { PlanPresentation } from "../lib/customer-presentation";
 import { customerDesktopNavigation, customerMobileNavigation } from "./banking/banking-nav";
+import { BankingHomeView } from "./banking/banking-home";
 import { BankingShell } from "./banking/banking-shell";
 import { chatWelcomeGreeting } from "./chat/chat-experience";
 import { ConversationComposer } from "./chat/conversation-composer";
@@ -79,6 +80,12 @@ it("does not present a placeholder name or guessed time of day on the chat welco
   expect(chatWelcomeGreeting).not.toMatch(/morning|afternoon|evening|Alex/iu);
   expect(shell).not.toMatch(/Alex Tan|>AT</u);
   expect(shell).toContain('aria-label="Customer profile"');
+});
+
+it("does not present a hardcoded time-of-day greeting or customer name on the Home page", () => {
+  const html = renderToStaticMarkup(createElement(BankingHomeView, { loading: true }));
+  expect(html).toContain("Welcome back");
+  expect(html).not.toMatch(/Good morning|Good afternoon|Good evening|Good night|Alex/iu);
 });
 
 it.each([
