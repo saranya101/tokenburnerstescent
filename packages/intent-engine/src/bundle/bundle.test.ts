@@ -281,6 +281,34 @@ describe("multi-intent bundle interpretation", () => {
     expect(new DeterministicIntentBundleCoverageValidator().validate({ sourceText: text, bundle }))
       .toEqual({ status: "PASS", mismatches: [] });
   });
+
+  it("rejects a spurious malformed ACQUIRE_ASSET from a negated buy before grounding or execution", async () => {
+    const text = "Don't buy Apple; send John SGD 100.";
+    const malformedCandidate = {
+      schemaVersion: "1",
+      items: [
+        {
+          itemId: "model-1",
+          goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientReference: "John" },
+          constraints: [],
+          preferences: [],
+        },
+        {
+          itemId: "model-2",
+          goal: { type: "ACQUIRE_ASSET", assetReference: "Apple" },
+          constraints: [],
+          preferences: [],
+        },
+      ],
+      globalConstraints: [],
+      explicitDependencies: [],
+    };
+    const parser = new ModelBackedIntentBundleInterpreter(modelClient(malformedCandidate));
+
+    await expect(parser.interpretUserRequest({ text, userId: "user" })).rejects.toThrow(
+      expect.objectContaining({ code: "INVALID_MODEL_OUTPUT" }),
+    );
+  });
 });
 
 describe("bundle-scoped grounding and ambiguity", () => {
