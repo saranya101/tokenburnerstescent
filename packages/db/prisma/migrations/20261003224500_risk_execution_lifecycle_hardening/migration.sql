@@ -1,0 +1,1 @@
+ALTER TYPE "RiskReservationStatus" ADD VALUE 'EXECUTING' AFTER 'ACTIVE';

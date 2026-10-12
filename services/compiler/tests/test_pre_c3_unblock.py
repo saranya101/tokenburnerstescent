@@ -132,5 +132,7 @@ def test_operation_sort_key_is_stable_and_normalizes_decimal():
     from app.operations.models import BuyAsset
 
     assert operation_sort_key(
-        BuyAsset("acc-usd", "asset-a", Decimal("1.0"), Money("USD", 100))
-    ) == operation_sort_key(BuyAsset("acc-usd", "asset-a", Decimal("1.00"), Money("USD", 100)))
+        BuyAsset("acc-usd", "asset-a", Decimal("1.0"), "quote-a", 100, Money("USD", 100))
+    ) == operation_sort_key(
+        BuyAsset("acc-usd", "asset-a", Decimal("1.00"), "quote-a", 100, Money("USD", 100))
+    )

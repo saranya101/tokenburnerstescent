@@ -32,7 +32,8 @@ from app.models.contracts import (
     ProjectedOutcomeV1,
 )
 from app.operations.library import operation_sort_key
-from app.operations.models import FxConvert, InternalOperation, Money, MoveFunds, Transfer
+from app.operations.models import BuyAsset, FxConvert, InternalOperation, Money, MoveFunds, Transfer
+from app.planner.acquire import compile_acquire_operation
 from app.planner.candidates import enumerate_candidates
 from app.planner.compiler import (
     COMPILER_VERSION,
@@ -118,6 +119,24 @@ def _goal_contract(
     )
 
 
+def _item_goal_contract(item: GoalBundleItemV1, snapshot: BankStateSnapshotV1) -> GoalContractV1:
+    """Constraint-evaluation contract containing only this item's private constraints."""
+    return GoalContractV1(
+        schemaVersion="1",
+        id=f"bundle-item:{item.item_id}",
+        userId=snapshot.user_id,
+        version=1,
+        goal=item.goal,
+        constraints=item.constraints,
+        preferences=item.preferences,
+        entityBindings=item.bindings,
+        status="CONFIRMED",
+        contractHash="0" * 64,
+        createdAt=snapshot.captured_at,
+        confirmedAt=snapshot.captured_at,
+    )
+
+
 def _operation_from_step(step) -> InternalOperation:
     parameters = step.parameters
     if step.action == "TRANSFER":
@@ -140,52 +159,32 @@ def _operation_from_step(step) -> InternalOperation:
             parameters.target_currency,
             parameters.quote_id,
         )
+    if step.action == "BUY_ASSET":
+        return BuyAsset(
+            parameters.source_account_id,
+            parameters.asset_id,
+            Decimal(parameters.quantity),
+            parameters.quote_id,
+            int(parameters.quoted_unit_price_minor),
+            Money(
+                parameters.settlement_currency,
+                int(parameters.authorized_total_minor) - int(parameters.quoted_fee_minor),
+            ),
+            Money(parameters.settlement_currency, int(parameters.quoted_fee_minor)),
+            Money(parameters.maximum_spend.currency, int(parameters.maximum_spend.minor_units)),
+        )
     raise ValueError(f"Bundle compiler cannot compose {step.action} steps")
 
 
-def _acquire_failure(
+def _compile_acquire(
     item: GoalBundleItemV1, snapshot: BankStateSnapshotV1, policy: PolicyEngine
-) -> CompilerUnsatV1 | CompilerPolicyBlockedV1:
-    goal = item.goal
-    assert isinstance(goal, AcquireAssetGroundedGoalV1)
-    if goal.quantity is not None and Decimal(goal.quantity) <= 0:
-        return _unsat("INVALID_QUANTITY", itemId=item.item_id, quantity=goal.quantity)
-    if goal.budget is not None and int(goal.budget.minor_units) <= 0:
-        return _unsat(
-            "INVALID_AMOUNT",
-            itemId=item.item_id,
-            currency=goal.budget.currency,
-            minorUnits=goal.budget.minor_units,
-        )
-    if "BUY_ASSET" not in policy.allowed_operations:
-        return _blocked("OPERATION_NOT_ALLOWED", itemId=item.item_id, action="BUY_ASSET")
-    asset = next(
-        (candidate for candidate in snapshot.assets if candidate.id == goal.asset_id), None
+) -> BuyAsset | CompilerUnsatV1 | CompilerPolicyBlockedV1:
+    return compile_acquire_operation(
+        _item_goal_contract(item, snapshot),
+        snapshot,
+        policy,
+        context={"scope": "ITEM", "itemId": item.item_id},
     )
-    if asset is None:
-        return _unsat("ASSET_NOT_FOUND", itemId=item.item_id, assetId=goal.asset_id)
-    if not asset.tradable:
-        return _blocked("ASSET_NOT_TRADABLE", itemId=item.item_id, assetId=goal.asset_id)
-    if not snapshot.service_availability.investments:
-        return _blocked("REQUIRED_SERVICE_UNAVAILABLE", itemId=item.item_id, service="investments")
-    eligible_accounts = [
-        account
-        for account in snapshot.accounts
-        if account.status == "ACTIVE"
-        and account.currency == asset.settlement_currency
-        and "TRADE_ASSET" in account.capabilities
-    ]
-    if not eligible_accounts:
-        return _unsat(
-            "NO_ELIGIBLE_SETTLEMENT_ACCOUNT",
-            itemId=item.item_id,
-            assetId=goal.asset_id,
-            settlementCurrency=asset.settlement_currency,
-        )
-    # BankStateSnapshotV1 contains asset identity and settlement currency, but no
-    # authoritative price/market quote. BUY_ASSET requires an explicit total
-    # price, so deriving quantity or cost here would invent financial data.
-    return _unsat("ASSET_PRICE_UNAVAILABLE", itemId=item.item_id, assetId=goal.asset_id)
 
 
 def _global_constraint_result(
@@ -269,9 +268,16 @@ def _build_bundle_plan(
             )
 
     quote_ids = sorted(
-        {operation.quote_id for operation in operations if isinstance(operation, FxConvert)}
+        {
+            operation.quote_id
+            for operation in operations
+            if isinstance(operation, (FxConvert, BuyAsset))
+        }
     )
     expiries = [quote.expires_at for quote in snapshot.fx_quotes if quote.id in quote_ids]
+    expiries.extend(
+        quote.expires_at for quote in snapshot.asset_quotes if quote.quote_id in quote_ids
+    )
     final = projected.to_snapshot()
     delivered_items = [
         item for item in bundle.items if isinstance(item.goal, DeliverMoneyGroundedGoalV1)
@@ -279,7 +285,11 @@ def _build_bundle_plan(
     outcome = ProjectedOutcomeV1(
         goalSatisfied=True,
         deliveredMoney=delivered_items[0].goal.amount if len(delivered_items) == 1 else None,
-        acquiredAssets=[],
+        acquiredAssets=[
+            {"assetId": operation.asset_id, "quantity": format(operation.quantity.normalize(), "f")}
+            for operation in operations
+            if isinstance(operation, BuyAsset)
+        ],
         paidObligationIds=[],
         projectedAvailableBalances=[
             {
@@ -316,7 +326,12 @@ def _build_bundle_plan(
         itemCoverage=[
             BundleItemCoverageV1(
                 itemId=item.item_id,
-                satisfiedByStepIds=[f"{plan_id}:{item_ranges[item.item_id][1]}"],
+                satisfiedByStepIds=[
+                    f"{plan_id}:{index}"
+                    for index in range(
+                        item_ranges[item.item_id][0], item_ranges[item.item_id][1] + 1
+                    )
+                ],
             )
             for item in bundle.items
         ],
@@ -352,7 +367,13 @@ def _step_satisfies_item(item: GoalBundleItemV1, step) -> bool:
             step.action == "BUY_ASSET"
             and parameters.asset_id == goal.asset_id
             and (goal.quantity is None or parameters.quantity == goal.quantity)
-            and (goal.budget is None or parameters.maximum_spend == goal.budget)
+            and (
+                goal.budget is None
+                or (
+                    parameters.maximum_spend.currency == goal.budget.currency
+                    and int(parameters.maximum_spend.minor_units) <= int(goal.budget.minor_units)
+                )
+            )
         )
     if isinstance(goal, PayBillGroundedGoalV1):
         # V1 PAY_BILL identifies a biller, while PAY_BILL execution identifies an
@@ -414,7 +435,11 @@ def validate_bundle_plan(
         step_ids = coverage[item.item_id]
         if not step_ids or any(step_id not in steps for step_id in step_ids):
             return False
-        if not all(_step_satisfies_item(item, steps[step_id]) for step_id in step_ids):
+        if len(set(step_ids)) != len(step_ids):
+            return False
+        if step_ids != sorted(step_ids, key=lambda step_id: steps[step_id].sequence):
+            return False
+        if not _step_satisfies_item(item, steps[step_ids[-1]]):
             return False
         direct_steps.update(step_ids)
 
@@ -452,35 +477,61 @@ def validate_bundle_plan(
     item_predecessors: dict[str, set[str]] = {item.item_id: set() for item in bundle.items}
     for dependency in bundle.explicit_dependencies:
         item_predecessors[dependency.after_item_id].add(dependency.before_item_id)
-    coverage_owner = {
-        step_id: item_id for item_id, step_ids in coverage.items() for step_id in step_ids
+    coverage_owners: dict[str, set[str]] = {step_id: set() for step_id in steps}
+    for item_id, step_ids in coverage.items():
+        for step_id in step_ids:
+            coverage_owners[step_id].add(item_id)
+    if any(not owners for owners in coverage_owners.values()):
+        return False
+    item_initial_states: dict[str, BankStateSnapshotV1] = {}
+    item_operations: dict[str, list[InternalOperation]] = {
+        item.item_id: [] for item in bundle.items
     }
     try:
         for step in sorted(plan.steps, key=lambda candidate: candidate.sequence):
             operation = _operation_from_step(step)
+            owner_ids = coverage_owners[step.id]
             active_items = [
-                item
-                for item in bundle.items
-                if item.item_id not in completed_items
-                and item_predecessors[item.item_id] <= completed_items
+                item_by_id[item_id]
+                for item_id in owner_ids
+                if item_id not in completed_items and item_predecessors[item_id] <= completed_items
             ]
-            if not any(
-                operation
-                in enumerate_candidates(
+            if len(active_items) != len(owner_ids):
+                return False
+            supported = False
+            for item in active_items:
+                if isinstance(item.goal, AcquireAssetGroundedGoalV1):
+                    candidate = _compile_acquire(item, simulated.to_snapshot(), PolicyEngine())
+                    if isinstance(candidate, BuyAsset) and candidate == operation:
+                        supported = True
+                        break
+                elif operation in enumerate_candidates(
                     _goal_contract(bundle, item, simulated.to_snapshot()),
                     simulated.to_snapshot(),
-                )
-                for item in active_items
-            ):
+                ):
+                    supported = True
+                    break
+            if not supported:
                 return False
+            for owner_id in owner_ids:
+                item_initial_states.setdefault(owner_id, simulated.to_snapshot())
             result = apply_operation(simulated, operation)
             if not result.success:
                 return False
             simulated = result.state
             operations.append(operation)
-            owner = coverage_owner.get(step.id)
-            if owner is not None:
-                completed_items.add(item_by_id[owner].item_id)
+            for owner_id in owner_ids:
+                item_operations[owner_id].append(operation)
+                if coverage[owner_id][-1] == step.id:
+                    evaluation = evaluate_constraints(
+                        _item_goal_contract(item_by_id[owner_id], item_initial_states[owner_id]),
+                        item_initial_states[owner_id],
+                        simulated,
+                        tuple(item_operations[owner_id]),
+                    )
+                    if not evaluation.valid:
+                        return False
+                    completed_items.add(owner_id)
     except (AttributeError, TypeError, ValueError):
         return False
     global_result = _global_constraint_result(bundle, initial_state, simulated, tuple(operations))
@@ -498,7 +549,21 @@ def compile_goal_bundle(
     item_ranges: dict[str, tuple[int, int]] = {}
     for item in _ordered_items(bundle):
         if isinstance(item.goal, AcquireAssetGroundedGoalV1):
-            return _acquire_failure(item, state.to_snapshot(), policy)
+            operation = _compile_acquire(item, state.to_snapshot(), policy)
+            if not isinstance(operation, BuyAsset):
+                return operation
+            start = len(operations)
+            applied = apply_operation(state, operation)
+            if not applied.success:
+                return _unsat(
+                    "COMPOSITE_SIMULATION_FAILED",
+                    itemId=item.item_id,
+                    violations=[violation.code for violation in applied.violations],
+                )
+            state = applied.state
+            operations.append(operation)
+            item_ranges[item.item_id] = (start, start)
+            continue
         if isinstance(item.goal, PayBillGroundedGoalV1):
             return _unsat("UNSUPPORTED_GOAL", itemId=item.item_id, goalType=item.goal.type)
         result = compile_goal(

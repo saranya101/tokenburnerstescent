@@ -1,5 +1,5 @@
 {
-  "name": "@parlance/contracts", "version": "0.0.0", "type": "module", "exports": "./src/index.ts",
+  "name": "@parlance/contracts", "version": "0.0.0", "type": "module", "exports": { ".": "./src/index.ts", "./server": "./src/server.ts" },
   "scripts": { "build": "tsc -p tsconfig.json", "lint": "eslint src", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "vitest run src" },
   "dependencies": { "zod": "^4.1.0" }, "devDependencies": { "@types/node": "^24.0.0" }
 }

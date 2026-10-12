@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from app.constraints.cost import account_costs, account_costs_for_limit
 from app.models.contracts import (
+    AcquireAssetGroundedGoalV1,
     BankStateSnapshotV1,
     CompilerPolicyBlockedV1,
     CompilerReasonV1,
@@ -22,9 +23,12 @@ from app.models.contracts import (
     ProjectedOutcomeV1,
 )
 from app.operations.library import operation_sort_key
-from app.operations.models import FxConvert, InternalOperation, MoveFunds, Transfer
+from app.operations.models import BuyAsset, FxConvert, InternalOperation, MoveFunds, Transfer
+from app.planner.acquire import compile_acquire_route
 from app.planner.search import SearchDiagnostics, SearchNode, search_routes
 from app.policy.engine import PolicyEngine
+from app.simulator.apply import apply_operation
+from app.simulator.state import SimulatedState
 
 COMPILER_VERSION = "c3b-1"
 POLICY_VERSION = "c2-1"
@@ -214,6 +218,19 @@ def _step_parameters(operation: InternalOperation) -> dict:
             "targetCurrency": operation.to_currency,
             "quoteId": operation.quote_id,
         }
+    if isinstance(operation, BuyAsset):
+        fee_minor = operation.fee.minor_units if operation.fee is not None else 0
+        return {
+            "sourceAccountId": operation.source_account_id,
+            "assetId": operation.asset_id,
+            "quantity": format(operation.quantity.normalize(), "f"),
+            "maximumSpend": _money(operation.maximum_spend or operation.price),
+            "quoteId": operation.quote_id,
+            "settlementCurrency": operation.price.currency,
+            "quotedUnitPriceMinor": str(operation.unit_price_minor),
+            "quotedFeeMinor": str(fee_minor),
+            "authorizedTotalMinor": str(operation.price.minor_units + fee_minor),
+        }
     raise ValueError(f"Compiler cannot construct {operation.action} steps")
 
 
@@ -266,16 +283,27 @@ def _build_plan(
             }
         )
     quote_ids = sorted(
-        {operation.quote_id for operation in node.operations if isinstance(operation, FxConvert)}
+        {
+            operation.quote_id
+            for operation in node.operations
+            if isinstance(operation, (FxConvert, BuyAsset))
+        }
     )
     expiries = [quote.expires_at for quote in snapshot.fx_quotes if quote.id in quote_ids]
+    expiries.extend(
+        quote.expires_at for quote in snapshot.asset_quotes if quote.quote_id in quote_ids
+    )
     final = node.state.to_snapshot()
     outcome = ProjectedOutcomeV1(
         goalSatisfied=True,
         deliveredMoney=goal.goal.amount
         if isinstance(goal.goal, DeliverMoneyGroundedGoalV1)
         else None,
-        acquiredAssets=[],
+        acquiredAssets=[
+            {"assetId": operation.asset_id, "quantity": format(operation.quantity.normalize(), "f")}
+            for operation in node.operations
+            if isinstance(operation, BuyAsset)
+        ],
         paidObligationIds=[],
         projectedAvailableBalances=[
             {
@@ -462,14 +490,18 @@ def compile_with_diagnostics(
         return CompileOutcome(_unsat("GOAL_NOT_CONFIRMED"), None)
     if goal.user_id != snapshot.user_id:
         return CompileOutcome(_unsat("STATE_USER_MISMATCH"), None)
-    if not isinstance(goal.goal, (DeliverMoneyGroundedGoalV1, MoveFundsGroundedGoalV1)):
+    if not isinstance(
+        goal.goal,
+        (DeliverMoneyGroundedGoalV1, MoveFundsGroundedGoalV1, AcquireAssetGroundedGoalV1),
+    ):
         return CompileOutcome(_unsat("UNSUPPORTED_GOAL", goalType=goal.goal.type), None)
-    try:
-        requested_amount = int(goal.goal.amount.minor_units)
-    except ValueError:
-        return CompileOutcome(_unsat("INVALID_AMOUNT"), None)
-    if requested_amount <= 0:
-        return CompileOutcome(_unsat("INVALID_AMOUNT"), None)
+    if isinstance(goal.goal, (DeliverMoneyGroundedGoalV1, MoveFundsGroundedGoalV1)):
+        try:
+            requested_amount = int(goal.goal.amount.minor_units)
+        except ValueError:
+            return CompileOutcome(_unsat("INVALID_AMOUNT"), None)
+        if requested_amount <= 0:
+            return CompileOutcome(_unsat("INVALID_AMOUNT"), None)
     try:
         invalid_balance = any(
             int(account.available_minor_units) < 0 or int(account.ledger_minor_units) < 0
@@ -482,6 +514,25 @@ def compile_with_diagnostics(
     if any(rule.enabled and rule.user_id != goal.user_id for rule in hard_rules):
         return CompileOutcome(_unsat("HARD_RULE_USER_MISMATCH"), None)
     policy = policy or PolicyEngine()
+    if isinstance(goal.goal, AcquireAssetGroundedGoalV1):
+        route = compile_acquire_route(goal, snapshot, policy, hard_rules)
+        if not isinstance(route, tuple):
+            return CompileOutcome(route, None)
+        state = SimulatedState.from_snapshot(snapshot)
+        for operation in route:
+            applied = apply_operation(state, operation)
+            if not applied.success:
+                return CompileOutcome(
+                    _unsat(
+                        "COMPOSITE_SIMULATION_FAILED",
+                        violations=[violation.code for violation in applied.violations],
+                    ),
+                    None,
+                )
+            state = applied.state
+        node = SearchNode(state, route)
+        plan = _build_plan(goal, snapshot, hard_rules, policy, node)
+        return CompileOutcome(CompilerSatV1(schemaVersion="1", status="SAT", plan=plan), None)
     search = search_routes(goal, snapshot, hard_rules, policy, max_depth, max_states)
     if search.diagnostics.states_limited:
         return CompileOutcome(

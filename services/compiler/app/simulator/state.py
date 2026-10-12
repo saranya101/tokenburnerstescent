@@ -44,6 +44,7 @@ def canonical_state_digest(state: BankStateSnapshotV1 | SimulatedState) -> str:
         ("holdings", "assetId"),
         ("obligations", "id"),
         ("fxQuotes", "id"),
+        ("assetQuotes", "quoteId"),
     ):
         payload[collection].sort(key=lambda item: item[key])
     for account in payload["accounts"]:

@@ -11,7 +11,7 @@ export class PrismaEntityGrounder implements EntityGrounder {
   async ground(input: EntityGroundingInput): Promise<EntityGroundingResult> {
     const [accounts, beneficiaries, assets, aliases] = await Promise.all([
       this.db.account.findMany({ where: { userId: this.userId, status: "ACTIVE" }, select: { providerRef: true, type: true, currency: true, availableMinorUnits: true } }),
-      this.db.beneficiary.findMany({ where: { userId: this.userId, providerRef: { not: null } }, select: { providerRef: true, name: true } }),
+      this.db.beneficiary.findMany({ where: { userId: this.userId, status: "ACTIVE", providerRef: { not: null } }, select: { providerRef: true, name: true } }),
       this.db.asset.findMany({ select: { id: true, name: true, symbol: true } }),
       this.db.entityAlias.findMany({ where: { userId: this.userId }, select: { entityType: true, entityId: true, alias: true } }),
     ]);
@@ -23,14 +23,29 @@ export class PrismaEntityGrounder implements EntityGrounder {
     const entities: GroundingEntity[] = [
       ...accounts.map((account) => accountEntity(account, aliasMap)),
       ...beneficiaries.flatMap((beneficiary) => beneficiary.providerRef === null ? [] : [entity("BENEFICIARY", beneficiary.providerRef, beneficiary.name, aliasMap)]),
-      ...assets.map((asset) => entity("ASSET", asset.id, asset.name, aliasMap, [asset.symbol])),
+      ...assets.map((asset) => assetEntity(asset, aliasMap)),
     ];
     for (const alias of aliases) {
       if (entities.some((item) => item.entityType === alias.entityType && item.entityId === alias.entityId)) continue;
+      // An asset alias is only evidence about an asset already loaded from the
+      // authoritative catalog. It must never manufacture a tradable asset ID.
+      if (alias.entityType === "ASSET") continue;
       entities.push(entity(alias.entityType as GroundingEntity["entityType"], alias.entityId, alias.alias, aliasMap));
     }
     return new DeterministicEntityGrounder(new InMemoryEntityRepository(entities)).ground(input);
   }
+}
+
+function assetEntity(
+  asset: { id: string; name: string; symbol: string },
+  aliasMap: ReadonlyMap<string, string[]>,
+): GroundingEntity {
+  const persistedAliases = aliasMap.get(`ASSET\u0000${asset.id}`) ?? [];
+  const names = [asset.name, ...persistedAliases];
+  return entity("ASSET", asset.id, asset.name, aliasMap, [
+    asset.symbol,
+    ...names.map((name) => `${name} (${asset.symbol})`),
+  ]);
 }
 
 function accountEntity(

@@ -1,6 +1,7 @@
 import { clarificationFor } from "./clarification.js";
 import type { EntityGroundingResult, GroundableEntityType } from "../grounding/types.js";
 import { groundingRequirementsForIntent } from "../grounding/requirements.js";
+import { normalizeEntityReference } from "../grounding/normalizer.js";
 import type { AmbiguityAnalysisResult, ClarificationItem, IntentAmbiguityAnalysisInput, IntentAmbiguityDetector } from "./types.js";
 
 /**
@@ -11,9 +12,13 @@ import type { AmbiguityAnalysisResult, ClarificationItem, IntentAmbiguityAnalysi
 export class DeterministicIntentAmbiguityDetector implements IntentAmbiguityDetector {
   analyze(input: IntentAmbiguityAnalysisInput): AmbiguityAnalysisResult {
     const clarifications: ClarificationItem[] = [];
+    const unresolvedReferences = new Set<string>();
     for (const occurrence of groundingRequirementsForIntent(input.draft)) {
       const grounding = matchingGrounding(input.groundingResults, occurrence.reference, occurrence.expectedEntityType);
       if (grounding?.status === "RESOLVED") continue;
+      const key = `${normalizeEntityReference(occurrence.reference)}\u0000${occurrence.expectedEntityType ?? ""}`;
+      if (unresolvedReferences.has(key)) continue;
+      unresolvedReferences.add(key);
       clarifications.push(clarificationFor(occurrence.field, occurrence.reference, occurrence.expectedEntityType, grounding));
     }
     return clarifications.length === 0 ? { status: "CLEAR" } : { status: "NEEDS_CLARIFICATION", clarifications };

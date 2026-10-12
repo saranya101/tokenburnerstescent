@@ -26,7 +26,12 @@ def ready() -> dict[str, str]:
     return {"status": "ready"}
 
 
-@app.post("/v1/compile", response_model=CompilerResultV1, response_model_by_alias=True)
+@app.post(
+    "/v1/compile",
+    response_model=CompilerResultV1,
+    response_model_by_alias=True,
+    response_model_exclude_none=True,
+)
 def compile_endpoint(request: CompileRequest) -> CompilerResultV1:
     return compile_goal(request.goal_contract, request.bank_state_snapshot)
 
@@ -35,6 +40,7 @@ def compile_endpoint(request: CompileRequest) -> CompilerResultV1:
     "/v1/compile-bundle",
     response_model=CompileGoalBundleResultV1 | CompilerUnsatV1 | CompilerPolicyBlockedV1,
     response_model_by_alias=True,
+    response_model_exclude_none=True,
 )
 def compile_bundle_endpoint(
     request: CompileGoalBundleRequestV1,

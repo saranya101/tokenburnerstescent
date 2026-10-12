@@ -44,6 +44,37 @@ describe("canonical GoalContract semantic hashing", () => {
   });
 });
 
+describe("canonical FinancialPlan hashing", () => {
+  const plan = () => FinancialPlanV1.parse({
+    schemaVersion: "1", id: "plan-1", goalContractId: "goal-1", goalContractVersion: 1, bankStateVersion: 7,
+    compilerVersion: "compiler-1", policyVersion: "policy-1", operationLibraryVersion: "ops-1",
+    steps: [
+      { id: "fx-1", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", sourceMoney: { currency: "SGD", minorUnits: "100" }, targetCurrency: "USD", quoteId: "quote-1" } },
+      { id: "transfer-1", sequence: 1, action: "TRANSFER", dependsOn: ["fx-1"], reversible: false, parameters: { sourceAccountId: "acc-usd", beneficiaryId: "ben-1", amount: { currency: "USD", minorUnits: "75" } } },
+    ], validity: { validUntil: "2026-10-02T12:00:00.000Z", requiredQuoteIds: ["quote-1"] },
+    projectedOutcome: { goalSatisfied: true, deliveredMoney: { currency: "USD", minorUnits: "75" }, acquiredAssets: [], paidObligationIds: [], projectedAvailableBalances: [{ accountId: "acc-usd", money: { currency: "USD", minorUnits: "25" } }], warnings: [] },
+    planHash: "0".repeat(64),
+  });
+
+  it.each([
+    ["ordered steps", (value: FinancialPlanV1) => ({ ...value, steps: [...value.steps].reverse() })],
+    ["sequence", (value: FinancialPlanV1) => ({ ...value, steps: value.steps.map((step, index) => index === 0 ? { ...step, sequence: 9 } : step) })],
+    ["dependencies", (value: FinancialPlanV1) => ({ ...value, steps: value.steps.map((step, index) => index === 1 ? { ...step, dependsOn: [] } : step) })],
+    ["reversibility", (value: FinancialPlanV1) => ({ ...value, steps: value.steps.map((step, index) => index === 0 ? { ...step, reversible: true } : step) })],
+    ["complete parameters", (value: FinancialPlanV1) => ({ ...value, steps: value.steps.map((step) => step.action === "TRANSFER" ? { ...step, parameters: { ...step.parameters, beneficiaryId: "ben-2" } } : step) })],
+    ["validity", (value: FinancialPlanV1) => ({ ...value, validity: { ...value.validity, validUntil: "2026-10-02T12:01:00.000Z" } })],
+    ["bank state", (value: FinancialPlanV1) => ({ ...value, bankStateVersion: 8 })],
+    ["projected outcome", (value: FinancialPlanV1) => ({ ...value, projectedOutcome: { ...value.projectedOutcome, warnings: ["changed"] } })],
+  ] as const)("covers %s", (_label, mutate) => {
+    const original = plan(); expect(hashFinancialPlan(mutate(original) as FinancialPlanV1)).not.toBe(hashFinancialPlan(original));
+  });
+
+  it("excludes only the self-referential planHash field", () => {
+    const original = plan(); expect(hashFinancialPlan({ ...original, planHash: "f".repeat(64) })).toBe(hashFinancialPlan(original));
+  });
+});
+
+
 describe("BUY_ASSET quote plan hashing", () => {
   const plan = FinancialPlanV1.parse({
     schemaVersion: "1", id: "plan-buy", goalContractId: "goal-buy", goalContractVersion: 1, bankStateVersion: 7,
@@ -51,13 +82,21 @@ describe("BUY_ASSET quote plan hashing", () => {
     steps: [{ id: "buy", sequence: 0, action: "BUY_ASSET", dependsOn: [], reversible: false, parameters: {
       sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "2", maximumSpend: { currency: "USD", minorUnits: "50000" },
       quoteId: "asset-quote-aapl-usd-v1", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "40100",
-    } }], validity: { requiredQuoteIds: ["asset-quote-aapl-usd-v1"] },
-    projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "2" }], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] }, planHash: "0".repeat(64),
+    } }],
+    validity: { requiredQuoteIds: ["asset-quote-aapl-usd-v1"] },
+    projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "2" }], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] },
+    planHash: "0".repeat(64),
   });
+
   it.each([
-    ["quoteId", "another-quote"], ["settlementCurrency", "SGD"], ["quotedUnitPriceMinor", "20001"], ["quotedFeeMinor", "101"], ["authorizedTotalMinor", "40101"],
+    ["quoteId", "another-quote"],
+    ["settlementCurrency", "SGD"],
+    ["quotedUnitPriceMinor", "20001"],
+    ["quotedFeeMinor", "101"],
+    ["authorizedTotalMinor", "40101"],
   ] as const)("includes %s in planHash material", (field, value) => {
-    const step = plan.steps[0]!; if (step.action !== "BUY_ASSET") throw new Error("Expected BUY_ASSET");
+    const step = plan.steps[0]!;
+    if (step.action !== "BUY_ASSET") throw new Error("Expected BUY_ASSET");
     const changed = FinancialPlanV1.parse({ ...plan, steps: [{ ...step, parameters: { ...step.parameters, [field]: value } }] });
     expect(hashFinancialPlan(changed)).not.toBe(hashFinancialPlan(plan));
   });
