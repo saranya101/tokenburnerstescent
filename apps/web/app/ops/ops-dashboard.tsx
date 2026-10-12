@@ -104,12 +104,12 @@ export function OpsDashboard({ runs, error, accessState = "authenticated", envir
 function Metric({ label, value, tone }: { label: string; value: number; tone: string }) { return <article className={styles.metric}><span className={`${styles.metricIcon} ${styles[tone]}`}><i /></span><p>{label}<strong>{value}</strong></p></article>; }
 
 function ExecutionHistory({ runs, statuses, query, status, selectedId, onQuery, onStatus, onInspect }: { runs: OpsRun[]; statuses: string[]; query: string; status: string; selectedId?: string | undefined; onQuery(value: string): void; onStatus(value: string): void; onInspect(run: OpsRun): void }) {
-  return <section className={styles.card} aria-labelledby="execution-history-heading"><div className={styles.cardHeader}><div><h2 id="execution-history-heading">Execution history</h2><p>Customer requests and their latest recorded financial state.</p></div><div className={styles.tableTools}><label><span className={styles.srOnly}>Search executions</span><Icon name="search" /><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search requests or references" /></label><select value={status} onChange={(event) => onStatus(event.target.value)} aria-label="Filter by status"><option value="ALL">All statuses</option>{statuses.map((value) => <option value={value} key={value}>{humanize(value)}</option>)}</select></div></div><div className={styles.tableWrap}><table className={styles.executionTable}><thead><tr><th>Request / goal</th><th>Goal type</th><th>Created at</th><th>Status</th><th>Steps</th><th>Execution reference</th><th><span className={styles.srOnly}>Action</span></th></tr></thead><tbody>{runs.map((run) => <tr key={run.id} className={selectedId === run.id ? styles.selectedRow : ""}><td><strong>{run.headline}</strong><small>{moneySummary(run)}</small></td><td>{humanize(goalType(run))}</td><td>{formatTime(run.occurredAt)}</td><td><Status state={run.overallState} /></td><td>{stepCount(run)}</td><td><Reference value={executionReference(run)} /></td><td><button className={styles.inspect} type="button" onClick={() => onInspect(run)}>Inspect <span>→</span></button></td></tr>)}</tbody></table></div>{runs.length === 0 ? <div className={styles.filteredEmpty}><Icon name="search" /><strong>No matching executions</strong><p>Adjust the search or status filter to see available records.</p></div> : null}</section>;
+  return <section className={styles.card} aria-labelledby="execution-history-heading"><div className={styles.cardHeader}><div><h2 id="execution-history-heading">Execution history</h2><p>Customer requests and their latest recorded financial state.</p></div><div className={styles.tableTools}><label><span className={styles.srOnly}>Search executions</span><Icon name="search" /><input value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search requests or references" /></label><select value={status} onChange={(event) => onStatus(event.target.value)} aria-label="Filter by status"><option value="ALL">All statuses</option>{statuses.map((value) => <option value={value} key={value}>{humanize(value)}</option>)}</select></div></div><div className={styles.tableWrap}><table className={styles.executionTable}><thead><tr><th>Request / goal</th><th>Goal type</th><th>Created at</th><th>Status</th><th>Steps</th><th>Execution reference</th><th><span className={styles.srOnly}>Action</span></th></tr></thead><tbody>{runs.map((run) => <tr key={run.id} className={selectedId === run.id ? styles.selectedRow : ""}><td><strong>{run.headline}</strong><small>{moneySummary(run)}</small></td><td>{goalTypeDisplay(run)}</td><td>{formatTime(run.occurredAt)}</td><td><Status state={run.overallState} /></td><td>{stepCount(run)}</td><td><Reference value={executionReference(run)} /></td><td><button className={styles.inspect} type="button" onClick={() => onInspect(run)}>Inspect <span>→</span></button></td></tr>)}</tbody></table></div>{runs.length === 0 ? <div className={styles.filteredEmpty}><Icon name="search" /><strong>No matching executions</strong><p>Adjust the search or status filter to see available records.</p></div> : null}</section>;
 }
 
 function ExecutionDetail({ run, selectedStage, onStage, onBack }: { run: OpsRun; selectedStage: StageKey; onStage(key: StageKey): void; onBack(): void }) {
   const evidence = run.stages[selectedStage];
-  return <section className={styles.detail} aria-labelledby="execution-detail-heading"><div className={styles.detailHeader}><button type="button" onClick={onBack} className={styles.back}>← Back to overview</button><div><p className={styles.eyebrow}>EXECUTION INSPECTION</p><h2 id="execution-detail-heading">{run.headline}</h2><span><Status state={run.overallState} /> <Reference value={executionReference(run)} /></span></div></div><dl className={styles.summaryGrid}><Summary label="Goal type" value={humanize(goalType(run))} /><Summary label="Goal confirmation" value={stateLabel(run.stages.confirmedGoal.state)} /><Summary label="Amount" value={moneySummary(run)} /><Summary label="Destination" value={destination(run)} /><Summary label="Execution steps" value={String(stepCount(run))} /><Summary label="Recorded at" value={formatTime(run.occurredAt)} /><Summary label="Bank-state reference" value={bankState(run)} /><Summary label="Outcome" value={run.stages.bankResult.summary} /></dl><div className={styles.inspectionGrid}>
+  return <section className={styles.detail} aria-labelledby="execution-detail-heading"><div className={styles.detailHeader}><button type="button" onClick={onBack} className={styles.back}>← Back to overview</button><div><p className={styles.eyebrow}>EXECUTION INSPECTION</p><h2 id="execution-detail-heading">{run.headline}</h2><span><Status state={run.overallState} /> <Reference value={executionReference(run)} /></span></div></div><dl className={styles.summaryGrid}>{summaryFields(run).map((field) => <Summary key={field.label} label={field.label} value={field.value} />)}</dl><div className={styles.inspectionGrid}>
     <section className={styles.timelinePanel}><div className={styles.panelHeading}><span>Lifecycle evidence</span><small>Select a stage to inspect its record</small></div><ol className={styles.timeline}>{stageDefinitions.map((definition, index) => { const derived = timelineState(run, index); return <li key={`${definition.key}-${index}`}><button type="button" className={selectedStage === definition.key ? styles.activeStage : ""} onClick={() => onStage(definition.key)}><span className={`${styles.timelineDot} ${styles[`stage${derived}`]}`}>{derived === "COMPLETE" ? "✓" : derived === "FAILED" || derived === "STOPPED" ? "!" : ""}</span><span><strong>{definition.timelineLabel}</strong><small>{timelineStatusLabel(derived)}</small></span></button>{index === 1 ? <span className={styles.boundaryLabel}>DETERMINISTIC CONTROL BEGINS</span> : null}</li>; })}</ol></section>
     <section className={styles.evidencePanel}><div className={styles.panelHeading}><span>{stageDefinitions.find((item) => item.key === selectedStage)?.label ?? humanize(selectedStage)} evidence</span><Status state={evidence.state} compact /></div><div className={styles.evidenceIntro}><strong>{evidence.summary}</strong><small>Recorded evidence is shown below. Missing fields are not inferred.</small></div>{evidence.detail ? <DataValue value={redactForDisplay(evidence.detail)} /> : <MissingEvidence />}</section>
     <aside className={styles.auditPanel}><div className={styles.panelHeading}><span>Related audit</span><small>{run.audit.length} events</small></div><div className={styles.auditList}>{run.audit.length ? run.audit.map((event) => <details key={event.id}><summary><i /><span><strong>{humanize(event.eventType)}</strong><small>{formatTime(event.occurredAt)}</small></span><b>+</b></summary><div><Reference value={event.id} label="Event" /><Meta label="Aggregate" value={`${event.aggregateType} · ${event.aggregateId}`} /><Meta label="Trace" value={event.traceId} /><DataValue value={redactForDisplay(event.metadata)} /></div></details>) : <MissingEvidence />}</div></aside>
@@ -143,15 +143,124 @@ function DataValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
   return <span className={typeof value === "boolean" ? (value ? styles.yes : styles.no) : styles.scalar}>{String(value)}</span>;
 }
 
-function timelineState(run: OpsRun, index: number): OpsStageState { if (index === 1) { const grounded = run.stages.interpretation.detail?.groundedEntities; return Array.isArray(grounded) && grounded.length > 0 ? "COMPLETE" : "NOT_REACHED"; } if (index === 5) return run.stages.authorization.detail?.userVerified === true ? "COMPLETE" : run.stages.authorization.state === "FAILED" || run.stages.authorization.state === "STOPPED" ? run.stages.authorization.state : "NOT_REACHED"; return run.stages[stageDefinitions[index]!.key].state; }
-function goalType(run: OpsRun): string { return stringValue(run.stages.confirmedGoal.detail?.goalType) ?? stringValue(run.stages.interpretation.detail?.goalType) ?? "Not recorded"; }
+function timelineState(run: OpsRun, index: number): OpsStageState { if (index === 1) return groundedEntities(run).length > 0 ? "COMPLETE" : "NOT_REACHED"; if (index === 5) return run.stages.authorization.detail?.userVerified === true ? "COMPLETE" : run.stages.authorization.state === "FAILED" || run.stages.authorization.state === "STOPPED" ? run.stages.authorization.state : "NOT_REACHED"; return run.stages[stageDefinitions[index]!.key].state; }
+function goalType(run: OpsRun): string {
+  const types = bundleItems(run).map((item) => stringValue(item.goalType) ?? stringValue(record(item.goal).type)).filter((value): value is string => Boolean(value));
+  if (types.length > 0) return types.map(goalTypeLabel).join(" + ");
+  return stringValue(run.stages.confirmedGoal.detail?.goalType) ?? stringValue(run.stages.interpretation.detail?.goalType) ?? "Not recorded";
+}
 function stepCount(run: OpsRun): number { const plan = run.stages.plan.detail?.actions; const execution = run.stages.execution.detail?.steps; return Array.isArray(execution) ? execution.length : Array.isArray(plan) ? plan.length : 0; }
 function executionReference(run: OpsRun): string { return stringValue(run.stages.execution.detail?.executionId) ?? run.id; }
 function bankState(run: OpsRun): string { const final = run.stages.execution.detail?.finalStateVersion; const planned = run.stages.plan.detail?.bankStateVersion; return String(final && final !== "pending" ? final : planned ?? "Not recorded"); }
-function moneySummary(run: OpsRun): string { const money = findMoney(run.stages.confirmedGoal.detail) ?? findMoney(run.stages.plan.detail); return money ? formatMoney(money) : "Amount not recorded"; }
-function destination(run: OpsRun): string { const value = findStringByKey(run.stages.confirmedGoal.detail, /recipient|beneficiary|destination/i); return value ?? "Not recorded"; }
-function findMoney(value: unknown): Parameters<typeof formatMoney>[0] | undefined { if (isMoney(value)) return value; if (Array.isArray(value)) return value.map(findMoney).find(Boolean); if (isRecord(value)) return Object.values(value).map(findMoney).find(Boolean); return undefined; }
-function findStringByKey(value: unknown, pattern: RegExp): string | undefined { if (!isRecord(value)) return undefined; for (const [key, child] of Object.entries(value)) { if (pattern.test(key) && typeof child === "string") return child; const nested = Array.isArray(child) ? child.map((item) => findStringByKey(item, pattern)).find(Boolean) : findStringByKey(child, pattern); if (nested) return nested; } return undefined; }
+function moneySummary(run: OpsRun): string {
+  const itemSummaries = bundleItems(run).map(transactionSummary).filter((value): value is string => Boolean(value));
+  if (itemSummaries.length > 0) return itemSummaries.join(" · ");
+  const detail = run.stages.confirmedGoal.detail;
+  const goal = record(detail?.goal);
+  const directMoney = money(goal.amount) ?? money(goal.budget) ?? money(detail?.amount);
+  if (directMoney) return formatMoney(directMoney);
+  if (stringValue(goal.type) === "ACQUIRE_ASSET" && stringValue(goal.quantity)) return `${stringValue(goal.quantity)} share${stringValue(goal.quantity) === "1" ? "" : "s"}`;
+  return "Amount not recorded";
+}
+function destination(run: OpsRun): string {
+  const detail = run.stages.confirmedGoal.detail;
+  const goal = record(detail?.goal);
+  const recipientId = stringValue(goal.recipientId);
+  const beneficiary = groundedEntities(run).find((binding) => binding.entityType === "BENEFICIARY" && (!recipientId || binding.canonicalId === recipientId));
+  return beneficiary?.reference ?? recipientId ?? "Not recorded";
+}
+
+function summaryFields(run: OpsRun): Array<{ label: string; value: string }> {
+  const items = bundleItems(run);
+  if (items.length === 0) return [
+    { label: "Goal type", value: goalTypeDisplay(run) },
+    { label: "Goal confirmation", value: stateLabel(run.stages.confirmedGoal.state) },
+    { label: "Amount", value: moneySummary(run) },
+    { label: "Destination", value: destination(run) },
+    { label: "Execution steps", value: String(stepCount(run)) },
+    { label: "Recorded at", value: formatTime(run.occurredAt) },
+    { label: "Bank-state reference", value: bankState(run) },
+    { label: "Outcome", value: run.stages.bankResult.summary },
+  ];
+  const investment = items.find((item) => stringValue(item.goalType) === "ACQUIRE_ASSET");
+  const goalFields = items.map((item) => {
+    const type = stringValue(item.goalType) ?? stringValue(record(item.goal).type) ?? "GOAL";
+    if (type === "DELIVER_MONEY") return { label: "Transfer", value: transferSummary(item) };
+    if (type === "ACQUIRE_ASSET") return { label: "Investment", value: investmentSummary(item) };
+    return { label: goalTypeLabel(type), value: stringValue(item.summary) ?? "Confirmed goal recorded" };
+  });
+  const funding = fundingSummary(run, investment);
+  const minimum = protectedBalance(run);
+  return [
+    { label: "Goals", value: goalType(run) },
+    { label: "Meaning", value: stateLabel(run.stages.confirmedGoal.state) },
+    ...goalFields,
+    ...(funding ? [{ label: "Funding", value: funding }] : []),
+    ...(minimum ? [{ label: "Minimum protected balance", value: minimum }] : []),
+    { label: "Execution steps", value: String(stepCount(run)) },
+    { label: "Bank-state reference", value: bankState(run) },
+    { label: "Authorization", value: run.stages.authorization.summary },
+    { label: "Outcome", value: run.stages.bankResult.summary },
+  ];
+}
+function goalTypeDisplay(run: OpsRun): string { return bundleItems(run).length > 0 ? goalType(run) : humanize(goalType(run)); }
+function bundleItems(run: OpsRun): Record<string, unknown>[] {
+  return Array.isArray(run.stages.confirmedGoal.detail?.items) ? run.stages.confirmedGoal.detail.items.map(record) : [];
+}
+function groundedEntities(run: OpsRun): Array<{ reference: string; entityType: string; canonicalId?: string; confirmed: boolean }> {
+  const confirmed = Array.isArray(run.stages.confirmedGoal.detail?.confirmedBindings) ? run.stages.confirmedGoal.detail.confirmedBindings.map(record) : [];
+  const source = confirmed.length > 0 ? confirmed.filter((binding) => binding.confirmed === true) : Array.isArray(run.stages.interpretation.detail?.groundedEntities) ? run.stages.interpretation.detail.groundedEntities.map(record) : [];
+  return source.flatMap((binding) => {
+    const reference = stringValue(binding.reference); const entityType = stringValue(binding.entityType); const canonicalId = stringValue(binding.canonicalId);
+    return reference && entityType ? [{ reference, entityType, ...(canonicalId ? { canonicalId } : {}), confirmed: binding.confirmed === true || confirmed.length === 0 }] : [];
+  });
+}
+function itemBinding(item: Record<string, unknown> | undefined, entityType: string, canonicalId?: string): { reference: string } | undefined {
+  if (!item || !Array.isArray(item.confirmedBindings)) return undefined;
+  const binding = item.confirmedBindings.map(record).find((candidate) => candidate.confirmed === true && candidate.entityType === entityType && (!canonicalId || candidate.canonicalId === canonicalId));
+  const reference = stringValue(binding?.reference);
+  return reference ? { reference } : undefined;
+}
+function goalTypeLabel(type: string): string {
+  return ({ DELIVER_MONEY: "Transfer", ACQUIRE_ASSET: "Buy Asset", MOVE_FUNDS: "Move Funds", PAY_BILL: "Pay Bill" } as Record<string, string>)[type] ?? humanize(type);
+}
+function transactionSummary(item: Record<string, unknown>): string | undefined {
+  const goal = record(item.goal); const type = stringValue(item.goalType) ?? stringValue(goal.type);
+  if (type === "DELIVER_MONEY") {
+    const amount = money(goal.amount); const recipientId = stringValue(goal.recipientId); const recipient = itemBinding(item, "BENEFICIARY", recipientId)?.reference;
+    return amount ? `${formatMoney(amount)}${recipient ? ` to ${recipient}` : " transfer"}` : undefined;
+  }
+  if (type === "ACQUIRE_ASSET") return investmentSummary(item).replace(/^Buy /u, "");
+  return undefined;
+}
+function transferSummary(item: Record<string, unknown> | undefined): string {
+  if (!item) return "Not recorded";
+  return transactionSummary(item) ?? "Not recorded";
+}
+function investmentSummary(item: Record<string, unknown> | undefined): string {
+  if (!item) return "Not recorded";
+  const goal = record(item.goal); const quantity = stringValue(goal.quantity); const assetId = stringValue(goal.assetId); const reference = itemBinding(item, "ASSET", assetId)?.reference;
+  const ticker = reference?.match(/\(([A-Z][A-Z0-9.]{0,9})\)/u)?.[1];
+  if (!quantity) return "Not recorded";
+  const asset = ticker ?? reference ?? assetId ?? "asset";
+  return `Buy ${quantity} ${asset} share${quantity === "1" ? "" : "s"}`;
+}
+function fundingSummary(run: OpsRun, investment: Record<string, unknown> | undefined): string | undefined {
+  const actions = Array.isArray(run.stages.plan.detail?.actions) ? run.stages.plan.detail.actions.map(record) : [];
+  const fx = actions.find((action) => action.action === "FX_CONVERT");
+  if (!fx) return undefined;
+  const parameters = record(fx.parameters); const source = money(parameters.sourceMoney); const target = stringValue(parameters.targetCurrency) ?? "target currency";
+  const conditional = Boolean(investment && Array.isArray(investment.preferences) && investment.preferences.map(record).some((preference) => preference.type === "PREFER_ACCOUNT"));
+  return `${conditional ? "Conditional funding" : "Planned conversion"}: ${source ? formatMoney(source) : "source amount not recorded"} → ${target}`;
+}
+function protectedBalance(run: OpsRun): string | undefined {
+  const constraints = Array.isArray(run.stages.confirmedGoal.detail?.globalConstraints) ? run.stages.confirmedGoal.detail.globalConstraints.map(record) : [];
+  const protectedMinimum = constraints.find((constraint) => constraint.type === "MIN_AVAILABLE_BALANCE");
+  const value = money(protectedMinimum?.money);
+  return value ? formatMoney(value) : undefined;
+}
+function money(value: unknown): Parameters<typeof formatMoney>[0] | undefined { return isMoney(value) ? value : undefined; }
+function record(value: unknown): Record<string, unknown> { return isRecord(value) ? value : {}; }
 function viewTitle(view: View) { return view === "overview" ? "Transaction monitoring" : view === "executions" ? "Execution inspection" : view === "plans" ? "Plan traces" : view === "approvals" ? "Approval evidence" : "Audit trail"; }
 function viewSubtitle(view: View) { return view === "overview" ? "Inspect customer requests, financial decisions and execution evidence." : view === "executions" ? "Review the recorded lifecycle and evidence for a selected transaction." : view === "plans" ? "Inspect deterministic compiler outcomes, dependencies and bank-state bindings." : view === "approvals" ? "Review recorded authorization state and passkey verification evidence." : "Trace recorded events across customer requests and financial execution."; }
 function timelineStatusLabel(state: OpsStageState) { return state === "COMPLETE" ? "Verified" : state === "NOT_REACHED" ? "Evidence unavailable" : humanize(state); }

@@ -55,6 +55,43 @@ describe("OpsDashboard", () => {
     expect(html).not.toContain("Execution completed");
   });
 
+  it("renders a confirmed transfer and investment bundle without treating its reserve as an amount", () => {
+    const value = run("AWAITING_AUTHORIZATION", {
+      interpretation: stage("COMPLETE", "2 financial intents interpreted", { interpretationType: "BUNDLE", groundedEntities: [
+        { reference: "John Lim", entityType: "BENEFICIARY", canonicalId: "ben-john-lim", resolutionMethod: "EXACT" },
+        { reference: "Apple (AAPL)", entityType: "ASSET", canonicalId: "asset-aapl", resolutionMethod: "ALIAS" },
+        { reference: "my SGD account", entityType: "ACCOUNT", canonicalId: "acc-sgd", resolutionMethod: "ALIAS" },
+      ] }),
+      confirmedGoal: stage("COMPLETE", "2 confirmed goals in one bundle", {
+        ownerType: "BUNDLE",
+        goalTypes: ["DELIVER_MONEY", "ACQUIRE_ASSET"],
+        items: [
+          { sequence: 1, goalType: "DELIVER_MONEY", goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientId: "ben-john-lim" }, confirmedBindings: [{ reference: "John Lim", entityType: "BENEFICIARY", canonicalId: "ben-john-lim", confirmed: true }] },
+          { sequence: 2, goalType: "ACQUIRE_ASSET", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }], confirmedBindings: [{ reference: "Apple (AAPL)", entityType: "ASSET", canonicalId: "asset-aapl", confirmed: true }, { reference: "my SGD account", entityType: "ACCOUNT", canonicalId: "acc-sgd", confirmed: true }] },
+        ],
+        confirmedBindings: [{ reference: "John Lim", entityType: "BENEFICIARY", canonicalId: "ben-john-lim", confirmed: true }, { reference: "Apple (AAPL)", entityType: "ASSET", canonicalId: "asset-aapl", confirmed: true }],
+        globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }],
+      }),
+      plan: stage("COMPLETE", "SAT · 3 deterministic actions", { bankStateVersion: 7, actions: [
+        { sequence: 0, action: "TRANSFER", parameters: { amount: { currency: "SGD", minorUnits: "10000" }, beneficiaryId: "ben-john-lim" } },
+        { sequence: 1, action: "FX_CONVERT", parameters: { sourceMoney: { currency: "SGD", minorUnits: "26800" }, targetCurrency: "USD" } },
+        { sequence: 2, action: "BUY_ASSET", parameters: { assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "20100" } } },
+      ] }),
+      authorization: stage("WAITING", "Waiting for passkey authorization"),
+      execution: stage("NOT_REACHED", "Authorization not complete"),
+      bankResult: stage("NOT_REACHED", "Execution never reached the bank"),
+    });
+    const html = renderToStaticMarkup(createElement(OpsDashboard, { runs: [value], initialView: "executions" }));
+    expect(html).toContain("Transfer + Buy Asset");
+    expect(html).toContain("<dt>Transfer</dt><dd>SGD 100.00 to John Lim</dd>");
+    expect(html).toContain("<dt>Investment</dt><dd>Buy 1 AAPL share</dd>");
+    expect(html).toContain("<dt>Funding</dt><dd>Conditional funding: SGD 268.00 → USD</dd>");
+    expect(html).toContain("<dt>Minimum protected balance</dt><dd>SGD 1,000.00</dd>");
+    expect(html).not.toContain("<dt>Amount</dt><dd>SGD 1,000.00</dd>");
+    expect(html).toMatch(/Entities grounded[\s\S]*Verified/u);
+    expect(html).toContain("Execution never reached the bank");
+  });
+
   it.each(["PAUSED", "REAPPROVAL_REQUIRED"])("renders %s as stopped", (stateName) => {
     const value = run(stateName, { execution: stage("STOPPED", stateName === "REAPPROVAL_REQUIRED" ? "Route changed — prior authorization cannot continue" : "Execution paused"), bankResult: stage("STOPPED", "No settled bank operation recorded") });
     const html = renderToStaticMarkup(createElement(OpsDashboard, { runs: [value], initialView: "executions" }));

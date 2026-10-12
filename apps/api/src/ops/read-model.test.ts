@@ -53,19 +53,38 @@ describe("ops read model", () => {
   it("projects bundle meaning, proof, and ownership without exposing internal item IDs in summaries", () => {
     const bundleRun = row();
     const plans = bundleRun.goalContracts[0]!.financialPlans;
-    plans[0]!.satisfactionProof = { bundleId: "bundle-key-abcdefghijklmnopqrstuvwxyz", bundleContractHash: "c".repeat(64), itemCoverage: [{ itemId: "item-1", satisfiedByStepIds: ["step-transfer-abcdefghijklmnopqrstuvwxyz"] }], allItemsSatisfied: true, allHardConstraintsSatisfied: true, allExplicitDependenciesSatisfied: true, allIrreversibleStepsJustified: true };
+    plans[0]!.steps = [
+      { ...plans[0]!.steps[0]!, stepKey: "step-transfer-abcdefghijklmnopqrstuvwxyz", sequence: 0, action: "TRANSFER", dependsOn: [], parameters: { amount: { currency: "SGD", minorUnits: "10000" }, beneficiaryId: "ben-john-lim", sourceAccountId: "acc-sgd" } },
+      { ...plans[0]!.steps[0]!, stepKey: "step-fx-abcdefghijklmnopqrstuvwxyz", sequence: 1, action: "FX_CONVERT", dependsOn: ["step-transfer-abcdefghijklmnopqrstuvwxyz"], parameters: { sourceMoney: { currency: "SGD", minorUnits: "26800" }, targetCurrency: "USD", sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", quoteId: "quote-fx" } },
+      { ...plans[0]!.steps[0]!, stepKey: "step-buy-abcdefghijklmnopqrstuvwxyz", sequence: 2, action: "BUY_ASSET", dependsOn: ["step-fx-abcdefghijklmnopqrstuvwxyz"], parameters: { assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "20100" }, sourceAccountId: "acc-usd", quoteId: "quote-aapl" } },
+    ];
+    plans[0]!.satisfactionProof = { bundleId: "bundle-key-abcdefghijklmnopqrstuvwxyz", bundleContractHash: "c".repeat(64), itemCoverage: [{ itemId: "item-1", satisfiedByStepIds: ["step-transfer-abcdefghijklmnopqrstuvwxyz"] }, { itemId: "item-2", satisfiedByStepIds: ["step-fx-abcdefghijklmnopqrstuvwxyz", "step-buy-abcdefghijklmnopqrstuvwxyz"] }], allItemsSatisfied: true, allHardConstraintsSatisfied: true, allExplicitDependenciesSatisfied: true, allIrreversibleStepsJustified: true };
     bundleRun.goalContracts = [];
     bundleRun.goalBundleContracts = [{
       id: "bundle-row-abcdefghijklmnopqrstuvwxyz", bundleKey: "bundle-key-abcdefghijklmnopqrstuvwxyz", version: 1, userId: "user", sourceIntentDraftId: bundleRun.id,
       status: "CONFIRMED", schemaVersion: "1", contractHash: "c".repeat(64), createdAt: at(1), confirmedAt: at(1), updatedAt: at(1), financialPlans: plans,
-      payload: { schemaVersion: "1", bundleId: "bundle-key-abcdefghijklmnopqrstuvwxyz", bundleVersion: 1, contractHash: "c".repeat(64), items: [{ itemId: "item-1", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "30000" }, recipientId: "ben-john" }, constraints: [], preferences: [], bindings: [] }], globalConstraints: [], explicitDependencies: [] },
+      payload: { schemaVersion: "1", bundleId: "bundle-key-abcdefghijklmnopqrstuvwxyz", bundleVersion: 1, contractHash: "c".repeat(64), items: [
+        { itemId: "item-1", goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientId: "ben-john-lim" }, constraints: [], preferences: [], bindings: [{ reference: "John Lim", entityType: "BENEFICIARY", entityId: "ben-john-lim", resolutionMethod: "EXACT", confirmed: true }] },
+        { itemId: "item-2", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }], bindings: [{ reference: "Apple (AAPL)", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS", confirmed: true }, { reference: "my SGD account", entityType: "ACCOUNT", entityId: "acc-sgd", resolutionMethod: "ALIAS", confirmed: true }] },
+      ], globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }], explicitDependencies: [{ beforeItemId: "item-1", afterItemId: "item-2", reason: "USER_EXPLICIT_ORDER" }] },
     }];
-    bundleRun.payload = { kind: "GOAL_BUNDLE_CANDIDATE_V1", originalText: "Send John USD 300", candidate: { schemaVersion: "1", items: [{ itemId: "item-1", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "30000" }, recipientId: "ben-john" }, constraints: [], preferences: [], bindings: [] }], globalConstraints: [], explicitDependencies: [] } };
+    bundleRun.payload = { kind: "GOAL_BUNDLE_CANDIDATE_V1", originalText: "Send S$100 to John Lim, then buy 1 share of Apple (AAPL), using SGD if needed, but keep at least S$1,000 in my SGD account.", candidate: { schemaVersion: "1", items: [
+      { itemId: "item-1", goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientId: "ben-john-lim" }, constraints: [], preferences: [], bindings: [{ reference: "John Lim", entityType: "BENEFICIARY", entityId: "ben-john-lim", resolutionMethod: "EXACT", confirmed: true }] },
+      { itemId: "item-2", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }], bindings: [{ reference: "Apple (AAPL)", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS", confirmed: true }, { reference: "my SGD account", entityType: "ACCOUNT", entityId: "acc-sgd", resolutionMethod: "ALIAS", confirmed: true }] },
+    ], globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }], explicitDependencies: [{ beforeItemId: "item-1", afterItemId: "item-2", reason: "USER_EXPLICIT_ORDER" }] } };
     const validation = { id: "audit-bundle-validation", eventType: "BUNDLE_SEMANTIC_VALIDATION_PASSED", aggregateType: "IntentDraftRecord", aggregateId: bundleRun.id, traceId: "trace-request-abcdefghijklmnopqrstuvwxyz", payload: { decision: "PASS", mismatches: [] }, occurredAt: at(1) } as OpsAuditRow;
     const run = buildOpsRuns([bundleRun], [validation])[0]!;
-    expect(run.stages.interpretation).toMatchObject({ state: "COMPLETE", summary: "1 financial intents interpreted", detail: { interpretationType: "BUNDLE", itemCount: 1 } });
+    expect(run.stages.interpretation).toMatchObject({ state: "COMPLETE", summary: "2 financial intents interpreted", detail: { interpretationType: "BUNDLE", itemCount: 2, groundedEntities: [
+      { reference: "John Lim", entityType: "BENEFICIARY", canonicalId: "ben-john-lim" },
+      { reference: "Apple (AAPL)", entityType: "ASSET", canonicalId: "asset-aapl" },
+      { reference: "my SGD account", entityType: "ACCOUNT", canonicalId: "acc-sgd" },
+    ] } });
     expect(run.stages.semanticValidation.state).toBe("COMPLETE");
-    expect(run.stages.confirmedGoal).toMatchObject({ state: "COMPLETE", detail: { ownerType: "BUNDLE", bundleVersion: 1 } });
+    expect(run.stages.confirmedGoal).toMatchObject({ state: "COMPLETE", detail: {
+      ownerType: "BUNDLE", bundleVersion: 1, goalTypes: ["DELIVER_MONEY", "ACQUIRE_ASSET"],
+      items: [{ goalType: "DELIVER_MONEY", goal: { amount: { minorUnits: "10000" } }, confirmedBindings: [{ reference: "John Lim", confirmed: true }] }, { goalType: "ACQUIRE_ASSET", goal: { quantity: "1" }, confirmedBindings: [{ reference: "Apple (AAPL)", confirmed: true }, { reference: "my SGD account", confirmed: true }] }],
+      globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { minorUnits: "100000" } }],
+    } });
     expect(run.stages.plan.detail).toMatchObject({ bankStateVersion: 7, satisfactionProof: { allItemsSatisfied: true, allHardConstraintsSatisfied: true } });
     expect(run.stages.confirmedGoal.summary).not.toContain("item-1");
   });

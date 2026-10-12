@@ -213,10 +213,14 @@ function buildOpsRun(row: OpsRunRow, allAudit: readonly OpsAuditRow[]): OpsRun {
     requestDetail.transcribedAt = text(metadata.transcribedAt) ?? "not recorded";
   }
   const bundleItems = list(candidate.items).map((value) => record(value));
+  const confirmedBundleItems = list(confirmedBundle?.items).map((value) => record(value));
+  const bundleCandidateBindings = bundleItems.flatMap((item) => list(item.bindings).map((value) => record(value)));
+  const bundleConfirmedBindings = confirmedBundleItems.flatMap((item) => list(item.bindings).map((value) => record(value)));
   const interpretationDetail: Record<string, unknown> = bundleItems.length > 0 ? {
     interpretationType: "BUNDLE",
     itemCount: bundleItems.length,
     items: bundleItems.map((item, index) => ({ sequence: index + 1, summary: summarizeGoal(record(item.goal)), bindingCount: list(item.bindings).length })),
+    groundedEntities: bundleCandidateBindings.map(presentBinding),
     globalConstraintCount: list(candidate.globalConstraints).length,
     explicitDependencyCount: list(candidate.explicitDependencies).length,
     semanticCandidateStatus: row.status,
@@ -240,10 +244,20 @@ function buildOpsRun(row: OpsRunRow, allAudit: readonly OpsAuditRow[]): OpsRun {
 
   const confirmedGoalStage: OpsStage = bundle ? {
     state: "COMPLETE",
-    summary: `${list(confirmedBundle?.items).length} confirmed goals in one bundle`,
+    summary: `${confirmedBundleItems.length} confirmed goals in one bundle`,
     detail: {
       ownerType: "BUNDLE", bundleVersion: bundle.version, contractHash: shortHash(bundle.contractHash), confirmedAt: bundle.confirmedAt?.toISOString() ?? "not recorded",
-      items: list(confirmedBundle?.items).map((value, index) => ({ sequence: index + 1, summary: summarizeGoal(record(record(value).goal)) })),
+      goalTypes: confirmedBundleItems.map((item) => text(record(item.goal).type) ?? "unknown"),
+      items: confirmedBundleItems.map((item, index) => ({
+        sequence: index + 1,
+        goalType: text(record(item.goal).type) ?? "unknown",
+        summary: summarizeGoal(record(item.goal)),
+        goal: safeJson(item.goal),
+        constraints: safeJson(item.constraints ?? []),
+        preferences: safeJson(item.preferences ?? []),
+        confirmedBindings: list(item.bindings).map(presentConfirmedBinding),
+      })),
+      confirmedBindings: bundleConfirmedBindings.map(presentConfirmedBinding),
       globalConstraints: safeJson(confirmedBundle?.globalConstraints ?? []), explicitDependencies: safeJson(confirmedBundle?.explicitDependencies ?? []),
     },
   } : goal ? {
@@ -254,13 +268,7 @@ function buildOpsRun(row: OpsRunRow, allAudit: readonly OpsAuditRow[]): OpsRun {
       goal: safeJson(goal.goalPayload),
       constraints: goal.constraints.map((constraint) => ({ type: constraint.type, ...withoutSequence(record(safeJson(constraint.payload))) })),
       preferences: safeJson(goal.preferences),
-      confirmedBindings: goal.entityBindings.map((binding) => ({
-        reference: binding.reference,
-        entityType: binding.entityType,
-        canonicalId: shortIdentifier(binding.entityId),
-        resolutionMethod: binding.resolutionMethod,
-        confirmed: binding.confirmed,
-      })),
+      confirmedBindings: goal.entityBindings.map((binding) => presentConfirmedBinding(binding)),
       contractVersion: goal.version,
       contractHash: shortHash(goal.contractHash),
       confirmedAt: goal.confirmedAt?.toISOString() ?? "not recorded",
@@ -496,6 +504,21 @@ function summarizeGoal(goal: MapLike): string {
   const amount = text(money.currency) && text(money.minorUnits) ? `${text(money.currency)} ${text(money.minorUnits)} minor units` : undefined;
   const destination = text(goal.recipientId ?? goal.recipientReference ?? goal.assetId ?? goal.assetReference ?? goal.billerId ?? goal.billerReference ?? goal.destinationAccountId ?? goal.destinationAccountReference);
   return [type.replaceAll("_", " "), amount, destination].filter(Boolean).join(" · ");
+}
+
+function presentBinding(value: unknown): Record<string, unknown> {
+  const binding = record(value);
+  return {
+    reference: text(binding.reference) ?? "unknown",
+    entityType: text(binding.entityType) ?? "unknown",
+    canonicalId: shortIdentifier(text(binding.entityId) ?? "unknown"),
+    resolutionMethod: text(binding.resolutionMethod) ?? "unknown",
+  };
+}
+
+function presentConfirmedBinding(value: unknown): Record<string, unknown> {
+  const binding = record(value);
+  return { ...presentBinding(binding), confirmed: binding.confirmed === true };
 }
 
 type MapLike = Record<string, unknown>;
