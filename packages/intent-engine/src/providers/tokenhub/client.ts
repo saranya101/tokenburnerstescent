@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { IntentModelClient, IntentModelInput, ModelClientDiagnostic } from "../../interpreter/types.js";
-import { sourceConditionalFundingCurrencies } from "../../validation/evidence.js";
+import { sourceConditionalFundingCurrencies, sourceMinimumBalanceMoney } from "../../validation/evidence.js";
 import type { TokenHubConfig, TokenHubThinkingMode } from "./config.js";
 
 const id = () => ({ type: "string", minLength: 1 });
@@ -267,12 +267,16 @@ function projectConstraintSlots(value: unknown, originalText: string | undefined
   if (!value.minimumAvailableBalances.every((entry) => isCompleteSlotObject(entry, ["money", "accountReference"]))) return stripNullFields(value);
 
   const constraints: unknown[] = [];
+  const sourceMinimums = originalText === undefined ? [] : sourceMinimumBalanceMoney(originalText);
+  const authoritativeMinimum = value.minimumAvailableBalances.length === 1 && sourceMinimums.length === 1
+    ? sourceMinimums[0]
+    : undefined;
   if (value.maxTotalCost !== null) constraints.push({ type: "MAX_TOTAL_COST", money: stripNullFields(value.maxTotalCost) });
   for (const entry of value.minimumAvailableBalances) {
     const balance = entry as Record<string, unknown>;
     constraints.push({
       type: "MIN_AVAILABLE_BALANCE",
-      money: stripNullFields(balance.money),
+      money: authoritativeMinimum ?? stripNullFields(balance.money),
       ...(balance.accountReference === null ? {} : { accountReference: stripNullFields(balance.accountReference) }),
     });
   }

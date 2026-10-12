@@ -24,6 +24,7 @@ import { PasskeySetupCard } from "../security/passkey-setup-card";
 import { Icon } from "../ui/icon";
 import { ChatBankingSidebarView } from "./chat-banking-sidebar";
 import { ConversationComposer } from "./conversation-composer";
+import { FinancialTrustJourney } from "./financial-trust-journey";
 import { SingaporeSkyline } from "./singapore-skyline";
 
 export const chatWelcomeGreeting = "Welcome back.";
@@ -105,6 +106,7 @@ export function ChatExperience({ initialRequest = "" }: { initialRequest?: strin
       {isInitial && <><section className="parlance-introduction"><span><Icon name="spark" /></span><div><strong>Parlance</strong><p>Describe what you need in your own words. I’ll confirm the meaning first, then show the exact banking plan for your review.</p></div></section><ConversationComposer initialValue={state.draftText ?? initialRequest} onSubmit={(text, input) => void flow.submitMessage(text, input)} /></>}
       {message && <div className="conversation-stream">
         <div className="request-context"><span className="request-context-icon"><Icon name="transfer" /></span><div><small>Your request</small><strong>“{message}”</strong></div>{!unresolved && state.phase !== "PARTIALLY_COMPLETED" && <button type="button" onClick={flow.reset}>Start over <Icon name="arrow" /></button>}</div>
+        <FinancialTrustJourney state={state} />
         {state.phase === "INTERPRETING" && <WorkingState title="Understanding your request…" detail="Checking names and details against your available banking relationships." />}
         {state.phase === "CLARIFICATION" && state.clarifications[0] && <ClarificationCard clarification={state.clarifications[0]} beneficiaries={banking.state?.beneficiaries ?? []} {...(state.submitting === undefined ? {} : { busy: state.submitting })} {...(state.error === undefined ? {} : { error: state.error })} onCancel={flow.reset} onSelect={(option) => void flow.answerClarification(state.clarifications[0]!, option)} onAnswerText={(answer) => void flow.answerClarificationText(state.clarifications[0]!, answer)} />}
         {state.phase === "SEMANTIC_VALIDATION_FAILED" && <OutcomeCard title="Please clarify your request" detail={state.message} onDone={flow.reset} />}

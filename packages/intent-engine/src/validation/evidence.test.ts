@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sourceActionSignals, sourceSupportsMoney, sourceSupportsQuantity } from "./evidence.js";
+import { sourceActionSignals, sourceMinimumBalanceMoney, sourceSupportsMoney, sourceSupportsQuantity } from "./evidence.js";
 
 describe("deterministic source evidence", () => {
   it.each(["Send John $100", "Transfer $300 to John", "Buy Apple with a budget of $500"])(
@@ -18,6 +18,21 @@ describe("deterministic source evidence", () => {
     ["Transfer 100 USD to John", "USD"],
   ] as const)("retains explicit currency evidence: %s", (sourceText, currency) => {
     expect(sourceSupportsMoney(sourceText, { currency, minorUnits: "10000" })).toBe(true);
+  });
+
+  it.each([
+    ["Keep at least S$16,000 available.", "1600000"],
+    ["Keep at least S$16,700 available in my SGD account.", "1670000"],
+    ["Keep at least S$17,000 available.", "1700000"],
+  ] as const)("extracts the exact source-backed minimum balance: %s", (sourceText, minorUnits) => {
+    expect(sourceMinimumBalanceMoney(sourceText)).toEqual([{ currency: "SGD", minorUnits }]);
+  });
+
+  it("preserves ambiguity when the source contains multiple minimum balances", () => {
+    expect(sourceMinimumBalanceMoney("Keep at least S$16,700 in Main and maintain a minimum SGD 5,000 in Savings.")).toEqual([
+      { currency: "SGD", minorUnits: "1670000" },
+      { currency: "SGD", minorUnits: "500000" },
+    ]);
   });
 
   it.each([

@@ -77,6 +77,21 @@ export function sourceSupportsMinimumBalance(sourceText: string, money: MoneyV1)
   return matchingMoneyEvidence(sourceText, money).some((evidence) => moneyHasMinimumBalanceContext(sourceText, evidence));
 }
 
+/**
+ * Returns only unambiguous money values that the customer explicitly framed as minimum balances.
+ * Provider adapters may use this to correct model arithmetic, but never to create a constraint.
+ */
+export function sourceMinimumBalanceMoney(sourceText: string): readonly MoneyV1[] {
+  const seen = new Set<string>();
+  return moneyEvidence(sourceText).flatMap((evidence) => {
+    if (evidence.currency === undefined || !moneyHasMinimumBalanceContext(sourceText, evidence)) return [];
+    const key = `${evidence.currency}\u0000${evidence.minorUnits}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ currency: evidence.currency, minorUnits: evidence.minorUnits }];
+  });
+}
+
 export function sourceSignalsMinimumBalance(sourceText: string): boolean {
   return moneyEvidence(sourceText).some((evidence) => moneyHasMinimumBalanceContext(sourceText, evidence));
 }

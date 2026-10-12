@@ -287,6 +287,56 @@ it("normalizes a conditional funding clause to the source-backed reserve account
 });
 
 it.each([
+  ["16,000", "16000", "1600000"],
+  ["16,700", "16700", "1670000"],
+  ["17,000", "17000", "1700000"],
+] as const)("uses deterministic source money for an unambiguous minimum balance: S$%s", (reserve, modelMinorUnits, expectedMinorUnits) => {
+  const originalText = `Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$${reserve} available in my SGD account.`;
+  expect(projectTokenHubTransportCandidate({
+    constraints: transportConstraints({ minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: modelMinorUnits }, accountReference: "my SGD account" }] }),
+  }, originalText)).toEqual({
+    constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: expectedMinorUnits }, accountReference: "my SGD account" }],
+  });
+});
+
+it("returns a schema-valid Apple intent when TokenHub miscalculates the S$16,700 minor units", async () => {
+  const originalText = "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$16,700 available in my SGD account.";
+  const candidate = {
+    schemaVersion: "1",
+    goal: transportGoal({ assetReference: "Apple (AAPL)", budget: null, quantity: "1" }),
+    constraints: transportConstraints({ minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: "16700" }, accountReference: "my SGD account" }] }),
+    preferences: transportPreferences({ preferredAccounts: ["SGD if necessary"] }),
+    references: [
+      { reference: "Apple (AAPL)", expectedEntityType: "ASSET" },
+      { reference: "my SGD account", expectedEntityType: "ACCOUNT" },
+      { reference: "SGD if necessary", expectedEntityType: "ACCOUNT" },
+    ],
+  };
+  const interpreter = new ModelBackedIntentInterpreter(
+    new TokenHubIntentModelClient(config, transportReturning(JSON.stringify(candidate))),
+  );
+
+  await expect(interpreter.interpretUserRequest({ text: originalText, userId: "stock-regression" })).resolves.toMatchObject({
+    goal: { type: "ACQUIRE_ASSET", assetReference: "Apple (AAPL)", quantity: "1" },
+    constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "1670000" }, accountReference: "my SGD account" }],
+    preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
+    references: [
+      { reference: "Apple (AAPL)", expectedEntityType: "ASSET" },
+      { reference: "my SGD account", expectedEntityType: "ACCOUNT" },
+    ],
+  });
+});
+
+it("does not choose between multiple source minimum balances", () => {
+  const originalText = "Keep at least S$16,700 in Main and maintain a minimum SGD 5,000 in Savings.";
+  expect(projectTokenHubTransportCandidate({
+    constraints: transportConstraints({ minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: "16700" }, accountReference: "Main" }] }),
+  }, originalText)).toEqual({
+    constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "16700" }, accountReference: "Main" }],
+  });
+});
+
+it.each([
   ["don't use my USD account", "my USD account"],
   ["avoid my savings account", "my savings account"],
   ["do not take money from savings", "savings"],

@@ -230,12 +230,16 @@ describe("bounded conditional-funding reinterpretation", () => {
 });
 
 describe("Person B to Person A confirmation boundary", () => {
-  it("grounds the exact Apple conditional-funding request without clarifying the source clause", async () => {
-    const text = "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$17,000 available in my SGD account.";
+  it.each([
+    ["16,000", "1600000"],
+    ["16,700", "1670000"],
+    ["17,000", "1700000"],
+  ] as const)("grounds the Apple conditional-funding request with an S$%s reserve without clarification", async (reserve, minorUnits) => {
+    const text = `Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$${reserve} available in my SGD account.`;
     const draft: IntentDraftV1 = {
       schemaVersion: "1", originalText: text,
       goal: { type: "ACQUIRE_ASSET", assetReference: "Apple (AAPL)", quantity: "1" },
-      constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "1700000" }, accountReference: "my SGD account" }],
+      constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits }, accountReference: "my SGD account" }],
       preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }], references: [],
     };
     const repository = new CandidateRepository();
@@ -248,7 +252,7 @@ describe("Person B to Person A confirmation boundary", () => {
       status: "AWAITING_GOAL_CONFIRMATION",
       goalCandidate: {
         goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" },
-        constraints: [{ type: "MIN_AVAILABLE_BALANCE", accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "1700000" } }],
+        constraints: [{ type: "MIN_AVAILABLE_BALANCE", accountId: "acc-sgd", money: { currency: "SGD", minorUnits } }],
         preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }],
       },
     });
