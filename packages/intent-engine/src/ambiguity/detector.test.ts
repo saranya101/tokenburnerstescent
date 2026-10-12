@@ -109,6 +109,22 @@ it("does not ask when a hard exclusion overrides a resolved soft account prefere
   expect(detector.analyze({ draft: value, groundingResults: [resolved("NTU", "BENEFICIARY", "ben_ntu"), resolved("Main", "ACCOUNT", "acc_main")] })).toEqual({ status: "CLEAR" });
 });
 
+it("asks once when one unresolved account grounds both a constraint and a preference", () => {
+  const value = draft(
+    { type: "ACQUIRE_ASSET", assetReference: "Apple (AAPL)", quantity: "1" },
+    [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountReference: "my SGD account" }],
+    [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
+  );
+  const ambiguous: EntityGroundingResult = {
+    status: "AMBIGUOUS", reference: "my SGD account", expectedEntityType: "ACCOUNT", candidates: [
+      { entityId: "acc_main", entityType: "ACCOUNT", canonicalName: "Main SGD" },
+      { entityId: "acc_save", entityType: "ACCOUNT", canonicalName: "Savings SGD" },
+    ],
+  };
+  expect(detector.analyze({ draft: value, groundingResults: [resolved("Apple (AAPL)", "ASSET", "asset_aapl"), ambiguous] }))
+    .toMatchObject({ status: "NEEDS_CLARIFICATION", clarifications: [{ field: "constraints[0].accountReference" }] });
+});
+
 it("ignores contradictory supplemental typing when the semantic recipient is resolved", () => {
   const value = draft(
     { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "700000" }, recipientReference: "Nanyang Technological University" },

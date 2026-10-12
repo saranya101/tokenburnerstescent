@@ -86,6 +86,34 @@ enum WebAuthnChallengeStatus {
   EXPIRED
 }
 
+
+enum KycStatus {
+  VERIFIED
+  REVIEW_REQUIRED
+  BLOCKED
+}
+
+enum RiskDecision {
+  ALLOW
+  REVIEW
+  BLOCK
+}
+
+enum RiskReservationStatus {
+  ACTIVE
+  EXECUTING
+  CONSUMED
+  RELEASED
+  EXPIRED
+}
+
+enum RiskVelocityEntryStatus {
+  RESERVED
+  SETTLED
+  RELEASED
+  EXPIRED
+}
+
 model User {
   id                  String               @id @default(cuid())
   externalRef         String?              @unique
@@ -97,6 +125,7 @@ model User {
   conversations       Conversation[]
   intentDrafts        IntentDraftRecord[]
   goalContracts       GoalContract[]
+  goalBundleContracts GoalBundleContract[]
   bankStateSnapshots  BankStateSnapshot[]
   approvals           Approval[]
   executionRuns       ExecutionRun[]
@@ -106,6 +135,9 @@ model User {
   webAuthnCredentials WebAuthnCredential[]
   webAuthnChallenges  WebAuthnChallenge[]
   approvalEvidences   ApprovalEvidence[]
+  riskProfile         UserRiskProfile?
+  riskAssessments     RiskAssessment[]
+  riskReservations    RiskReservation[]
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
 }
@@ -135,6 +167,7 @@ model WebAuthnChallenge {
   user                User                     @relation(fields: [userId], references: [id])
   purpose             WebAuthnChallengePurpose
   challenge           String                   @unique
+  challengeNonce      String?
   userHandle          Bytes?
   expectedRpId        String
   expectedOrigin      String
@@ -260,6 +293,8 @@ model Message {
   role           String
   content        String
   traceId        String?
+  inputMode      String       @default("TYPED")
+  inputMetadata  Json?
   createdAt      DateTime     @default(now())
 
   @@index([conversationId, createdAt])
@@ -275,8 +310,31 @@ model IntentDraftRecord {
   payload        Json
   status         String
   goalContracts  GoalContract[]
+  goalBundleContracts GoalBundleContract[]
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
+}
+
+model GoalBundleContract {
+  id                  String             @id @default(cuid())
+  bundleKey           String
+  version             Int
+  userId              String
+  user                User               @relation(fields: [userId], references: [id])
+  sourceIntentDraftId String             @unique
+  sourceIntentDraft   IntentDraftRecord  @relation(fields: [sourceIntentDraftId], references: [id])
+  status              GoalStatus
+  schemaVersion       String
+  payload             Json
+  contractHash        String
+  financialPlans      FinancialPlan[]
+  approvals           Approval[]
+  createdAt           DateTime           @default(now())
+  confirmedAt         DateTime?
+  updatedAt           DateTime           @updatedAt
+
+  @@unique([bundleKey, version])
+  @@index([userId, status])
 }
 
 model GoalContract {
@@ -347,8 +405,10 @@ model BankStateSnapshot {
 
 model FinancialPlan {
   id                      String              @id @default(cuid())
-  goalContractRowId       String
-  goalContract            GoalContract        @relation(fields: [goalContractRowId], references: [id])
+  goalContractRowId       String?
+  goalContract            GoalContract?       @relation(fields: [goalContractRowId], references: [id])
+  goalBundleRowId         String?
+  goalBundle              GoalBundleContract? @relation(fields: [goalBundleRowId], references: [id])
   goalContractKey         String
   status                  PlanStatus          @default(DRAFT)
   schemaVersion           String
@@ -359,6 +419,7 @@ model FinancialPlan {
   operationLibraryVersion String
   validity                Json
   projectedOutcome        Json
+  satisfactionProof       Json?
   planHash                String              @unique
   traceId                 String?
   steps                   FinancialPlanStep[]
@@ -366,10 +427,13 @@ model FinancialPlan {
   executionRuns           ExecutionRun[]
   webAuthnChallenges      WebAuthnChallenge[]
   approvalEvidences       ApprovalEvidence[]
+  riskAssessments         RiskAssessment[]
+  riskReservations        RiskReservation[]
   createdAt               DateTime            @default(now())
   updatedAt               DateTime            @updatedAt
 
   @@index([goalContractRowId, status])
+  @@index([goalBundleRowId, status])
   @@index([goalContractKey, goalContractVersion])
 }
 
@@ -394,8 +458,10 @@ model Approval {
   id                  String            @id @default(cuid())
   userId              String
   user                User              @relation(fields: [userId], references: [id])
-  goalContractRowId   String
-  goalContract        GoalContract      @relation(fields: [goalContractRowId], references: [id])
+  goalContractRowId   String?
+  goalContract        GoalContract?      @relation(fields: [goalContractRowId], references: [id])
+  goalBundleRowId     String?
+  goalBundle          GoalBundleContract? @relation(fields: [goalBundleRowId], references: [id])
   goalContractKey     String
   goalContractVersion Int
   goalContractHash    String
@@ -409,7 +475,7 @@ model Approval {
   expiresAt           DateTime
   revokedAt           DateTime?
   traceId             String?
-  executionRuns       ExecutionRun[]
+  executionRun        ExecutionRun?
   evidence            ApprovalEvidence?
   createdAt           DateTime          @default(now())
 
@@ -451,9 +517,9 @@ model ExecutionRun {
   id                  String             @id @default(cuid())
   userId              String
   user                User               @relation(fields: [userId], references: [id])
-  planId              String
+  planId              String             @unique
   plan                FinancialPlan      @relation(fields: [planId], references: [id])
-  approvalId          String
+  approvalId          String             @unique
   approval            Approval           @relation(fields: [approvalId], references: [id])
   status              ExecutionRunStatus
   startedStateVersion Int
@@ -568,4 +634,81 @@ model FxQuote {
   createdAt     DateTime @default(now())
 
   @@index([userId, expiresAt])
+}
+
+
+model UserRiskProfile {
+  userId    String    @id
+  user      User      @relation(fields: [userId], references: [id])
+  kycStatus KycStatus
+  version   Int       @default(1)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model RiskAssessment {
+  id                String       @id
+  userId            String
+  user              User         @relation(fields: [userId], references: [id])
+  financialPlanId   String
+  financialPlan     FinancialPlan @relation(fields: [financialPlanId], references: [id])
+  financialPlanHash String
+  bankStateVersion  Int
+  policyVersion     String
+  kycStatus         KycStatus
+  decision          RiskDecision
+  reasonCodes       Json
+  exposures         Json
+  rollingUsage      Json
+  assessedAt        DateTime
+  expiresAt         DateTime
+  traceId           String
+  reservation       RiskReservation?
+  createdAt         DateTime     @default(now())
+
+  @@index([userId, assessedAt])
+  @@index([financialPlanId, assessedAt])
+  @@index([decision, expiresAt])
+}
+
+model RiskReservation {
+  id                String                @id
+  userId            String
+  user              User                  @relation(fields: [userId], references: [id])
+  assessmentId      String                @unique
+  assessment        RiskAssessment        @relation(fields: [assessmentId], references: [id])
+  financialPlanId   String
+  financialPlan     FinancialPlan         @relation(fields: [financialPlanId], references: [id])
+  financialPlanHash String
+  policyVersion     String
+  status            RiskReservationStatus @default(ACTIVE)
+  traceId           String
+  expiresAt         DateTime
+  consumedAt        DateTime?
+  releasedAt        DateTime?
+  entries           RiskVelocityEntry[]
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  @@index([userId, status, expiresAt])
+  @@index([financialPlanId, status])
+}
+
+model RiskVelocityEntry {
+  id            String                  @id @default(cuid())
+  reservationId String
+  reservation   RiskReservation         @relation(fields: [reservationId], references: [id])
+  stepId        String
+  action        String
+  currency      String
+  minorUnits    BigInt
+  status        RiskVelocityEntryStatus @default(RESERVED)
+  settledAt     DateTime?
+  releasedAt    DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  @@unique([reservationId, stepId])
+  @@index([status, currency, createdAt])
+  @@index([reservationId, status])
 }

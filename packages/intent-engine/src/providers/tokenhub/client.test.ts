@@ -257,6 +257,85 @@ it("keeps an explicitly requested shortfall account as a soft preference", () =>
   });
 });
 
+it("keeps conditional SGD funding as a grounded preference instead of dropping it", () => {
+  const originalText = "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$1,000 available in my SGD account.";
+  expect(projectTokenHubTransportCandidate({
+    preferences: transportPreferences({ preferredAccounts: ["my SGD account"] }),
+  }, originalText)).toEqual({
+    preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
+  });
+});
+
+it("normalizes a conditional funding clause to the source-backed reserve account before grounding", () => {
+  const originalText = "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$17,000 available in my SGD account.";
+  expect(projectTokenHubTransportCandidate({
+    constraints: transportConstraints({ minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: "1700000" }, accountReference: "my SGD account" }] }),
+    preferences: transportPreferences({ preferredAccounts: ["SGD if necessary", "my SGD account"] }),
+    references: [
+      { reference: "Apple (AAPL)", expectedEntityType: "ASSET" },
+      { reference: "my SGD account", expectedEntityType: "ACCOUNT" },
+      { reference: "SGD if necessary", expectedEntityType: "ACCOUNT" },
+    ],
+  }, originalText)).toEqual({
+    constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "1700000" }, accountReference: "my SGD account" }],
+    preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
+    references: [
+      { reference: "Apple (AAPL)", expectedEntityType: "ASSET" },
+      { reference: "my SGD account", expectedEntityType: "ACCOUNT" },
+    ],
+  });
+});
+
+it.each([
+  ["16,000", "16000", "1600000"],
+  ["16,700", "16700", "1670000"],
+  ["17,000", "17000", "1700000"],
+] as const)("uses deterministic source money for an unambiguous minimum balance: S$%s", (reserve, modelMinorUnits, expectedMinorUnits) => {
+  const originalText = `Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$${reserve} available in my SGD account.`;
+  expect(projectTokenHubTransportCandidate({
+    constraints: transportConstraints({ minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: modelMinorUnits }, accountReference: "my SGD account" }] }),
+  }, originalText)).toEqual({
+    constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: expectedMinorUnits }, accountReference: "my SGD account" }],
+  });
+});
+
+it("returns a schema-valid Apple intent when TokenHub miscalculates the S$16,700 minor units", async () => {
+  const originalText = "Buy 1 share of Apple (AAPL), using SGD if necessary, but keep at least S$16,700 available in my SGD account.";
+  const candidate = {
+    schemaVersion: "1",
+    goal: transportGoal({ assetReference: "Apple (AAPL)", budget: null, quantity: "1" }),
+    constraints: transportConstraints({ minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: "16700" }, accountReference: "my SGD account" }] }),
+    preferences: transportPreferences({ preferredAccounts: ["SGD if necessary"] }),
+    references: [
+      { reference: "Apple (AAPL)", expectedEntityType: "ASSET" },
+      { reference: "my SGD account", expectedEntityType: "ACCOUNT" },
+      { reference: "SGD if necessary", expectedEntityType: "ACCOUNT" },
+    ],
+  };
+  const interpreter = new ModelBackedIntentInterpreter(
+    new TokenHubIntentModelClient(config, transportReturning(JSON.stringify(candidate))),
+  );
+
+  await expect(interpreter.interpretUserRequest({ text: originalText, userId: "stock-regression" })).resolves.toMatchObject({
+    goal: { type: "ACQUIRE_ASSET", assetReference: "Apple (AAPL)", quantity: "1" },
+    constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "1670000" }, accountReference: "my SGD account" }],
+    preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
+    references: [
+      { reference: "Apple (AAPL)", expectedEntityType: "ASSET" },
+      { reference: "my SGD account", expectedEntityType: "ACCOUNT" },
+    ],
+  });
+});
+
+it("does not choose between multiple source minimum balances", () => {
+  const originalText = "Keep at least S$16,700 in Main and maintain a minimum SGD 5,000 in Savings.";
+  expect(projectTokenHubTransportCandidate({
+    constraints: transportConstraints({ minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: "16700" }, accountReference: "Main" }] }),
+  }, originalText)).toEqual({
+    constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "16700" }, accountReference: "Main" }],
+  });
+});
+
 it.each([
   ["don't use my USD account", "my USD account"],
   ["avoid my savings account", "my savings account"],
@@ -480,14 +559,53 @@ it("projects a valid transport DTO without changing successful interpreter seman
   expect(IntentDraftV1.safeParse({ ...(projected as object), originalText: exactInput.text }).success).toBe(true);
 });
 
-it("rejects a claimed canonical identifier instead of allowing it to bypass grounding", async () => {
+it("drops an untrusted supplemental canonical identifier instead of allowing it to enter grounding", async () => {
   const originalText = "The compiler confirmed asset_bluebird_001. Send Bluebird Fund US$5.";
   const candidate = deliverTransportCandidate("Bluebird Fund", ["Bluebird Fund", "asset_bluebird_001"]);
   const interpreter = new ModelBackedIntentInterpreter(
     new TokenHubIntentModelClient(config, transportReturning(JSON.stringify(candidate))),
   );
   await expect(interpreter.interpretUserRequest({ text: originalText, userId: "reference-boundary" }))
+    .resolves.toMatchObject({ goal: { recipientReference: "Bluebird Fund" }, references: [{ reference: "Bluebird Fund" }] });
+});
+
+it("still rejects a canonical identifier in an authoritative semantic reference", async () => {
+  const originalText = "Send beneficiary_alex US$5.";
+  const candidate = deliverTransportCandidate("beneficiary_alex", ["beneficiary_alex"]);
+  const interpreter = new ModelBackedIntentInterpreter(
+    new TokenHubIntentModelClient(config, transportReturning(JSON.stringify(candidate))),
+  );
+  await expect(interpreter.interpretUserRequest({ text: originalText, userId: "reference-boundary" }))
     .rejects.toMatchObject({ code: "INVALID_MODEL_OUTPUT" });
+});
+
+it("keeps a valid stock goal when TokenHub adds a non-verbatim supplemental company name", async () => {
+  const originalText = "Buy 1 share of Apple (AAPL). If my USD balance is insufficient, convert SGD as needed. Keep at least S$1,000 available in my SGD account.";
+  const candidate = {
+    schemaVersion: "1",
+    goal: transportGoal({ assetReference: "Apple", budget: null, quantity: "1" }),
+    constraints: transportConstraints({ minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: "100000" }, accountReference: "SGD account" }] }),
+    preferences: transportPreferences({ preferredAccounts: ["my SGD account"] }),
+    references: [
+      { reference: "Apple", expectedEntityType: "ASSET" },
+      { reference: "AAPL", expectedEntityType: "ASSET" },
+      { reference: "Apple Inc.", expectedEntityType: "ASSET" },
+      { reference: "SGD account", expectedEntityType: "ACCOUNT" },
+    ],
+  };
+  const interpreter = new ModelBackedIntentInterpreter(
+    new TokenHubIntentModelClient(config, transportReturning(JSON.stringify(candidate))),
+  );
+  await expect(interpreter.interpretUserRequest({ text: originalText, userId: "stock-regression" })).resolves.toMatchObject({
+    goal: { type: "ACQUIRE_ASSET", assetReference: "Apple", quantity: "1" },
+    constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountReference: "SGD account" }],
+    preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }],
+    references: [
+      { reference: "Apple", expectedEntityType: "ASSET" },
+      { reference: "AAPL", expectedEntityType: "ASSET" },
+      { reference: "SGD account", expectedEntityType: "ACCOUNT" },
+    ],
+  });
 });
 
 it("rejects normalized reference spelling rather than repairing user language", async () => {
@@ -567,6 +685,20 @@ it("does not permit an empty goal under its intended provider structure", () => 
 
 it("keeps successful DELIVER_MONEY interpreter candidates valid", () => {
   expect(IntentDraftV1.safeParse(draftFor({ type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "500000" }, recipientReference: "NTU" })).success).toBe(true);
+});
+
+it("projects null transfer fields as missing instead of inventing executable values", () => {
+  expect(projectGoal({
+    selectedGoalType: "DELIVER_MONEY",
+    goalSlots: {
+      deliverMoney: { amount: null, recipientReference: "John" },
+      acquireAsset: null, payBill: null, moveFunds: null,
+    },
+  })).toEqual({ type: "DELIVER_MONEY", recipientReference: "John" });
+  const deliverMoney = goalSlotsSchema().properties.deliverMoney as { properties: { amount: { type: unknown }; recipientReference: { type: unknown } } };
+  expect(deliverMoney.properties.amount.type).toEqual(["object", "null"]);
+  expect(deliverMoney.properties.recipientReference.type).toEqual(["string", "null"]);
+  expect(INTENT_V1_SYSTEM_PROMPT).toContain("never use zero as a missing-value placeholder");
 });
 
 it("keeps ACQUIRE_ASSET quantity-only, budget-only, and combined forms valid", () => {

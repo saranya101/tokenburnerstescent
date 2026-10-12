@@ -97,6 +97,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@parlance/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@parlance/observability':
         specifier: workspace:*
         version: link:../../packages/observability

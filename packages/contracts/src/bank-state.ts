@@ -13,10 +13,19 @@ export const HoldingV1 = z.object({ assetId: Id, quantity: NonNegativeDecimalStr
 export const ObligationV1 = z.object({ id: Id, description: z.string().min(1), money: MoneyV1, dueAt: IsoTimestamp, status: z.enum(["OPEN", "PAID", "OVERDUE", "CANCELLED"]) }).strict();
 export const ServiceAvailabilityV1 = z.object({ transfers: z.boolean(), fx: z.boolean(), billPayments: z.boolean(), investments: z.boolean() }).strict();
 export const FxQuoteV1 = z.object({ id: Id, fromCurrency: CurrencyCode, toCurrency: CurrencyCode, rate: NonNegativeDecimalString, fee: MoneyV1.optional(), expiresAt: IsoTimestamp }).strict();
+export const AssetQuoteV1 = z.object({
+  quoteId: Id,
+  assetId: Id,
+  settlementCurrency: CurrencyCode,
+  unitPriceMinor: NonNegativeMinorUnits,
+  feeMinor: NonNegativeMinorUnits,
+  expiresAt: IsoTimestamp,
+}).strict();
+export type AssetQuoteV1 = z.infer<typeof AssetQuoteV1>;
 
 export const BankStateSnapshotV1 = z.object({
   schemaVersion: SchemaVersionV1, userId: Id, stateVersion: z.number().int().nonnegative(), capturedAt: IsoTimestamp,
   accounts: z.array(AccountV1), beneficiaries: z.array(BeneficiaryV1), assets: z.array(AssetV1), holdings: z.array(HoldingV1),
-  obligations: z.array(ObligationV1), serviceAvailability: ServiceAvailabilityV1, fxQuotes: z.array(FxQuoteV1),
+  obligations: z.array(ObligationV1), serviceAvailability: ServiceAvailabilityV1, fxQuotes: z.array(FxQuoteV1), assetQuotes: z.array(AssetQuoteV1),
 }).strict();
 export type BankStateSnapshotV1 = z.infer<typeof BankStateSnapshotV1>;

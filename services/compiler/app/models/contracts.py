@@ -422,6 +422,15 @@ class FxQuoteV1(ContractModel):
     expires_at: datetime
 
 
+class AssetQuoteV1(ContractModel):
+    quote_id: str
+    asset_id: str
+    settlement_currency: str = Field(pattern=r"^[A-Z]{3}$")
+    unit_price_minor: str = Field(pattern=r"^(0|[1-9]\d*)$")
+    fee_minor: str = Field(pattern=r"^(0|[1-9]\d*)$")
+    expires_at: datetime
+
+
 class BankStateSnapshotV1(ContractModel):
     schema_version: Literal["1"]
     user_id: str
@@ -434,6 +443,7 @@ class BankStateSnapshotV1(ContractModel):
     obligations: list[ObligationV1]
     service_availability: ServiceAvailabilityV1
     fx_quotes: list[FxQuoteV1]
+    asset_quotes: list[AssetQuoteV1]
 
 
 class StepBaseV1(ContractModel):
@@ -474,6 +484,11 @@ class BuyAssetParametersV1(ContractModel):
     asset_id: str
     quantity: str
     maximum_spend: MoneyV1
+    quote_id: str
+    settlement_currency: str = Field(pattern=r"^[A-Z]{3}$")
+    quoted_unit_price_minor: str = Field(pattern=r"^(0|[1-9]\d*)$")
+    quoted_fee_minor: str = Field(pattern=r"^(0|[1-9]\d*)$")
+    authorized_total_minor: str = Field(pattern=r"^(0|[1-9]\d*)$")
 
 
 class SellAssetParametersV1(ContractModel):

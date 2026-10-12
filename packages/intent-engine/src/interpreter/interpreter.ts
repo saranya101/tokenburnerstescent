@@ -1,4 +1,4 @@
-import { IntentDraftV1, type IntentDraftV1 as IntentDraft } from "@parlance/contracts";
+import { IncompleteTransferIntentDraftV1, IntentDraftV1, type InterpretedIntentDraftV1 as InterpretedIntentDraft } from "@parlance/contracts";
 import { INTENT_PROMPT_VERSION, INTENT_V1_SYSTEM_PROMPT } from "../prompts/intent-v1.js";
 import { IntentInterpreterError } from "./errors.js";
 import type { IntentInterpreter, IntentModelClient, InterpretUserRequestInput, IntentValidationIssue, ModelClientDiagnostic, ModelClientDiagnosticError } from "./types.js";
@@ -25,7 +25,7 @@ function validationIssues(error: { issues: readonly { path?: readonly PropertyKe
 export class ModelBackedIntentInterpreter implements IntentInterpreter {
   constructor(private readonly modelClient: IntentModelClient) {}
 
-  async interpretUserRequest(input: InterpretUserRequestInput): Promise<IntentDraft> {
+  async interpretUserRequest(input: InterpretUserRequestInput): Promise<InterpretedIntentDraft> {
     if (input.text.trim().length === 0) {
       throw new IntentInterpreterError("EMPTY_INPUT", "User input must not be empty.");
     }
@@ -46,15 +46,18 @@ export class ModelBackedIntentInterpreter implements IntentInterpreter {
     const completeCandidate = isRecord(candidate)
       ? { ...candidate, originalText: input.text }
       : candidate;
-    const parsed = IntentDraftV1.safeParse(completeCandidate);
-    if (!parsed.success) {
+    const complete = IntentDraftV1.safeParse(completeCandidate);
+    if (complete.success) return complete.data;
+    const incomplete = IncompleteTransferIntentDraftV1.safeParse(completeCandidate);
+    if (!incomplete.success) {
+      const diagnostic = isDeliverMoneyCandidate(completeCandidate) ? incomplete.error : complete.error;
       throw new IntentInterpreterError(
         "INVALID_MODEL_OUTPUT",
         "The intent model returned an invalid intent draft.",
-        validationIssues(parsed.error),
+        validationIssues(diagnostic),
       );
     }
-    return parsed.data;
+    return incomplete.data;
   }
 }
 
@@ -80,4 +83,8 @@ function modelDiagnostic(error: unknown): ModelClientDiagnostic | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isDeliverMoneyCandidate(value: unknown): boolean {
+  return isRecord(value) && isRecord(value.goal) && value.goal.type === "DELIVER_MONEY";
 }

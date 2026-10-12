@@ -53,6 +53,8 @@ class BuyAsset:
     source_account_id: str
     asset_id: str
     quantity: Decimal
+    quote_id: str
+    unit_price_minor: int
     price: Money
     fee: Money | None = None
     maximum_spend: Money | None = None

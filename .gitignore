@@ -17,4 +17,5 @@ __pycache__/
 .env.*
 !.env.example
 .DS_Store
+.parlance/
 evaluation/results/tokenhub-intent-*.json

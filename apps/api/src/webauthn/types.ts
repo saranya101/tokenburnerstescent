@@ -50,6 +50,7 @@ export interface StoredWebAuthnChallenge {
   userId: string;
   purpose: WebAuthnChallengePurpose;
   challenge: string;
+  challengeNonce: string | null;
   userHandle: Uint8Array<ArrayBuffer> | null;
   expectedRpId: string;
   expectedOrigin: string;
@@ -68,6 +69,7 @@ export interface NewWebAuthnChallenge {
   userId: string;
   purpose: WebAuthnChallengePurpose;
   challenge: string;
+  challengeNonce?: string;
   userHandle?: Uint8Array<ArrayBuffer>;
   expectedRpId: string;
   expectedOrigin: string;
@@ -100,6 +102,7 @@ export interface StoredApprovalEvidence {
 
 export interface VerifiedPasskeyAuthorizationInput {
   goalRowId: string;
+  ownerType?: "GOAL" | "BUNDLE";
   approval: ApprovalV1;
   executionId: string;
   evidence: StoredApprovalEvidence;

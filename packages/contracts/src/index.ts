@@ -1,6 +1,7 @@
 export * from "./approval.js";
 export * from "./bank-state.js";
 export * from "./common.js";
+export * from "./customer-activity.js";
 export * from "./compiler-result.js";
 export * from "./entities.js";
 export * from "./execution.js";
@@ -10,4 +11,5 @@ export * from "./goal-bundle.js";
 export * from "./hard-rules.js";
 export * from "./intent.js";
 export * from "./operations.js";
+export * from "./risk.js";
 export * from "./state-machine.js";

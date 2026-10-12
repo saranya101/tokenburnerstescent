@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { IntentModelClient, IntentModelInput, ModelClientDiagnostic } from "../../interpreter/types.js";
+import { sourceConditionalFundingCurrencies, sourceMinimumBalanceMoney } from "../../validation/evidence.js";
 import type { TokenHubConfig, TokenHubThinkingMode } from "./config.js";
 
 const id = () => ({ type: "string", minLength: 1 });
@@ -33,8 +34,8 @@ const goal = () => strict(["selectedGoalType", "goalSlots"], {
   },
   goalSlots: strict(goalSlotNames, {
     deliverMoney: nullableStrict(["amount", "recipientReference"], {
-      amount: money(false, "Money to deliver to the recipient."),
-      recipientReference: { ...id(), description: "Exact human phrase identifying the recipient: the person or beneficiary receiving money. Do not use this field for a biller being paid and do not invent an ID." },
+      amount: money(true, "Money to deliver to the recipient, or null when the customer did not provide an amount and currency. Never invent or use zero as a placeholder."),
+      recipientReference: nullableId("Exact human phrase identifying the recipient, or null when the customer did not identify one. Do not use this field for a biller being paid and do not invent an ID."),
     }, "Populate only for DELIVER_MONEY when sending or transferring money to a person, recipient, or beneficiary rather than settling a bill; otherwise null."),
     acquireAsset: nullableStrict(["assetReference", "budget", "quantity"], {
       assetReference: { ...id(), description: "Exact human phrase naming the asset being acquired. Do not replace it with money or an ID." },
@@ -78,7 +79,7 @@ const preferenceSlots = () => strict(preferenceSlotNames, {
   minimizeTotalCost: { type: "boolean", description: "True only when the user explicitly prefers minimizing total cost; otherwise false. Never invent this preference merely to fill the slot." },
   minimizeFx: { type: "boolean", description: "True only when the user explicitly prefers minimizing foreign exchange; otherwise false. Never invent this preference merely to fill the slot." },
   fastest: { type: "boolean", description: "True only when the user explicitly prefers the fastest outcome; otherwise false. Never invent this preference merely to fill the slot." },
-  preferredAccounts: { type: "array", description: "Every item must be an exact human account phrase explicitly preferred by the user. Use an empty array when none was stated; never invent an account or sentinel item.", items: id() },
+  preferredAccounts: { type: "array", description: "Every item must be an exact source phrase explicitly naming an account or currency the user explicitly preferred for use, including a conditional shortfall instruction such as using SGD if necessary or convert SGD as needed. Prefer the most specific verbatim account phrase when one is present elsewhere in the request (for example my SGD account). This records funding intent only and does not create an FX operation. Use an empty array when none was stated; never infer funding permission from an insufficient balance, invent an account, or use a sentinel item.", items: id() },
 });
 
 const reference = () => strict(["reference", "expectedEntityType"], {
@@ -185,23 +186,29 @@ export class TokenHubIntentModelClient implements IntentModelClient {
 /** Projects explicit provider slots and otherwise removes only null-valued object fields. */
 export function projectTokenHubTransportCandidate(value: unknown, originalText?: string): unknown {
   if (!isRecord(value)) return stripNullFields(value);
-  if (originalText !== undefined && !hasOnlyGroundableHumanReferences(value, originalText)) {
+  if (originalText !== undefined && !hasOnlyGroundableAuthoritativeReferences(value, originalText)) {
     return stripNullFields(value);
   }
   const projected = stripNullFields(value) as Record<string, unknown>;
+  const fundingReferenceReplacements = originalText === undefined
+    ? new Map<string, string>()
+    : conditionalFundingReferenceReplacements(value.preferences, value.constraints, originalText);
   if (Object.hasOwn(value, "goal")) projected.goal = projectGoalSlots(value.goal);
   if (Object.hasOwn(value, "constraints")) projected.constraints = projectConstraintSlots(value.constraints, originalText);
-  if (Object.hasOwn(value, "preferences")) projected.preferences = projectPreferenceSlots(value.preferences);
+  if (Object.hasOwn(value, "preferences")) projected.preferences = projectPreferenceSlots(value.preferences, originalText, fundingReferenceReplacements);
+  if (Object.hasOwn(value, "references") && originalText !== undefined) projected.references = projectSupplementalReferences(value.references, originalText, fundingReferenceReplacements);
   return projected;
 }
 
-function hasOnlyGroundableHumanReferences(value: Record<string, unknown>, originalText: string): boolean {
-  return transportHumanReferences(value).every((referenceValue) =>
-    originalText.includes(referenceValue) && !looksLikeCanonicalIdentifier(referenceValue)
-  );
+function isGroundableHumanReference(referenceValue: string, originalText: string): boolean {
+  return originalText.includes(referenceValue) && !looksLikeCanonicalIdentifier(referenceValue);
 }
 
-function transportHumanReferences(value: Record<string, unknown>): string[] {
+function hasOnlyGroundableAuthoritativeReferences(value: Record<string, unknown>, originalText: string): boolean {
+  return authoritativeTransportHumanReferences(value).every((referenceValue) => isGroundableHumanReference(referenceValue, originalText));
+}
+
+function authoritativeTransportHumanReferences(value: Record<string, unknown>): string[] {
   const references: string[] = [];
   const add = (candidate: unknown): void => {
     if (typeof candidate === "string") references.push(candidate);
@@ -223,19 +230,17 @@ function transportHumanReferences(value: Record<string, unknown>): string[] {
         if (isRecord(balance)) add(balance.accountReference);
       }
     }
-    if (Array.isArray(value.constraints.excludedAccounts)) {
-      value.constraints.excludedAccounts.forEach(add);
-    }
-  }
-  if (isRecord(value.preferences) && Array.isArray(value.preferences.preferredAccounts)) {
-    value.preferences.preferredAccounts.forEach(add);
-  }
-  if (Array.isArray(value.references)) {
-    for (const referenceValue of value.references) {
-      if (isRecord(referenceValue)) add(referenceValue.reference);
-    }
   }
   return references;
+}
+
+function projectSupplementalReferences(value: unknown, originalText: string, fundingReferenceReplacements = new Map<string, string>()): unknown {
+  if (!Array.isArray(value)) return stripNullFields(value);
+  return value.flatMap((entry) => {
+    if (!isRecord(entry) || typeof entry.reference !== "string") return [stripNullFields(entry)];
+    if (fundingReferenceReplacements.has(entry.reference)) return [];
+    return isGroundableHumanReference(entry.reference, originalText) ? [stripNullFields(entry)] : [];
+  });
 }
 
 function looksLikeCanonicalIdentifier(value: string): boolean {
@@ -262,12 +267,16 @@ function projectConstraintSlots(value: unknown, originalText: string | undefined
   if (!value.minimumAvailableBalances.every((entry) => isCompleteSlotObject(entry, ["money", "accountReference"]))) return stripNullFields(value);
 
   const constraints: unknown[] = [];
+  const sourceMinimums = originalText === undefined ? [] : sourceMinimumBalanceMoney(originalText);
+  const authoritativeMinimum = value.minimumAvailableBalances.length === 1 && sourceMinimums.length === 1
+    ? sourceMinimums[0]
+    : undefined;
   if (value.maxTotalCost !== null) constraints.push({ type: "MAX_TOTAL_COST", money: stripNullFields(value.maxTotalCost) });
   for (const entry of value.minimumAvailableBalances) {
     const balance = entry as Record<string, unknown>;
     constraints.push({
       type: "MIN_AVAILABLE_BALANCE",
-      money: stripNullFields(balance.money),
+      money: authoritativeMinimum ?? stripNullFields(balance.money),
       ...(balance.accountReference === null ? {} : { accountReference: stripNullFields(balance.accountReference) }),
     });
   }
@@ -316,7 +325,7 @@ function explicitlyExcludesAccount(originalText: string, accountReference: strin
   return false;
 }
 
-function projectPreferenceSlots(value: unknown): unknown {
+function projectPreferenceSlots(value: unknown, originalText?: string, fundingReferenceReplacements = new Map<string, string>()): unknown {
   if (!isCompleteSlotObject(value, preferenceSlotNames) || !Array.isArray(value.preferredAccounts)) return stripNullFields(value);
   if (typeof value.minimizeTotalCost !== "boolean" || typeof value.minimizeFx !== "boolean" || typeof value.fastest !== "boolean") return stripNullFields(value);
 
@@ -324,10 +333,51 @@ function projectPreferenceSlots(value: unknown): unknown {
   if (value.minimizeTotalCost) preferences.push({ type: "MINIMIZE_TOTAL_COST" });
   if (value.minimizeFx) preferences.push({ type: "MINIMIZE_FX" });
   if (value.fastest) preferences.push({ type: "FASTEST" });
-  for (const accountReference of value.preferredAccounts) {
-    preferences.push({ type: "PREFER_ACCOUNT", accountReference: stripNullFields(accountReference) });
+  const seenAccounts = new Set<string>();
+  for (const rawAccountReference of value.preferredAccounts) {
+    const accountReference = typeof rawAccountReference === "string"
+      ? fundingReferenceReplacements.get(rawAccountReference) ?? rawAccountReference
+      : rawAccountReference;
+    if (typeof accountReference !== "string" || originalText === undefined || isGroundableHumanReference(accountReference, originalText)) {
+      const key = typeof accountReference === "string" ? accountReference.trim().toLocaleLowerCase() : JSON.stringify(accountReference);
+      if (seenAccounts.has(key)) continue;
+      seenAccounts.add(key);
+      preferences.push({ type: "PREFER_ACCOUNT", accountReference: stripNullFields(accountReference) });
+    }
   }
   return preferences;
+}
+
+/**
+ * Converts a model-emitted conditional clause such as "SGD if necessary" into a source-backed
+ * account reference before grounding. A matching explicit reserve account wins; otherwise the
+ * exact currency token remains unresolved and the normal account grounder decides whether it is
+ * unique or ambiguous. No entity identifier is selected here.
+ */
+function conditionalFundingReferenceReplacements(preferences: unknown, constraints: unknown, originalText: string): Map<string, string> {
+  const replacements = new Map<string, string>();
+  if (!isRecord(preferences) || !Array.isArray(preferences.preferredAccounts)) return replacements;
+  const fundingCurrencies = sourceConditionalFundingCurrencies(originalText);
+  if (fundingCurrencies.size === 0) return replacements;
+  const minimumBalances = isRecord(constraints) && Array.isArray(constraints.minimumAvailableBalances)
+    ? constraints.minimumAvailableBalances
+    : [];
+
+  for (const value of preferences.preferredAccounts) {
+    if (typeof value !== "string") continue;
+    if (!/\b(?:if\s+(?:necessary|needed|required)|as\s+needed|to\s+cover\s+(?:the\s+)?shortfall)\b/iu.test(value)) continue;
+    const referencedCurrencies = [...fundingCurrencies].filter((currency) => new RegExp(`\\b${currency}\\b`, "iu").test(value));
+    if (referencedCurrencies.length !== 1) continue;
+    const currency = referencedCurrencies[0]!;
+    const reserveReferences = [...new Set(minimumBalances.flatMap((entry) => {
+      if (!isRecord(entry) || !isRecord(entry.money) || entry.money.currency !== currency || typeof entry.accountReference !== "string") return [];
+      if (!isGroundableHumanReference(entry.accountReference, originalText) || !new RegExp(`\\b${currency}\\b`, "iu").test(entry.accountReference)) return [];
+      return [entry.accountReference];
+    }))];
+    const replacement = reserveReferences.length === 1 ? reserveReferences[0]! : currency;
+    if (replacement !== value) replacements.set(value, replacement);
+  }
+  return replacements;
 }
 
 function stripNullFields(value: unknown): unknown {

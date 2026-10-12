@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { PrismaClient } from "@parlance/db";
 import { ApprovalV1, BankStateSnapshotV1, CompilerResultV1, FinancialPlanV1, GoalContractV1, type IntentDraftV1 } from "@parlance/contracts";
@@ -16,9 +17,10 @@ const fixture = (name: string): unknown => JSON.parse(readFileSync(join(process.
 const ids = { user: "it-user-ntu", goalRow: "it-goal-row-ntu", goal: "it-goal-ntu", trace: "it-trace-ntu" };
 
 async function mockBank(): Promise<BankPort> {
-  const modulePath = join(process.cwd(), "../../services/mock-bank/src/app.ts"); const { buildApp } = await import(modulePath) as { buildApp(): FastifyInstance }; const app = buildApp();
-  return { async getState(userId, traceId) { const response = await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: { "x-trace-id": traceId } }); const state = BankStateSnapshotV1.parse(response.json()); return BankStateSnapshotV1.parse({ ...state, fxQuotes: state.fxQuotes.map((quote, index) => index === 0 ? { ...quote, id: "quote-sgd-usd-1" } : quote) }); },
-    async execute(path, payload, key, traceId) { const response = await app.inject({ method: "POST", url: `/v1/execute/${path}`, headers: { "idempotency-key": key, "x-trace-id": traceId, "content-type": "application/json" }, body: JSON.stringify(payload) }); if (response.statusCode >= 400) throw new Error(response.json().code); return response.json(); } };
+  const modulePath = join(process.cwd(), "../../services/mock-bank/src/app.ts"); const { buildApp } = await import(modulePath) as { buildApp(options: { bankApiToken: string }): FastifyInstance }; const app = buildApp({ bankApiToken: "integration-bank-token" });
+  return { async getState(userId, traceId) { const response = await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: { "x-trace-id": traceId, "x-parlance-bank-token": "integration-bank-token" } }); const state = BankStateSnapshotV1.parse(response.json()); return BankStateSnapshotV1.parse({ ...state, fxQuotes: state.fxQuotes.map((quote, index) => index === 0 ? { ...quote, id: "quote-sgd-usd-1" } : quote) }); },
+    async execute(path, payload, key, traceId) { const response = await app.inject({ method: "POST", url: `/v1/execute/${path}`, headers: { "idempotency-key": key, "x-trace-id": traceId, "x-parlance-bank-token": "integration-bank-token", "content-type": "application/json" }, body: JSON.stringify(payload) }); if (response.statusCode >= 400) throw new Error(response.json().code); return response.json(); },
+    async lookupByIdempotencyKey(key, traceId) { const response = await app.inject({ method: "GET", url: `/v1/executions/idempotency/${key}`, headers: { "x-trace-id": traceId, "x-parlance-bank-token": "integration-bank-token" } }); return response.json(); } };
 }
 
 async function cleanup(db: PrismaClient): Promise<void> {
@@ -39,7 +41,7 @@ describe.skipIf(!testDatabaseUrl)("Prisma PostgreSQL restart safety", () => {
   afterAll(async () => { if (db) { await cleanup(db); await db.$disconnect(); } });
 
   it("atomically confirms one candidate transition and reloads the same semantic hash", async () => {
-    const draft: IntentDraftV1 = { schemaVersion: "1", originalText: "send $500 to NTU", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "NTU" }, constraints: [], preferences: [], references: [] };
+    const draft: IntentDraftV1 = { schemaVersion: "1", originalText: "send USD 500 to NTU", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "NTU" }, constraints: [], preferences: [], references: [] };
     const generated = ["it-candidate-ntu", "it-confirmed-goal"];
     const repository = new PrismaParlanceRepository(db);
     const messages = new MessageOrchestrationService(repository, { interpretUserRequest: async () => draft }, () => ({ ground: async (input: EntityGroundingInput) => ({ status: "RESOLVED", reference: input.reference, entityType: "BENEFICIARY", entityId: "it-db-ben-ntu", resolutionMethod: "EXACT" }) }), undefined, undefined, () => new Date("2026-09-25T10:00:00Z"), () => generated.shift()!);
@@ -51,13 +53,13 @@ describe.skipIf(!testDatabaseUrl)("Prisma PostgreSQL restart safety", () => {
   });
 
   it("persists and idempotently continues clarification without creating financial authority", async () => {
-    const draft: IntentDraftV1 = { schemaVersion: "1", originalText: "Send John $500", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "John" }, constraints: [], preferences: [], references: [] };
+    const draft: IntentDraftV1 = { schemaVersion: "1", originalText: "Send John USD 500", goal: { type: "DELIVER_MONEY", amount: { currency: "USD", minorUnits: "50000" }, recipientReference: "John" }, constraints: [], preferences: [], references: [] };
     const generated = ["it-clarification-john", "it-goal-john"]; const repository = new PrismaParlanceRepository(db);
-    const messages = new MessageOrchestrationService(repository, { interpretUserRequest: async () => draft }, () => ({ ground: async (input: EntityGroundingInput) => ({ status: "AMBIGUOUS", reference: input.reference, expectedEntityType: "BENEFICIARY", candidates: [{ entityType: "BENEFICIARY", entityId: "ben-john-1", canonicalName: "John Tan" }, { entityType: "BENEFICIARY", entityId: "ben-john-2", canonicalName: "John Lim" }] }) }), undefined, undefined, () => new Date("2026-09-25T10:00:00Z"), () => generated.shift()!);
+    const messages = new MessageOrchestrationService(repository, { interpretUserRequest: async () => draft }, () => ({ ground: async (input: EntityGroundingInput) => ({ status: "AMBIGUOUS", reference: input.reference, expectedEntityType: "BENEFICIARY", candidates: [{ entityType: "BENEFICIARY", entityId: "ben-john-tan", canonicalName: "John Tan" }, { entityType: "BENEFICIARY", entityId: "ben-john-lim", canonicalName: "John Lim" }] }) }), undefined, undefined, () => new Date("2026-09-25T10:00:00Z"), () => generated.shift()!);
     const pending = await messages.receive({ userId: ids.user, text: draft.originalText }, ids.trace); expect(pending).toMatchObject({ status: "NEEDS_CLARIFICATION", clarificationId: "it-clarification-john" });
-    const first = await messages.answerClarification("it-clarification-john", { selectedCandidateId: "ben-john-2" }, ids.trace);
-    const duplicate = await messages.answerClarification("it-clarification-john", { selectedCandidateId: "ben-john-2" }, ids.trace);
-    expect(first).toEqual(duplicate); expect(first).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { recipientId: "ben-john-2", amount: { minorUnits: "50000" } } } });
+    const first = await messages.answerClarification("it-clarification-john", { selectedCandidateId: "ben-john-lim" }, ids.trace);
+    const duplicate = await messages.answerClarification("it-clarification-john", { selectedCandidateId: "ben-john-lim" }, ids.trace);
+    expect(first).toEqual(duplicate); expect(first).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { recipientId: "ben-john-lim", amount: { minorUnits: "50000" } } } });
     expect(await db.message.count({ where: { conversation: { userId: ids.user }, content: "John Lim" } })).toBe(1);
     expect(await db.goalContract.count({ where: { sourceIntentDraftId: "it-clarification-john" } })).toBe(0);
     expect(await db.financialPlan.count({ where: { goalContractKey: "it-goal-john" } })).toBe(0);
@@ -73,7 +75,7 @@ describe.skipIf(!testDatabaseUrl)("Prisma PostgreSQL restart safety", () => {
     const compiled = await new CompilationService(repository, bank, compiler).compile(ids.goal, ids.trace); if (compiled.status !== "SAT") throw new Error("Expected SAT");
     approvalId = "it-verified-approval"; executionId = "it-verified-execution"; const evidenceId = "it-approval-evidence"; const challengeId = "it-approval-challenge"; const credentialRowId = "it-credential-row";
     await repository.saveWebAuthnCredential({ id: credentialRowId, userId: ids.user, credentialId: "it-credential", publicKey: new Uint8Array([1, 2, 3]), userHandle: new Uint8Array([4]), signCount: 0, transports: ["internal"], deviceType: "multiDevice", backedUp: true });
-    await repository.createWebAuthnChallenge({ id: challengeId, userId: ids.user, purpose: "APPROVAL", challenge: "it-approval-challenge-value", expectedRpId: "localhost", expectedOrigin: "http://localhost:3000", financialPlanId: compiled.plan.id, approvalPayload: { purpose: "PARLANCE_FINANCIAL_PLAN_APPROVAL", payloadVersion: 1, approvalMethod: "PASSKEY", userId: ids.user, goalContractId: originalGoal.id, goalContractVersion: originalGoal.version, goalContractHash: originalGoal.contractHash, financialPlanId: compiled.plan.id, financialPlanHash: compiled.plan.planHash, bankStateVersion: compiled.plan.bankStateVersion, approvalExpiresAt: new Date(now.getTime() + 60_000).toISOString() }, approvalPayloadHash: "it-payload-hash", expiresAt: new Date(now.getTime() + 60_000) });
+    await repository.createWebAuthnChallenge({ id: challengeId, userId: ids.user, purpose: "APPROVAL", challenge: "it-approval-challenge-value", challengeNonce: randomBytes(32).toString("base64url"), expectedRpId: "localhost", expectedOrigin: "http://localhost:3000", financialPlanId: compiled.plan.id, approvalPayload: { purpose: "PARLANCE_FINANCIAL_PLAN_APPROVAL", payloadVersion: 1, approvalMethod: "PASSKEY", userId: ids.user, goalContractId: originalGoal.id, goalContractVersion: originalGoal.version, goalContractHash: originalGoal.contractHash, financialPlanId: compiled.plan.id, financialPlanHash: compiled.plan.planHash, bankStateVersion: compiled.plan.bankStateVersion, approvalExpiresAt: new Date(now.getTime() + 60_000).toISOString() }, approvalPayloadHash: "it-payload-hash", expiresAt: new Date(now.getTime() + 60_000) });
     const approval = ApprovalV1.parse({ schemaVersion: "1", id: approvalId, userId: ids.user, goalContractId: originalGoal.id, goalContractVersion: originalGoal.version, goalContractHash: originalGoal.contractHash, financialPlanId: compiled.plan.id, financialPlanHash: compiled.plan.planHash, bankStateVersion: compiled.plan.bankStateVersion, method: "PASSKEY", approvedAt: now.toISOString(), expiresAt: new Date(now.getTime() + 60_000).toISOString(), signatureReference: evidenceId });
     const evidence: StoredApprovalEvidence = { id: evidenceId, approvalId, userId: ids.user, financialPlanId: compiled.plan.id, goalContractKey: originalGoal.id, goalContractVersion: originalGoal.version, goalContractHash: originalGoal.contractHash, financialPlanHash: compiled.plan.planHash, bankStateVersion: compiled.plan.bankStateVersion, webAuthnCredentialId: credentialRowId, challengeId, approvalPayloadHash: "it-payload-hash", authenticatorCounterBefore: 0, authenticatorCounterAfter: 1, userVerified: true, rpId: "localhost", origin: "http://localhost:3000", verifiedAt: now.toISOString() };
     await repository.authorizeVerifiedPasskey({ goalRowId: ids.goalRow, approval, executionId, evidence, challengeId, credentialId: credentialRowId, expectedCounter: 0, newCounter: 1, now, traceId: ids.trace });

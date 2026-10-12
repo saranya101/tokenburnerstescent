@@ -1,4 +1,4 @@
-import type { IntentDraftV1 } from "@parlance/contracts";
+import type { InterpretedIntentDraftV1 } from "@parlance/contracts";
 import { normalizeEntityReference } from "./normalizer.js";
 import type { GroundableEntityType } from "./types.js";
 
@@ -13,7 +13,7 @@ export interface IntentGroundingRequirement {
  * Derives identity requirements from validated field roles. Supplemental reference metadata is
  * retained only when it does not duplicate any semantic-field reference after B3 normalization.
  */
-export function groundingRequirementsForIntent(draft: IntentDraftV1): readonly IntentGroundingRequirement[] {
+export function groundingRequirementsForIntent(draft: InterpretedIntentDraftV1): readonly IntentGroundingRequirement[] {
   const semantic = semanticRequirements(draft);
   const semanticReferences = new Set(semantic.map(({ reference }) => normalizeEntityReference(reference)));
   const supplemental: IntentGroundingRequirement[] = [];
@@ -36,11 +36,11 @@ export function groundingRequirementsForIntent(draft: IntentDraftV1): readonly I
   return [...semantic, ...supplemental];
 }
 
-function semanticRequirements(draft: IntentDraftV1): IntentGroundingRequirement[] {
+function semanticRequirements(draft: InterpretedIntentDraftV1): IntentGroundingRequirement[] {
   const requirements: IntentGroundingRequirement[] = [];
   switch (draft.goal.type) {
     case "DELIVER_MONEY":
-      requirements.push(semantic("goal.recipientReference", draft.goal.recipientReference, "BENEFICIARY"));
+      if (draft.goal.recipientReference !== undefined) requirements.push(semantic("goal.recipientReference", draft.goal.recipientReference, "BENEFICIARY"));
       break;
     case "ACQUIRE_ASSET":
       requirements.push(semantic("goal.assetReference", draft.goal.assetReference, "ASSET"));
