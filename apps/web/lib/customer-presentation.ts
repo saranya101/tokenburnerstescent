@@ -4,8 +4,8 @@ export type GoalDetail = { label: string; value: string };
 export type GoalSummary = { eyebrow: string; title: string; description: string; details: GoalDetail[]; constraints: string[]; preferences: string[] };
 export type PresentedPlanStep = { id: string; kind: string; title: string; summary: string; meta: Array<{ label: string; value: string }>; dependsOn?: string };
 export type FundingItem = { account: string; amount: string; detail: string };
-export type PlanPresentation = { goal: GoalSummary; planTitle: string; planSummary: string; steps: PresentedPlanStep[]; funding: FundingItem[]; preservedConstraints: string[]; acquiredAssets?: Array<{ assetId: string; asset: string; quantity: string }>; projectedBalances?: Array<{ account: string; amount: string }>; projectedHoldings?: Array<{ assetId: string; asset: string; quantity: string }>; validUntil?: string };
-export type BundleSummary = { items: Array<{ itemId: string; text: string; ordered: boolean }>; constraints: string[] };
+export type PlanPresentation = { transactionKind?: "PAYMENT" | "INVESTMENT" | "COMBINED"; goal: GoalSummary; planTitle: string; planSummary: string; steps: PresentedPlanStep[]; funding: FundingItem[]; preservedConstraints: string[]; acquiredAssets?: Array<{ assetId: string; asset: string; quantity: string }>; projectedBalances?: Array<{ account: string; amount: string }>; projectedHoldings?: Array<{ assetId: string; asset: string; quantity: string }>; validUntil?: string };
+export type BundleSummary = { items: Array<{ itemId: string; text: string; ordered: boolean }>; constraints: string[]; preferences: string[] };
 
 export function formatMoney(money: MoneyV1): string {
   const negative = money.minorUnits.startsWith("-"); const digits = negative ? money.minorUnits.slice(1) : money.minorUnits;
@@ -82,7 +82,7 @@ function constraintText(constraint: GoalContractV1["constraints"][number], map: 
 }
 
 function preferenceText(preference: GoalContractV1["preferences"][number], map: Map<string, string>): string {
-  if (preference.type === "PREFER_ACCOUNT") return `Use ${named(map, preference.accountId)} for the remaining amount`;
+  if (preference.type === "PREFER_ACCOUNT") return `Use ${named(map, preference.accountId)} for funding if needed`;
   if (preference.type === "MINIMIZE_TOTAL_COST") return "Use the lowest-cost safe route";
   if (preference.type === "MINIMIZE_FX") return "Minimize currency conversion";
   return "Use the fastest safe route";
@@ -144,6 +144,7 @@ export function presentPlan(goal: GoalContractV1, plan: FinancialPlanV1, liveSta
     return [{ account: named(map, step.parameters.sourceAccountId), amount: formatMoney(step.parameters.sourceMoney), detail: quoteDetail }];
   });
   return {
+    transactionKind: goal.goal.type === "ACQUIRE_ASSET" ? "INVESTMENT" : "PAYMENT",
     goal: presentGoal(goal, referenceLabels), planTitle: goal.goal.type === "DELIVER_MONEY" ? "Review payment details" : goal.goal.type === "ACQUIRE_ASSET" ? "Review your investment" : "Review transaction details",
     planSummary: "Review how this transaction will be completed using your latest account information.",
     steps: plan.steps.map((step) => presentStep(step, map, snapshot)), funding,
@@ -167,18 +168,35 @@ export function presentBundle(bundle: Pick<GoalBundleContractV1, "items" | "glob
       return { itemId: item.itemId, text: summary.title, ordered: incoming.has(item.itemId) };
     }),
     constraints: bundle.globalConstraints.map((constraint) => constraintText(constraint, new Map())),
+    preferences: [...new Set(bundle.items.flatMap((item) => {
+      const map = names({ entityBindings: item.bindings });
+      return item.preferences.map((preference) => preferenceText(preference, map));
+    }))],
   };
 }
 
 export function presentBundlePlan(bundle: GoalBundleContractV1, plan: FinancialPlanV1, liveState?: BankStateSnapshotV1): PlanPresentation {
   const entityBindings = bundle.items.flatMap(({ bindings }) => bindings);
   const map = names({ entityBindings }); const warnings = plan.projectedOutcome.warnings; const summary = presentBundle(bundle);
-  const funding = plan.steps.flatMap((step): FundingItem[] => step.action === "FX_CONVERT" ? [{ account: named(map, step.parameters.sourceAccountId), amount: formatMoney(step.parameters.sourceMoney), detail: `Converted to ${step.parameters.targetCurrency}` }] : []);
+  const snapshot = liveState?.stateVersion === plan.bankStateVersion ? liveState : undefined;
+  const funding = plan.steps.flatMap((step): FundingItem[] => {
+    if (step.action !== "FX_CONVERT") return [];
+    const quote = snapshot?.fxQuotes.find((item) => item.id === step.parameters.quoteId);
+    const detail = quote ? `Rate 1 ${quote.fromCurrency} = ${quote.rate} ${quote.toCurrency}${quote.fee ? ` · fee ${formatMoney(quote.fee)}` : " · no fee"}` : `Converted to ${step.parameters.targetCurrency}`;
+    return [{ account: named(map, step.parameters.sourceAccountId), amount: formatMoney(step.parameters.sourceMoney), detail }];
+  });
   return {
-    goal: { eyebrow: "Combined request", title: `${bundle.items.length} requested actions`, description: summary.items.map((item) => `${item.ordered ? "Then " : ""}${item.text}`).join(" · "), details: [], constraints: summary.constraints, preferences: [] },
+    transactionKind: "COMBINED",
+    goal: { eyebrow: "Combined request", title: `${bundle.items.length} requested actions`, description: summary.items.map((item) => `${item.ordered ? "Then " : ""}${item.text}`).join(" · "), details: [], constraints: summary.constraints, preferences: summary.preferences },
     planTitle: "Review combined transaction details", planSummary: "One plan covers every confirmed action in this request.",
-    steps: plan.steps.map((step) => presentStep(step, map, liveState?.stateVersion === plan.bankStateVersion ? liveState : undefined)), funding,
+    steps: plan.steps.map((step) => presentStep(step, map, snapshot)), funding,
     preservedConstraints: [...summary.constraints, ...warnings],
+    acquiredAssets: plan.projectedOutcome.acquiredAssets.map((item) => ({ assetId: item.assetId, asset: named(map, item.assetId, "ASSET"), quantity: item.quantity })),
     projectedBalances: plan.projectedOutcome.projectedAvailableBalances.map((item) => ({ account: named(map, item.accountId), amount: formatMoney(item.money) })),
+    ...(plan.validity.validUntil ? { validUntil: plan.validity.validUntil } : {}),
+    ...(snapshot === undefined ? {} : { projectedHoldings: plan.projectedOutcome.acquiredAssets.map((item) => ({
+      assetId: item.assetId, asset: named(map, item.assetId, "ASSET"),
+      quantity: addDecimalQuantities(snapshot.holdings.find((holding) => holding.assetId === item.assetId)?.quantity ?? "0", item.quantity),
+    })) }),
   };
 }

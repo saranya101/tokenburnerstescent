@@ -27,6 +27,27 @@ const plan = FinancialPlanV1.parse({
   validity: { requiredQuoteIds: ["quote-1"] }, projectedOutcome: { goalSatisfied: true, deliveredMoney: { currency: "USD", minorUnits: "500000" }, acquiredAssets: [], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] },
 });
 const bundlePlan = FinancialPlanV1.parse({ ...plan, id: "bundle-plan", goalContractId: bundle.bundleId, planHash: "bundle-plan-hash-1" });
+const fundedBundle = GoalBundleContractV1.parse({
+  schemaVersion: "1", bundleId: "funded-bundle", bundleVersion: 1, contractHash: "f".repeat(64),
+  items: [
+    { itemId: "send-john", goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientId: "ben-john-lim" }, constraints: [], preferences: [], bindings: [{ schemaVersion: "1", reference: "John Lim", entityType: "BENEFICIARY", entityId: "ben-john-lim", resolutionMethod: "EXACT", confirmed: true }] },
+    { itemId: "buy-apple", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }], bindings: [{ schemaVersion: "1", reference: "Apple (AAPL)", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS", confirmed: true }, { schemaVersion: "1", reference: "my SGD account", entityType: "ACCOUNT", entityId: "acc-sgd", resolutionMethod: "ALIAS", confirmed: true }] },
+  ],
+  globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }],
+  explicitDependencies: [{ beforeItemId: "send-john", afterItemId: "buy-apple", reason: "USER_EXPLICIT_ORDER" }],
+});
+const fundedBundleCandidate = { schemaVersion: fundedBundle.schemaVersion, items: fundedBundle.items.map((item) => ({ ...item, bindings: item.bindings.map((binding) => ({ ...binding, confirmed: false })) })), globalConstraints: fundedBundle.globalConstraints, explicitDependencies: fundedBundle.explicitDependencies };
+const fundedBundlePlan = FinancialPlanV1.parse({
+  schemaVersion: "1", id: "funded-bundle-plan", goalContractId: fundedBundle.bundleId, goalContractVersion: 1, bankStateVersion: 1,
+  compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test", planHash: "p".repeat(64),
+  steps: [
+    { id: "send", sequence: 0, dependsOn: [], reversible: false, action: "TRANSFER", parameters: { sourceAccountId: "acc-sgd", beneficiaryId: "ben-john-lim", amount: { currency: "SGD", minorUnits: "10000" } } },
+    { id: "fx", sequence: 1, dependsOn: ["send"], reversible: false, action: "FX_CONVERT", parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", sourceMoney: { currency: "SGD", minorUnits: "26800" }, targetCurrency: "USD", quoteId: "fx-quote" } },
+    { id: "buy", sequence: 2, dependsOn: ["fx"], reversible: false, action: "BUY_ASSET", parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "20100" }, quoteId: "asset-quote", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } },
+  ],
+  validity: { requiredQuoteIds: ["asset-quote", "fx-quote"], validUntil: "2099-01-01T00:00:00.000Z" },
+  projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [{ accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "163100" } }, { accountId: "acc-usd", money: { currency: "USD", minorUnits: "0" } }], warnings: [] },
+});
 const refreshedPlan = FinancialPlanV1.parse({ ...plan, id: "plan-2", planHash: "plan-hash-0000002" });
 const pending = ExecutionResultV1.parse({ schemaVersion: "1", executionId: "execution-1", planId: plan.id, status: "PENDING", startedStateVersion: 7, steps: [], goalOutcome: { achieved: false, summary: "Waiting for execution." } });
 const completed = ExecutionResultV1.parse({ schemaVersion: "1", executionId: "execution-1", planId: plan.id, status: "COMPLETED", startedStateVersion: 7, finalStateVersion: 9, steps: plan.steps.map((step) => ({ stepId: step.id, status: "SETTLED", idempotencyKey: `key-${step.id}`, bankReference: `bank-${step.id}` })), goalOutcome: { achieved: true, summary: "Requested funds were delivered.", deliveredMoney: { currency: "USD", minorUnits: "500000" } } });
@@ -208,6 +229,42 @@ it("uses one explicit meaning confirmation and one compilation for a combined re
   expect(values.api.confirmGoalBundle).toHaveBeenCalledOnce(); expect(values.api.confirmGoalBundle).toHaveBeenCalledWith("bundle-candidate");
   expect(values.api.compileGoalBundle).toHaveBeenCalledOnce(); expect(values.api.compileGoalBundle).toHaveBeenCalledWith(bundle.bundleId);
   expect(values.api.confirmGoal).not.toHaveBeenCalled(); expect(values.flow.state).toMatchObject({ phase: "PLAN_REVIEW", bundle: { bundleId: bundle.bundleId }, plan: { id: bundlePlan.id } });
+});
+
+it("keeps the exact funded transfer and investment behind one meaning confirmation and one passkey, then reports a later failure truthfully", async () => {
+  const request = "Send S$100 to John Lim, then buy 1 share of Apple (AAPL), using SGD if needed, but keep at least S$1,000 in my SGD account.";
+  const authorized = ExecutionResultV1.parse({ schemaVersion: "1", executionId: "funded-execution", planId: fundedBundlePlan.id, status: "PENDING", startedStateVersion: 1, steps: [], goalOutcome: { achieved: false, summary: "Waiting for execution." } });
+  const partial = ExecutionResultV1.parse({
+    ...authorized,
+    status: "FAILED",
+    steps: [
+      { stepId: "send", status: "SETTLED", idempotencyKey: "funded-send", bankReference: "bank-send" },
+      { stepId: "fx", status: "FAILED", idempotencyKey: "funded-fx", errorCode: "QUOTE_EXPIRED" },
+    ],
+    goalOutcome: { achieved: false, summary: "The transfer completed, but the conversion and investment did not." },
+  });
+  const values = setup({
+    sendMessage: vi.fn().mockResolvedValue({ status: "AWAITING_BUNDLE_CONFIRMATION", candidateId: "funded-bundle-candidate", goalBundleCandidate: fundedBundleCandidate }),
+    confirmGoalBundle: vi.fn().mockResolvedValue(fundedBundle),
+    compileGoalBundle: vi.fn().mockResolvedValue({ financialPlan: fundedBundlePlan, satisfactionProof: { schemaVersion: "1", bundleId: fundedBundle.bundleId, bundleContractHash: fundedBundle.contractHash, itemCoverage: [{ itemId: "send-john", satisfiedByStepIds: ["send"] }, { itemId: "buy-apple", satisfiedByStepIds: ["fx", "buy"] }], allItemsSatisfied: true, allHardConstraintsSatisfied: true, allExplicitDependenciesSatisfied: true, allIrreversibleStepsJustified: true } }),
+    approvalOptions: vi.fn().mockResolvedValue({ challengeId: "funded-challenge", options: { challenge: "funded-challenge" } }),
+    verifyApproval: vi.fn().mockResolvedValue({ execution: authorized }),
+    runExecution: vi.fn().mockResolvedValue(partial),
+  });
+
+  await values.flow.submitMessage(request);
+  expect(values.flow.state).toMatchObject({ phase: "BUNDLE_REVIEW", candidate: { items: [{ goal: { amount: { currency: "SGD", minorUnits: "10000" } } }, { goal: { assetId: "asset-aapl", quantity: "1" } }], globalConstraints: [{ money: { currency: "SGD", minorUnits: "100000" } }] } });
+  expect(values.api.compileGoalBundle).not.toHaveBeenCalled(); expect(values.api.approvalOptions).not.toHaveBeenCalled();
+
+  await values.flow.confirmMeaning();
+  expect(values.flow.state).toMatchObject({ phase: "PLAN_REVIEW", plan: { steps: [{ action: "TRANSFER" }, { action: "FX_CONVERT" }, { action: "BUY_ASSET" }] } });
+  expect(values.api.approvalOptions).not.toHaveBeenCalled(); expect(values.api.runExecution).not.toHaveBeenCalled();
+
+  await values.flow.authorizeAndExecute();
+  expect(values.passkey.request).toHaveBeenCalledOnce();
+  expect(values.api.verifyApproval).toHaveBeenCalledWith(fundedBundlePlan.id, "funded-challenge", credential);
+  expect(values.api.runExecution).toHaveBeenCalledWith("funded-execution");
+  expect(values.flow.state).toMatchObject({ phase: "PARTIALLY_COMPLETED", result: { status: "FAILED", steps: [{ stepId: "send", status: "SETTLED" }, { stepId: "fx", status: "FAILED", errorCode: "QUOTE_EXPIRED" }] } });
 });
 
 it("does not confirm after repeated state reads that model rerenders", async () => {

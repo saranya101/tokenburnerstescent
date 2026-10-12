@@ -33,7 +33,7 @@ from app.models.contracts import (
 )
 from app.operations.library import operation_sort_key
 from app.operations.models import BuyAsset, FxConvert, InternalOperation, Money, MoveFunds, Transfer
-from app.planner.acquire import compile_acquire_operation
+from app.planner.acquire import compile_acquire_route
 from app.planner.candidates import enumerate_candidates
 from app.planner.compiler import (
     COMPILER_VERSION,
@@ -178,8 +178,8 @@ def _operation_from_step(step) -> InternalOperation:
 
 def _compile_acquire(
     item: GoalBundleItemV1, snapshot: BankStateSnapshotV1, policy: PolicyEngine
-) -> BuyAsset | CompilerUnsatV1 | CompilerPolicyBlockedV1:
-    return compile_acquire_operation(
+) -> tuple[InternalOperation, ...] | CompilerUnsatV1 | CompilerPolicyBlockedV1:
+    return compile_acquire_route(
         _item_goal_contract(item, snapshot),
         snapshot,
         policy,
@@ -502,7 +502,7 @@ def validate_bundle_plan(
             for item in active_items:
                 if isinstance(item.goal, AcquireAssetGroundedGoalV1):
                     candidate = _compile_acquire(item, simulated.to_snapshot(), PolicyEngine())
-                    if isinstance(candidate, BuyAsset) and candidate == operation:
+                    if isinstance(candidate, tuple) and candidate and candidate[0] == operation:
                         supported = True
                         break
                 elif operation in enumerate_candidates(
@@ -549,20 +549,21 @@ def compile_goal_bundle(
     item_ranges: dict[str, tuple[int, int]] = {}
     for item in _ordered_items(bundle):
         if isinstance(item.goal, AcquireAssetGroundedGoalV1):
-            operation = _compile_acquire(item, state.to_snapshot(), policy)
-            if not isinstance(operation, BuyAsset):
-                return operation
+            route = _compile_acquire(item, state.to_snapshot(), policy)
+            if not isinstance(route, tuple):
+                return route
             start = len(operations)
-            applied = apply_operation(state, operation)
-            if not applied.success:
-                return _unsat(
-                    "COMPOSITE_SIMULATION_FAILED",
-                    itemId=item.item_id,
-                    violations=[violation.code for violation in applied.violations],
-                )
-            state = applied.state
-            operations.append(operation)
-            item_ranges[item.item_id] = (start, start)
+            for operation in route:
+                applied = apply_operation(state, operation)
+                if not applied.success:
+                    return _unsat(
+                        "COMPOSITE_SIMULATION_FAILED",
+                        itemId=item.item_id,
+                        violations=[violation.code for violation in applied.violations],
+                    )
+                state = applied.state
+                operations.append(operation)
+            item_ranges[item.item_id] = (start, len(operations) - 1)
             continue
         if isinstance(item.goal, PayBillGroundedGoalV1):
             return _unsat("UNSUPPORTED_GOAL", itemId=item.item_id, goalType=item.goal.type)

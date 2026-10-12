@@ -66,3 +66,32 @@ it("projects the TokenHub bundle DTO into the frozen shared contract", async () 
   expect(request.messages[0]?.content).toMatch(/Plain "and" preserves\s+array order but creates no dependency/u);
   expect(JSON.stringify(request)).not.toContain("private-user");
 });
+
+it("preserves the exact ordered transfer, conditional SGD funding, and reserve", async () => {
+  const text = "Send S$100 to John Lim, then buy 1 share of Apple (AAPL), using SGD if needed, but keep at least S$1,000 in my SGD account.";
+  const candidate = {
+    ...transportCandidate,
+    items: [
+      { ...transportCandidate.items[0]!, goal: { ...transportCandidate.items[0]!.goal, goalSlots: { ...transportCandidate.items[0]!.goal.goalSlots, deliverMoney: { amount: { currency: "SGD", minorUnits: "10000" }, recipientReference: "John Lim" } } } },
+      { ...transportCandidate.items[1]!, goal: { ...transportCandidate.items[1]!.goal, goalSlots: { ...transportCandidate.items[1]!.goal.goalSlots, acquireAsset: { assetReference: "Apple (AAPL)", budget: null, quantity: "1" } } }, preferences: { ...emptyPreferences, preferredAccounts: ["SGD if needed"] } },
+    ],
+    globalConstraints: {
+    ...emptyConstraints,
+    minimumAvailableBalances: [{ money: { currency: "SGD", minorUnits: "100000" }, accountReference: "my SGD account" }],
+    },
+  };
+  const transport: TokenHubBundleTransport = { createCompletion: vi.fn().mockResolvedValue({ content: JSON.stringify(candidate) }) };
+  const client = new TokenHubIntentBundleModelClient({ apiKey: "synthetic-key", baseUrl: "https://example.test/v1", model: "hy3", thinking: "disabled" }, transport);
+
+  const bundle = await new ModelBackedIntentBundleInterpreter(client).interpretUserRequest({ text, userId: "isolated-user" });
+
+  expect(bundle).toEqual({
+    schemaVersion: "1",
+    items: [
+      { itemId: "item-1", goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientReference: "John Lim" }, constraints: [], preferences: [] },
+      { itemId: "item-2", goal: { type: "ACQUIRE_ASSET", assetReference: "Apple (AAPL)", quantity: "1" }, constraints: [], preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }] },
+    ],
+    globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountReference: "my SGD account" }],
+    explicitDependencies: [{ beforeItemId: "item-1", afterItemId: "item-2", reason: "USER_EXPLICIT_ORDER" }],
+  });
+});

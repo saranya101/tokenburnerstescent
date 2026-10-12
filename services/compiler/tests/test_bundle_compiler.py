@@ -15,6 +15,7 @@ from app.models.contracts import (
     AssetQuoteV1,
     AssetV1,
     BankStateSnapshotV1,
+    BeneficiaryV1,
     BundleSatisfactionProofV1,
     FinancialPlanV1,
     GoalBundleContractV1,
@@ -270,6 +271,90 @@ def test_headline_transfer_then_buy_binds_authoritative_quote_and_dependency():
     }
     assert result.financial_plan.validity.required_quote_ids == ["asset-quote-aapl-usd-v1"]
     assert validate_bundle_plan(contract, result.financial_plan, result.satisfaction_proof, state)
+
+
+def test_ordered_sgd_transfer_then_conditionally_funded_apple_purchase_preserves_reserve():
+    _, state = fixture()
+    state.user_id = "isolated-multi-intent-customer"
+    state.accounts[0].available_minor_units = "200000"
+    state.accounts[0].ledger_minor_units = "200000"
+    state.accounts[1].available_minor_units = "0"
+    state.accounts[1].ledger_minor_units = "0"
+    state.accounts[1].capabilities.extend(["TRADE_ASSET"])
+    state.beneficiaries.append(
+        BeneficiaryV1(
+            id="ben-john-lim",
+            name="John Lim",
+            supportedCurrencies=["SGD"],
+            status="ACTIVE",
+        )
+    )
+    add_aapl_quote(state)
+    transfer = TypeAdapter(GroundedGoalV1).validate_python(
+        {
+            "type": "DELIVER_MONEY",
+            "amount": {"currency": "SGD", "minorUnits": "10000"},
+            "recipientId": "ben-john-lim",
+        }
+    )
+    acquire = TypeAdapter(GroundedGoalV1).validate_python(
+        {"type": "ACQUIRE_ASSET", "assetId": "asset-aapl", "quantity": "1"}
+    )
+    reserve = constraint(
+        {
+            "type": "MIN_AVAILABLE_BALANCE",
+            "money": {"currency": "SGD", "minorUnits": "100000"},
+            "accountId": "acc-sgd",
+        }
+    )
+    contract = bundle(
+        [
+            item("send-john", transfer),
+            item(
+                "buy-apple",
+                acquire,
+                preferences=[{"type": "PREFER_ACCOUNT", "accountId": "acc-sgd"}],
+            ),
+        ],
+        dependencies=[
+            {
+                "beforeItemId": "send-john",
+                "afterItemId": "buy-apple",
+                "reason": "USER_EXPLICIT_ORDER",
+            }
+        ],
+        global_constraints=[reserve],
+        bundle_id="isolated-transfer-investment",
+    )
+
+    result = assert_success(compile_goal_bundle(contract, state))
+    plan = result.financial_plan
+    assert [step.action for step in plan.steps] == ["TRANSFER", "FX_CONVERT", "BUY_ASSET"]
+    transfer_step, fx_step, buy_step = plan.steps
+    assert transfer_step.parameters.amount.minor_units == "10000"
+    assert transfer_step.parameters.beneficiary_id == "ben-john-lim"
+    assert fx_step.depends_on == [transfer_step.id]
+    assert fx_step.parameters.source_account_id == "acc-sgd"
+    assert fx_step.parameters.source_money.minor_units == "26800"
+    assert buy_step.depends_on == [fx_step.id]
+    assert buy_step.parameters.asset_id == "asset-aapl"
+    assert buy_step.parameters.quantity == "1"
+    assert buy_step.parameters.quoted_unit_price_minor == "20000"
+    assert buy_step.parameters.quoted_fee_minor == "100"
+    assert buy_step.parameters.authorized_total_minor == "20100"
+    assert plan.validity.required_quote_ids == [
+        "asset-quote-aapl-usd-v1",
+        "quote-sgd-usd-1",
+    ]
+    projected = {
+        item.account_id: (item.money.currency, item.money.minor_units)
+        for item in plan.projected_outcome.projected_available_balances
+    }
+    assert projected["acc-sgd"] == ("SGD", "163100")
+    assert projected["acc-usd"] == ("USD", "0")
+    assert plan.projected_outcome.acquired_assets[0].asset_id == "asset-aapl"
+    assert plan.projected_outcome.acquired_assets[0].quantity == "1"
+    assert validate_bundle_plan(contract, plan, result.satisfaction_proof, state)
 
 
 @pytest.mark.parametrize(

@@ -187,15 +187,24 @@ function validateCandidate(sourceText: string, bundle: IntentBundleDraft, candid
     const draft = { ...intentDraftForBundleItem(item), originalText: actualEvidence, constraints: [...item.constraints, ...bundle.globalConstraints] };
     const validationCandidate = GoalContractCandidateV1.parse({
       schemaVersion: "1", goal: grounded.goal, constraints: [...grounded.constraints, ...candidate.globalConstraints], preferences: grounded.preferences,
-      entityBindings: [...grounded.bindings, ...globalBindings],
+      entityBindings: uniqueBindings([...grounded.bindings, ...globalBindings]),
     });
     const result = itemValidator.validate({ sourceText: actualEvidence, draft, candidate: validationCandidate });
     // Bundle coverage is authoritative for multi-clause action types and clause-local goal fields.
     // The item validator still checks draft/candidate equality, bindings, constraints, and preferences.
-    const bundleHandledCodes = new Set(["GOAL_TYPE_NOT_SUPPORTED_BY_SOURCE", "GOAL_CLAUSE_NOT_UNAMBIGUOUS"]);
+    const bundleHandledCodes = new Set(["GOAL_TYPE_NOT_SUPPORTED_BY_SOURCE", "GOAL_CLAUSE_NOT_UNAMBIGUOUS", "OMITTED_EXPLICIT_PREFERENCE"]);
     mismatches.push(...result.mismatches.filter(({ code }) => !bundleHandledCodes.has(code)).map((mismatch) => ({ ...mismatch, field: `items[${index}].${mismatch.field}` })));
   });
   return mismatches.length === 0 ? { status: "PASS", mismatches: [] } : { status: "FAIL", mismatches };
+}
+
+function uniqueBindings<T extends { reference: string; entityType: string; entityId: string }>(bindings: readonly T[]): T[] {
+  const seen = new Set<string>();
+  return bindings.filter((binding) => {
+    const key = `${binding.reference}\u0000${binding.entityType}\u0000${binding.entityId}`;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
 }
 
 function globalConstraintBindings(bundle: IntentBundleDraft, candidate: GoalBundleCandidate, answers: readonly BundleClarificationAnswer[]) {

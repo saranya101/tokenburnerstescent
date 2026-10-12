@@ -100,7 +100,7 @@ export function projectTokenHubBundleTransportCandidate(value: unknown, original
   if (!isRecord(value)) return stripNullFields(value);
   const projected = stripNullFields(value) as Record<string, unknown>;
   if (Array.isArray(value.items)) {
-    projected.items = value.items.map((item) => projectItem(item, originalText));
+    projected.items = value.items.map((item) => projectItem(item, originalText, value.globalConstraints));
   }
   if (Object.hasOwn(value, "globalConstraints")) {
     const global = projectTokenHubTransportCandidate({
@@ -113,7 +113,7 @@ export function projectTokenHubBundleTransportCandidate(value: unknown, original
   return projected;
 }
 
-function projectItem(value: unknown, originalText: string): unknown {
+function projectItem(value: unknown, originalText: string, globalConstraints: unknown): unknown {
   if (!isRecord(value)) return stripNullFields(value);
   const item = projectTokenHubTransportCandidate({
     schemaVersion: "1",
@@ -123,11 +123,14 @@ function projectItem(value: unknown, originalText: string): unknown {
     references: [],
   }, originalText);
   if (!isRecord(item)) return stripNullFields(value);
+  const funding = projectTokenHubTransportCandidate({
+    schemaVersion: "1", constraints: globalConstraints, preferences: value.preferences, references: [],
+  }, originalText);
   return {
     ...stripNullFields(value) as Record<string, unknown>,
     goal: item.goal,
     constraints: item.constraints,
-    preferences: item.preferences,
+    preferences: isRecord(funding) ? funding.preferences : item.preferences,
   };
 }
 

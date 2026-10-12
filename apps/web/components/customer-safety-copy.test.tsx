@@ -34,6 +34,22 @@ const investmentScenario: PlanPresentation = {
   steps: [{ id: "buy", kind: "Buy", title: "1 Apple", summary: "USD Account → Investment holding", meta: [] }],
 };
 
+const combinedScenario: PlanPresentation = {
+  transactionKind: "COMBINED",
+  goal: { eyebrow: "Combined request", title: "2 requested actions", description: "Send SGD 100.00 to John Lim · Then buy 1 Apple share", details: [], constraints: ["Keep at least SGD 1,000.00 in DBS Multiplier Account"], preferences: ["Use DBS Multiplier Account for funding if needed"] },
+  planTitle: "Review combined transaction details", planSummary: "One plan covers every confirmed action in this request.",
+  funding: [{ account: "DBS Multiplier Account", amount: "SGD 268.00", detail: "Rate 1 SGD = 0.75 USD · fee SGD 1.00" }],
+  preservedConstraints: ["Keep at least SGD 1,000.00 in DBS Multiplier Account"],
+  projectedBalances: [{ account: "DBS Multiplier Account", amount: "SGD 1,631.00" }, { account: "USD Account", amount: "USD 0.00" }],
+  projectedHoldings: [{ assetId: "asset-aapl", asset: "Apple", quantity: "3" }],
+  validUntil: "2099-01-01T00:00:00.000Z",
+  steps: [
+    { id: "send", kind: "Payment", title: "Send SGD 100.00", summary: "DBS Multiplier Account to John Lim", meta: [{ label: "From", value: "DBS Multiplier Account" }, { label: "To", value: "John Lim" }] },
+    { id: "fx", kind: "Currency conversion", title: "Convert SGD 268.00 to USD", summary: "DBS Multiplier Account to USD Account", meta: [{ label: "Exchange rate", value: "1 SGD = 0.75 USD" }, { label: "Conversion fee", value: "SGD 1.00" }], dependsOn: "send" },
+    { id: "buy", kind: "Buy", title: "1 Apple", summary: "USD Account → Investment holding", meta: [{ label: "Unit price", value: "USD 200.00" }, { label: "Fee", value: "USD 1.00" }, { label: "Total", value: "USD 201.00" }], dependsOn: "fx" },
+  ],
+};
+
 it("presents the conversational route as Pay & Transfer in desktop and mobile banking navigation", () => {
   expect(customerDesktopNavigation.find((item) => item.href === "/chat")?.label).toBe("Pay & Transfer");
   expect(customerDesktopNavigation.find((item) => item.href === "/payees")?.label).toBe("Saved payees");
@@ -211,10 +227,20 @@ it("keeps meaning confirmation distinct from passkey authorization", () => {
 });
 
 it("renders one customer-safe combined meaning confirmation with explicit ordering only", () => {
-  const html = renderToStaticMarkup(createElement(UnderstoodBundleCard, { bundle: { items: [{ itemId: "item-1", text: "Send USD 300.00 to John Tan", ordered: false }, { itemId: "item-2", text: "Buy 1 Apple share", ordered: true }], constraints: ["Keep at least SGD 1,000.00 available"] }, onEdit: vi.fn(), onConfirm: vi.fn() }));
+  const html = renderToStaticMarkup(createElement(UnderstoodBundleCard, { bundle: { items: [{ itemId: "item-1", text: "Send USD 300.00 to John Tan", ordered: false }, { itemId: "item-2", text: "Buy 1 Apple share", ordered: true }], constraints: ["Keep at least SGD 1,000.00 available"], preferences: ["Use DBS Multiplier Account for funding if needed"] }, onEdit: vi.fn(), onConfirm: vi.fn() }));
   expect(html).toContain("Check what we understood"); expect(html).toContain("Send USD 300.00 to John Tan"); expect(html).toContain("Then </strong>Buy 1 Apple share");
   expect(html).toContain("Keep at least SGD 1,000.00 available"); expect(html).toContain("Yes, that’s correct"); expect(html).toContain("Make changes");
+  expect(html).toContain("Funding instruction"); expect(html).toContain("Use DBS Multiplier Account for funding if needed");
   expect(html).toContain("does not approve a transaction"); expect(html).not.toMatch(/item-1|item-2|contractHash|GoalBundle|compiler/iu);
+});
+
+it("renders one combined plan review with authoritative economics, projected balances, holding, and passkey boundary", () => {
+  const html = renderToStaticMarkup(createElement(FinancialPlanPreview, { scenario: combinedScenario, onCancel: vi.fn(), onApprove: vi.fn() }));
+  expect(html).toContain("Combined transaction"); expect(html).toContain("Send SGD 100.00"); expect(html).toContain("Convert SGD 268.00 to USD"); expect(html).toContain("1 Apple");
+  expect(html).toContain("1 SGD = 0.75 USD"); expect(html).toContain("SGD 1.00"); expect(html).toContain("USD 200.00"); expect(html).toContain("USD 201.00");
+  expect(html).toContain("DBS Multiplier Account after"); expect(html).toContain("SGD 1,631.00"); expect(html).toContain("Apple holding after"); expect(html).toContain("3 shares");
+  expect(html).toContain("Keep at least SGD 1,000.00 in DBS Multiplier Account"); expect(html).toContain("Confirm with passkey"); expect(html).toContain("Quotes valid until");
+  expect(html).not.toMatch(/asset-aapl|quote-|planHash|contractHash|FX_CONVERT|BUY_ASSET/iu);
 });
 
 it("renders completion as a customer payment receipt without execution enums", () => {

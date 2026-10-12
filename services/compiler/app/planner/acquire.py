@@ -208,6 +208,7 @@ def compile_acquire_route(
     snapshot: BankStateSnapshotV1,
     policy: PolicyEngine,
     hard_rules: tuple[HardRule, ...] = (),
+    context: dict[str, object] | None = None,
 ) -> tuple[InternalOperation, ...] | CompilerUnsatV1 | CompilerPolicyBlockedV1:
     """Compile a direct purchase or an explicitly permitted FX-funded purchase.
 
@@ -215,7 +216,7 @@ def compile_acquire_route(
     that permits using that account for funding. Without it, insufficient settled
     funds remain a controlled failure and no FX route is synthesized.
     """
-    context: dict[str, object] = {"bankStateVersion": snapshot.state_version}
+    context = {"bankStateVersion": snapshot.state_version, **(context or {})}
     direct = compile_acquire_operation(goal_contract, snapshot, policy, hard_rules, context=context)
     if isinstance(direct, BuyAsset):
         return (direct,)

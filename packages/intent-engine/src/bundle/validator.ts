@@ -5,6 +5,7 @@ import {
   sourceContainsReference,
   sourceLockInDays,
   sourceSignalsMinimumBalance,
+  sourceSignalsPreferredAccount,
   sourceSupportsExcludedReference,
   sourceSupportsMaxTotalCost,
   sourceSupportsMinimumBalance,
@@ -202,6 +203,9 @@ function validateItemClauseEvidence(
         if (item.goal.sourceAccountReference !== undefined) validateClauseReference(clause, `${field}.sourceAccountReference`, item.goal.sourceAccountReference, add);
         validateClauseReference(clause, `${field}.destinationAccountReference`, item.goal.destinationAccountReference, add);
         break;
+    }
+    if (sourceSignalsPreferredAccount(clause) && !item.preferences.some(({ type }) => type === "PREFER_ACCOUNT")) {
+      add("OMITTED_EXPLICIT_PREFERENCE", `items[${index}].preferences`, { expected: "PREFER_ACCOUNT" });
     }
   }
 }

@@ -59,7 +59,9 @@ function grounder(ambiguousJohn = false): EntityGrounder {
       { entityType: "BENEFICIARY" as const, entityId: "ben-john-lee", canonicalName: "John Lee" },
     ] };
     if (input.reference === "John" || input.reference === "John Tan") return { status: "RESOLVED" as const, reference: input.reference, entityType: "BENEFICIARY" as const, entityId: "ben-john-tan", resolutionMethod: "EXACT" as const };
-    if (input.reference === "Apple") return { status: "RESOLVED" as const, reference: "Apple", entityType: "ASSET" as const, entityId: "asset-aapl", resolutionMethod: "EXACT" as const };
+    if (input.reference === "John Lim") return { status: "RESOLVED" as const, reference: input.reference, entityType: "BENEFICIARY" as const, entityId: "ben-john-lim", resolutionMethod: "EXACT" as const };
+    if (input.reference === "Apple" || input.reference === "Apple (AAPL)") return { status: "RESOLVED" as const, reference: input.reference, entityType: "ASSET" as const, entityId: "asset-aapl", resolutionMethod: "EXACT" as const };
+    if (input.reference === "my SGD account") return { status: "RESOLVED" as const, reference: input.reference, entityType: "ACCOUNT" as const, entityId: "acc-sgd", resolutionMethod: "ALIAS" as const };
     return { status: "NOT_FOUND" as const, reference: input.reference, ...(input.expectedEntityType ? { expectedEntityType: input.expectedEntityType } : {}) };
   } };
 }
@@ -95,6 +97,36 @@ describe("deterministic bundle routing", () => {
 });
 
 describe("production bundle message orchestration", () => {
+  it("grounds the complete ordered John Lim and Apple request into one confirmation candidate", async () => {
+    const text = "Send S$100 to John Lim, then buy 1 share of Apple (AAPL), using SGD if needed, but keep at least S$1,000 in my SGD account.";
+    const value = IntentBundleDraftV1.parse({
+      schemaVersion: "1",
+      items: [
+        { itemId: "model-transfer", goal: { type: "DELIVER_MONEY", recipientReference: "John Lim", amount: { currency: "SGD", minorUnits: "10000" } }, constraints: [], preferences: [] },
+        { itemId: "model-asset", goal: { type: "ACQUIRE_ASSET", assetReference: "Apple (AAPL)", quantity: "1" }, constraints: [], preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }] },
+      ],
+      globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountReference: "my SGD account" }],
+      explicitDependencies: [{ beforeItemId: "model-transfer", afterItemId: "model-asset", reason: "USER_EXPLICIT_ORDER" }],
+    });
+    const repository = new MemoryBundleRepository();
+    const service = new BundleMessageOrchestrationService(repository, interpreter(value), () => grounder(), undefined, undefined, undefined, undefined, () => new Date("2026-10-12T12:00:00Z"), (() => { let id = 0; return () => `isolated-${++id}`; })());
+
+    const result = await service.receive({ userId: "isolated-multi-intent-customer", text }, "trace-isolated-bundle");
+
+    expect(result, JSON.stringify(repository.lastValidation)).toMatchObject({ status: "AWAITING_BUNDLE_CONFIRMATION", candidateId: "isolated-1" });
+    expect(repository.candidate?.candidate).toMatchObject({
+      items: [
+        { itemId: "item-1", goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientId: "ben-john-lim" } },
+        { itemId: "item-2", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }] },
+      ],
+      globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }],
+      explicitDependencies: [{ beforeItemId: "item-1", afterItemId: "item-2", reason: "USER_EXPLICIT_ORDER" }],
+    });
+    const confirmed = await service.confirm("isolated-1", "trace-confirm-isolated-bundle");
+    expect(confirmed.goalBundleContract.contractHash).toBe(hashGoalBundleContract(confirmed.goalBundleContract));
+    expect(confirmed.goalBundleContract.items.every((item) => item.bindings.every((binding) => binding.confirmed))).toBe(true);
+  });
+
   it.each(exactCases)("creates one confirmation candidate for %s", async (text, ordered, reversed) => {
     const repository = new MemoryBundleRepository();
     const service = new BundleMessageOrchestrationService(repository, interpreter(draft(text)), () => grounder(), undefined, undefined, undefined, undefined, () => new Date("2026-10-02T12:00:00Z"), (() => { let id = 0; return () => `server-${++id}`; })());

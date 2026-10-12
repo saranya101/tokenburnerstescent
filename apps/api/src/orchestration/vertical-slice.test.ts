@@ -55,9 +55,10 @@ class ControlledBank implements BankPort {
   writes = 0;
   failGetStateAfterWrite = false; advanceStateAfterAcceptance = false;
   lastOperation?: { path: "fx" | "transfer" | "payment" | "buy"; payload: unknown; idempotencyKey: string; traceId: string };
+  operations: Array<{ path: "fx" | "transfer" | "payment" | "buy"; payload: unknown; idempotencyKey: string; traceId: string }> = [];
   constructor(public snapshot: BankStateSnapshotV1) {}
   async getState() { if (this.failGetStateAfterWrite && this.writes > 0) throw new Error("BANK_STATE_REFRESH_UNAVAILABLE"); return BankStateSnapshotV1.parse(this.snapshot); }
-  async execute(path: "fx" | "transfer" | "payment" | "buy", payload: unknown, idempotencyKey: string, traceId: string) { this.lastOperation = { path, payload, idempotencyKey, traceId }; this.writes += 1; const acceptedStateVersion = this.snapshot.stateVersion + 1; this.snapshot = { ...this.snapshot, stateVersion: acceptedStateVersion + (this.advanceStateAfterAcceptance ? 1 : 0), capturedAt: new Date(Date.parse(this.snapshot.capturedAt) + 1_000).toISOString() }; return { accepted: true as const, bankReference: `controlled-${this.writes}`, stateVersion: acceptedStateVersion }; }
+  async execute(path: "fx" | "transfer" | "payment" | "buy", payload: unknown, idempotencyKey: string, traceId: string) { this.lastOperation = { path, payload, idempotencyKey, traceId }; this.operations.push(this.lastOperation); this.writes += 1; const acceptedStateVersion = this.snapshot.stateVersion + 1; this.snapshot = { ...this.snapshot, stateVersion: acceptedStateVersion + (this.advanceStateAfterAcceptance ? 1 : 0), capturedAt: new Date(Date.parse(this.snapshot.capturedAt) + 1_000).toISOString() }; return { accepted: true as const, bankReference: `controlled-${this.writes}`, stateVersion: acceptedStateVersion }; }
   async lookupByIdempotencyKey(idempotencyKey: string): Promise<BankLookupResult> { return { status: "NOT_FOUND", idempotencyKey }; }
 }
 
@@ -164,6 +165,32 @@ function executableBundle() {
   ] });
   const plan = FinancialPlanV1.parse({ ...rawPlan, planHash: hashFinancialPlan(rawPlan) });
   const proof: BundleSatisfactionProofV1 = { schemaVersion: "1", bundleId: bundle.bundleId, bundleContractHash: bundle.contractHash, itemCoverage: [{ itemId: "item-transfer", satisfiedByStepIds: ["transfer-john"] }, { itemId: "item-buy", satisfiedByStepIds: ["buy-apple"] }], allItemsSatisfied: true, allHardConstraintsSatisfied: true, allExplicitDependenciesSatisfied: true, allIrreversibleStepsJustified: true };
+  return { bundle, plan, proof };
+}
+
+function fundedTransferInvestmentBundle() {
+  const unhashed = GoalBundleContractV1.parse({
+    schemaVersion: "1", bundleId: "isolated-funded-bundle", bundleVersion: 1, contractHash: "0".repeat(64),
+    globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "100000" } }],
+    explicitDependencies: [{ beforeItemId: "send-john", afterItemId: "buy-apple", reason: "USER_EXPLICIT_ORDER" }],
+    items: [
+      { itemId: "send-john", goal: { type: "DELIVER_MONEY", recipientId: "ben-john-lim", amount: { currency: "SGD", minorUnits: "10000" } }, constraints: [], preferences: [], bindings: [{ schemaVersion: "1", reference: "John Lim", entityType: "BENEFICIARY", entityId: "ben-john-lim", resolutionMethod: "EXACT", confirmed: true }] },
+      { itemId: "buy-apple", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }], bindings: [{ schemaVersion: "1", reference: "Apple (AAPL)", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS", confirmed: true }, { schemaVersion: "1", reference: "my SGD account", entityType: "ACCOUNT", entityId: "acc-sgd", resolutionMethod: "ALIAS", confirmed: true }] },
+    ],
+  });
+  const bundle = GoalBundleContractV1.parse({ ...unhashed, contractHash: hashGoalBundleContract(unhashed) });
+  const rawPlan = FinancialPlanV1.parse({
+    schemaVersion: "1", id: "isolated-funded-plan", goalContractId: bundle.bundleId, goalContractVersion: bundle.bundleVersion, bankStateVersion: 7,
+    compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test", planHash: "0".repeat(64), validity: { requiredQuoteIds: ["quote-sgd-usd-1", "asset-quote-aapl-usd-v1"], validUntil: "2099-01-01T00:00:00.000Z" },
+    projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [{ accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "163100" } }, { accountId: "acc-usd", money: { currency: "USD", minorUnits: "0" } }], warnings: [] },
+    steps: [
+      { id: "send-john", sequence: 0, action: "TRANSFER", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", beneficiaryId: "ben-john-lim", amount: { currency: "SGD", minorUnits: "10000" } } },
+      { id: "fund-usd", sequence: 1, action: "FX_CONVERT", dependsOn: ["send-john"], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", sourceMoney: { currency: "SGD", minorUnits: "26800" }, targetCurrency: "USD", quoteId: "quote-sgd-usd-1" } },
+      { id: "buy-apple", sequence: 2, action: "BUY_ASSET", dependsOn: ["fund-usd"], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "20100" }, quoteId: "asset-quote-aapl-usd-v1", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } },
+    ],
+  });
+  const plan = FinancialPlanV1.parse({ ...rawPlan, planHash: hashFinancialPlan(rawPlan) });
+  const proof: BundleSatisfactionProofV1 = { schemaVersion: "1", bundleId: bundle.bundleId, bundleContractHash: bundle.contractHash, itemCoverage: [{ itemId: "send-john", satisfiedByStepIds: ["send-john"] }, { itemId: "buy-apple", satisfiedByStepIds: ["fund-usd", "buy-apple"] }], allItemsSatisfied: true, allHardConstraintsSatisfied: true, allExplicitDependenciesSatisfied: true, allIrreversibleStepsJustified: true };
   return { bundle, plan, proof };
 }
 
@@ -375,6 +402,30 @@ describe("execution-time deterministic risk", () => {
 });
 
 describe("NTU transfer vertical slice", () => {
+  it("executes the isolated ordered SGD transfer, funding conversion, and Apple purchase through the existing gateway", async () => {
+    const values = fundedTransferInvestmentBundle(); const repository = new MemoryRepository(appleGoal());
+    repository.bundle = { rowId: "isolated-bundle-row", userId: "isolated-multi-intent-customer", contract: values.bundle };
+    const baseState = appleState(true);
+    const bank = new RecoveringBank(BankStateSnapshotV1.parse({
+      ...baseState,
+      userId: "isolated-multi-intent-customer",
+      accounts: baseState.accounts.map((account) => account.id === "acc-sgd"
+        ? { ...account, ledgerMinorUnits: "200000", availableMinorUnits: "200000" }
+        : { ...account, ledgerMinorUnits: "0", availableMinorUnits: "0" }),
+      beneficiaries: [...baseState.beneficiaries, { id: "ben-john-lim", name: "John Lim", supportedCurrencies: ["SGD"], status: "ACTIVE" }],
+    }));
+    const execution = await authorizeBundle(repository, values.plan, values.proof);
+    const result = await new ExecutionService(repository, bank, { compile: async () => { throw new Error("single compiler must not run"); } }).run(execution.executionId, "trace-isolated-funded-bundle");
+
+    expect(result, JSON.stringify(result)).toMatchObject({ status: "COMPLETED", goalOutcome: { achieved: true } });
+    expect(result.steps).toHaveLength(3);
+    expect(bank.attempts.map(({ path }) => path)).toEqual(["transfer", "fx", "buy"]);
+    expect(bank.attempts[0]?.payload).toMatchObject({ userId: "isolated-multi-intent-customer", beneficiaryId: "ben-john-lim", amount: { currency: "SGD", minorUnits: "10000" } });
+    expect(bank.attempts[1]?.payload).toMatchObject({ userId: "isolated-multi-intent-customer", accountId: "acc-sgd", fromAmount: { currency: "SGD", minorUnits: "26800" }, toCurrency: "USD", quoteId: "quote-sgd-usd-1" });
+    expect(bank.attempts[2]?.payload).toMatchObject({ userId: "isolated-multi-intent-customer", sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", authorizedTotalMinor: "20100" });
+    expect(repository.execution?.executionState).toBe("COMPLETED");
+  });
+
   it("executes a bundle-owned plan through the existing gateway and reconciliation stack", async () => {
     const values = executableBundle(); const repository = new MemoryRepository(appleGoal()); repository.bundle = { rowId: "bundle-row", userId: "user-1", contract: values.bundle };
     const baseState = appleState(true); const bank = new ControlledBank(BankStateSnapshotV1.parse({ ...baseState, accounts: baseState.accounts.map((account) => account.id === "acc-usd" ? { ...account, ledgerMinorUnits: "1000000", availableMinorUnits: "1000000" } : account), beneficiaries: [...baseState.beneficiaries, { id: "ben-john", name: "John Tan", supportedCurrencies: ["USD"], status: "ACTIVE" }] }));

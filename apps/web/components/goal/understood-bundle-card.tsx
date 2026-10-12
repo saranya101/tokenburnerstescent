@@ -6,6 +6,7 @@ export function UnderstoodBundleCard({ bundle, onEdit, onConfirm }: { bundle: Bu
     <div className="card-heading-row"><div><p className="eyebrow">Check what we understood</p><h2 id="understood-bundle-heading">Your combined request</h2></div></div>
     <ol className="bundle-meaning-list">{bundle.items.map((item) => <li key={item.itemId}>{item.ordered && <strong>Then </strong>}{item.text}</li>)}</ol>
     {bundle.constraints.length > 0 && <div className="goal-rules">{bundle.constraints.map((constraint) => <div className="rule-row" key={constraint}><span className="rule-icon"><Icon name="shield" /></span><div><span>Protected condition</span><strong>{constraint}</strong></div></div>)}</div>}
+    {bundle.preferences.length > 0 && <div className="goal-rules">{bundle.preferences.map((preference) => <div className="rule-row preference" key={preference}><span className="rule-icon"><Icon name="wallet" /></span><div><span>Funding instruction</span><strong>{preference}</strong></div></div>)}</div>}
     <div className="card-actions"><button className="button secondary" type="button" onClick={onEdit}>Make changes</button><button className="button primary" type="button" onClick={onConfirm}>Yes, that’s correct</button></div>
     <p className="trust-note"><Icon name="shield" /> This confirms what you mean. It does not approve a transaction.</p>
   </section>;

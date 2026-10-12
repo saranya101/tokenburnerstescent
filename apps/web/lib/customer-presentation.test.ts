@@ -1,6 +1,6 @@
 import { BankStateSnapshotV1, FinancialPlanV1, GoalBundleContractV1, GoalContractV1 } from "@parlance/contracts";
 import { expect, it } from "vitest";
-import { formatMoney, presentBundle, presentGoal, presentPlan } from "./customer-presentation";
+import { formatMoney, presentBundle, presentBundlePlan, presentGoal, presentPlan } from "./customer-presentation";
 
 it("renders exact minor-unit amounts without floating point coercion", () => {
   expect(formatMoney({ currency: "USD", minorUnits: "900719925474099312" })).toBe("USD 9,007,199,254,740,993.12");
@@ -79,7 +79,7 @@ it("shows confirmed conditional funding and its reserve together in investment m
   expect(summary).toMatchObject({
     title: "Buy 1 Apple share",
     constraints: ["Keep at least SGD 1,000.00 in DBS Multiplier Account"],
-    preferences: ["Use DBS Multiplier Account for the remaining amount"],
+    preferences: ["Use DBS Multiplier Account for funding if needed"],
   });
 });
 
@@ -96,4 +96,56 @@ it("shows ordering only for an explicit bundle dependency and presents global co
   const ordered = GoalBundleContractV1.parse({ ...base, explicitDependencies: [{ beforeItemId: "item-1", afterItemId: "item-2", reason: "USER_EXPLICIT_ORDER" }] });
   expect(presentBundle(unordered)).toMatchObject({ items: [{ ordered: false }, { ordered: false }], constraints: ["Keep at least SGD 1,000.00 available"] });
   expect(presentBundle(ordered)).toMatchObject({ items: [{ text: "Send USD 300.00 to John Tan", ordered: false }, { text: "Buy 1 Apple share", ordered: true }] });
+});
+
+it("presents the complete transfer, FX, purchase, reserve, and projected holding in one review", () => {
+  const bundle = GoalBundleContractV1.parse({
+    schemaVersion: "1", bundleId: "isolated-bundle", bundleVersion: 1, contractHash: "b".repeat(64),
+    items: [
+      { itemId: "send-john", goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientId: "ben-john-lim" }, constraints: [], preferences: [], bindings: [{ schemaVersion: "1", reference: "John Lim", entityType: "BENEFICIARY", entityId: "ben-john-lim", resolutionMethod: "EXACT", confirmed: true }] },
+      { itemId: "buy-apple", goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" }, constraints: [], preferences: [{ type: "PREFER_ACCOUNT", accountId: "acc-sgd" }], bindings: [{ schemaVersion: "1", reference: "Apple (AAPL)", entityType: "ASSET", entityId: "asset-aapl", resolutionMethod: "ALIAS", confirmed: true }, { schemaVersion: "1", reference: "my SGD account", entityType: "ACCOUNT", entityId: "acc-sgd", resolutionMethod: "ALIAS", confirmed: true }] },
+    ],
+    globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }],
+    explicitDependencies: [{ beforeItemId: "send-john", afterItemId: "buy-apple", reason: "USER_EXPLICIT_ORDER" }],
+  });
+  const plan = FinancialPlanV1.parse({
+    schemaVersion: "1", id: "isolated-plan", goalContractId: bundle.bundleId, goalContractVersion: 1, bankStateVersion: 1,
+    compilerVersion: "test", policyVersion: "test", operationLibraryVersion: "test", planHash: "c".repeat(64),
+    steps: [
+      { id: "send", sequence: 0, dependsOn: [], reversible: false, action: "TRANSFER", parameters: { sourceAccountId: "acc-sgd", beneficiaryId: "ben-john-lim", amount: { currency: "SGD", minorUnits: "10000" } } },
+      { id: "fx", sequence: 1, dependsOn: ["send"], reversible: false, action: "FX_CONVERT", parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", sourceMoney: { currency: "SGD", minorUnits: "26800" }, targetCurrency: "USD", quoteId: "fx-quote" } },
+      { id: "buy", sequence: 2, dependsOn: ["fx"], reversible: false, action: "BUY_ASSET", parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "20100" }, quoteId: "asset-quote", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } },
+    ],
+    validity: { requiredQuoteIds: ["asset-quote", "fx-quote"], validUntil: "2099-01-01T00:00:00.000Z" },
+    projectedOutcome: { goalSatisfied: true, acquiredAssets: [{ assetId: "asset-aapl", quantity: "1" }], paidObligationIds: [], projectedAvailableBalances: [{ accountId: "acc-sgd", money: { currency: "SGD", minorUnits: "163100" } }, { accountId: "acc-usd", money: { currency: "USD", minorUnits: "0" } }], warnings: [] },
+  });
+  const state = BankStateSnapshotV1.parse({
+    schemaVersion: "1", userId: "isolated-multi-intent-customer", stateVersion: 1, capturedAt: "2026-10-12T00:00:00.000Z",
+    accounts: [{ id: "acc-sgd", type: "CHECKING", currency: "SGD", ledgerMinorUnits: "200000", availableMinorUnits: "200000", status: "ACTIVE", capabilities: ["SEND_TRANSFER", "CONVERT_FX"] }, { id: "acc-usd", type: "BROKERAGE", currency: "USD", ledgerMinorUnits: "0", availableMinorUnits: "0", status: "ACTIVE", capabilities: ["RECEIVE_TRANSFER", "TRADE_ASSET"] }],
+    beneficiaries: [{ id: "ben-john-lim", name: "John Lim", supportedCurrencies: ["SGD"], status: "ACTIVE" }], assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: true, settlementCurrency: "USD" }], holdings: [{ assetId: "asset-aapl", quantity: "2" }], obligations: [],
+    serviceAvailability: { transfers: true, fx: true, billPayments: true, investments: true },
+    fxQuotes: [{ id: "fx-quote", fromCurrency: "SGD", toCurrency: "USD", rate: "0.75", fee: { currency: "SGD", minorUnits: "100" }, expiresAt: "2099-01-01T00:00:00.000Z" }],
+    assetQuotes: [{ quoteId: "asset-quote", assetId: "asset-aapl", settlementCurrency: "USD", unitPriceMinor: "20000", feeMinor: "100", expiresAt: "2099-01-01T00:00:00.000Z" }],
+  });
+
+  const meaning = presentBundle(bundle);
+  const review = presentBundlePlan(bundle, plan, state);
+
+  expect(meaning).toMatchObject({
+    items: [{ text: "Send SGD 100.00 to John Lim", ordered: false }, { text: "Buy 1 Apple share", ordered: true }],
+    constraints: ["Keep at least SGD 1,000.00 in DBS Multiplier Account"],
+    preferences: ["Use DBS Multiplier Account for funding if needed"],
+  });
+  expect(review).toMatchObject({
+    transactionKind: "COMBINED", planTitle: "Review combined transaction details",
+    funding: [{ account: "DBS Multiplier Account", amount: "SGD 268.00", detail: "Rate 1 SGD = 0.75 USD · fee SGD 1.00" }],
+    projectedBalances: [{ account: "DBS Multiplier Account", amount: "SGD 1,631.00" }, { account: "USD Account", amount: "USD 0.00" }],
+    projectedHoldings: [{ assetId: "asset-aapl", asset: "Apple", quantity: "3" }],
+    validUntil: "2099-01-01T00:00:00.000Z",
+  });
+  expect(review.steps).toEqual([
+    expect.objectContaining({ kind: "Payment", title: "Send SGD 100.00", summary: "DBS Multiplier Account to John Lim" }),
+    expect.objectContaining({ kind: "Currency conversion", title: "Convert SGD 268.00 to USD", meta: expect.arrayContaining([{ label: "Exchange rate", value: "1 SGD = 0.75 USD" }, { label: "Conversion fee", value: "SGD 1.00" }]) }),
+    expect.objectContaining({ kind: "Buy", title: "1 Apple", meta: expect.arrayContaining([{ label: "Unit price", value: "USD 200.00" }, { label: "Fee", value: "USD 1.00" }, { label: "Total", value: "USD 201.00" }]) }),
+  ]);
 });
