@@ -206,4 +206,12 @@ describe("mock bank", () => {
     expect(state.holdings).toEqual([{ assetId: "asset-aapl", quantity: "2" }]);
   });
 
+  it("rejects a quote bound to another asset without mutation", async () => { const app = demoBank(); await replaceQuotes(app, [{ ...quote, assetId: "asset-other" }]); await expectRejectedWithoutMutation(app, validBuy, "ASSET_QUOTE_ASSET_MISMATCH"); });
+  it("rejects a non-tradable asset without mutation", async () => { const app = demoBank(); await app.inject({ method: "PUT", url: "/v1/admin/assets/buyer", headers: adminHeaders, payload: { assets: [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: false, settlementCurrency: "USD" }] } }); await expectRejectedWithoutMutation(app, validBuy, "ASSET_NOT_TRADABLE"); });
+  it("rejects settlement-currency mismatch without mutation", async () => { const app = demoBank(); await expectRejectedWithoutMutation(app, { ...validBuy, settlementCurrency: "SGD" }, "ASSET_QUOTE_SETTLEMENT_CURRENCY_MISMATCH"); });
+  it("rejects source-account currency mismatch without mutation", async () => { const app = demoBank(); await expectRejectedWithoutMutation(app, { ...validBuy, sourceAccountId: "acc-sgd" }, "SOURCE_ACCOUNT_CURRENCY_MISMATCH"); });
+  it("rejects maximum-spend currency mismatch without mutation", async () => { const app = demoBank(); await expectRejectedWithoutMutation(app, { ...validBuy, maximumSpend: { currency: "SGD", minorUnits: "50000" } }, "MAXIMUM_SPEND_CURRENCY_MISMATCH"); });
+  it("rejects insufficient funds without mutation", async () => { const app = demoBank(); await expectRejectedWithoutMutation(app, { ...validBuy, quantity: "30", authorizedTotalMinor: "600100", maximumSpend: { currency: "USD", minorUnits: "700000" } }, "INSUFFICIENT_FUNDS"); });
+  it("rejects zero or non-minor-settleable quantity without mutation", async () => { const app = demoBank(); await expectRejectedWithoutMutation(app, { ...validBuy, quantity: "0", authorizedTotalMinor: "100" }, "QUANTITY_INVALID", "quantity-zero"); await expectRejectedWithoutMutation(app, { ...validBuy, quantity: "0.00001", authorizedTotalMinor: "100" }, "QUANTITY_INVALID", "quantity-fraction"); });
+
 });

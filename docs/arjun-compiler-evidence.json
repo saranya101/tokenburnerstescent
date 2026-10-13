@@ -1,0 +1,4167 @@
+{
+  "scope": "Synthetic, fixed-clock compiler evidence; no bank writes or approvals",
+  "successFixtures": [
+    {
+      "scenario": "sgd-funded",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "financialPlan": {
+          "schemaVersion": "1",
+          "id": "5616ac903b9e4c67d0597170d55894f8",
+          "goalContractId": "synthetic-transfer-then-aapl",
+          "goalContractVersion": 1,
+          "bankStateVersion": 42,
+          "compilerVersion": "c3b-1",
+          "policyVersion": "c2-1",
+          "operationLibraryVersion": "c1-1",
+          "steps": [
+            {
+              "id": "5616ac903b9e4c67d0597170d55894f8:0",
+              "sequence": 0,
+              "dependsOn": [],
+              "reversible": false,
+              "action": "TRANSFER",
+              "parameters": {
+                "sourceAccountId": "sgd-source",
+                "beneficiaryId": "john-lim",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                }
+              }
+            },
+            {
+              "id": "5616ac903b9e4c67d0597170d55894f8:1",
+              "sequence": 1,
+              "dependsOn": [
+                "5616ac903b9e4c67d0597170d55894f8:0"
+              ],
+              "reversible": false,
+              "action": "FX_CONVERT",
+              "parameters": {
+                "sourceAccountId": "sgd-source",
+                "destinationAccountId": "usd-invest",
+                "sourceMoney": {
+                  "currency": "SGD",
+                  "minorUnits": "26800"
+                },
+                "targetCurrency": "USD",
+                "quoteId": "fx-fixed"
+              }
+            },
+            {
+              "id": "5616ac903b9e4c67d0597170d55894f8:2",
+              "sequence": 2,
+              "dependsOn": [
+                "5616ac903b9e4c67d0597170d55894f8:1"
+              ],
+              "reversible": false,
+              "action": "BUY_ASSET",
+              "parameters": {
+                "sourceAccountId": "usd-invest",
+                "assetId": "aapl",
+                "quantity": "1",
+                "maximumSpend": {
+                  "currency": "USD",
+                  "minorUnits": "20100"
+                },
+                "quoteId": "aapl-fixed",
+                "settlementCurrency": "USD",
+                "quotedUnitPriceMinor": "20000",
+                "quotedFeeMinor": "100",
+                "authorizedTotalMinor": "20100"
+              }
+            }
+          ],
+          "validity": {
+            "validUntil": "2026-10-12T00:05:00Z",
+            "requiredQuoteIds": [
+              "aapl-fixed",
+              "fx-fixed"
+            ]
+          },
+          "projectedOutcome": {
+            "goalSatisfied": true,
+            "deliveredMoney": {
+              "currency": "SGD",
+              "minorUnits": "10000"
+            },
+            "acquiredAssets": [
+              {
+                "assetId": "aapl",
+                "quantity": "1"
+              }
+            ],
+            "paidObligationIds": [],
+            "projectedAvailableBalances": [
+              {
+                "accountId": "sgd-source",
+                "money": {
+                  "currency": "SGD",
+                  "minorUnits": "163175"
+                }
+              },
+              {
+                "accountId": "usd-invest",
+                "money": {
+                  "currency": "USD",
+                  "minorUnits": "0"
+                }
+              }
+            ],
+            "warnings": []
+          },
+          "planHash": "99f6e13112f3ee150b3a40c38e7189982fbfd9713c32c86bc75ffe58db2466b8"
+        },
+        "satisfactionProof": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleContractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1",
+          "itemCoverage": [
+            {
+              "itemId": "send",
+              "satisfiedByStepIds": [
+                "5616ac903b9e4c67d0597170d55894f8:0"
+              ]
+            },
+            {
+              "itemId": "buy",
+              "satisfiedByStepIds": [
+                "5616ac903b9e4c67d0597170d55894f8:1",
+                "5616ac903b9e4c67d0597170d55894f8:2"
+              ]
+            }
+          ],
+          "allItemsSatisfied": true,
+          "allHardConstraintsSatisfied": true,
+          "allExplicitDependenciesSatisfied": true,
+          "allIrreversibleStepsJustified": true
+        }
+      }
+    },
+    {
+      "scenario": "usd-funded",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "20100",
+              "availableMinorUnits": "20100",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "financialPlan": {
+          "schemaVersion": "1",
+          "id": "da65bd55de3757cd4ca682da592f60cd",
+          "goalContractId": "synthetic-transfer-then-aapl",
+          "goalContractVersion": 1,
+          "bankStateVersion": 42,
+          "compilerVersion": "c3b-1",
+          "policyVersion": "c2-1",
+          "operationLibraryVersion": "c1-1",
+          "steps": [
+            {
+              "id": "da65bd55de3757cd4ca682da592f60cd:0",
+              "sequence": 0,
+              "dependsOn": [],
+              "reversible": false,
+              "action": "TRANSFER",
+              "parameters": {
+                "sourceAccountId": "sgd-source",
+                "beneficiaryId": "john-lim",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                }
+              }
+            },
+            {
+              "id": "da65bd55de3757cd4ca682da592f60cd:1",
+              "sequence": 1,
+              "dependsOn": [
+                "da65bd55de3757cd4ca682da592f60cd:0"
+              ],
+              "reversible": false,
+              "action": "BUY_ASSET",
+              "parameters": {
+                "sourceAccountId": "usd-invest",
+                "assetId": "aapl",
+                "quantity": "1",
+                "maximumSpend": {
+                  "currency": "USD",
+                  "minorUnits": "20100"
+                },
+                "quoteId": "aapl-fixed",
+                "settlementCurrency": "USD",
+                "quotedUnitPriceMinor": "20000",
+                "quotedFeeMinor": "100",
+                "authorizedTotalMinor": "20100"
+              }
+            }
+          ],
+          "validity": {
+            "validUntil": "2026-10-12T00:05:00Z",
+            "requiredQuoteIds": [
+              "aapl-fixed"
+            ]
+          },
+          "projectedOutcome": {
+            "goalSatisfied": true,
+            "deliveredMoney": {
+              "currency": "SGD",
+              "minorUnits": "10000"
+            },
+            "acquiredAssets": [
+              {
+                "assetId": "aapl",
+                "quantity": "1"
+              }
+            ],
+            "paidObligationIds": [],
+            "projectedAvailableBalances": [
+              {
+                "accountId": "sgd-source",
+                "money": {
+                  "currency": "SGD",
+                  "minorUnits": "190000"
+                }
+              },
+              {
+                "accountId": "usd-invest",
+                "money": {
+                  "currency": "USD",
+                  "minorUnits": "0"
+                }
+              }
+            ],
+            "warnings": []
+          },
+          "planHash": "b29ec23d27385cc43f4e47213206cdbdd13e4f8cf04fdb172209125a9d07cbcc"
+        },
+        "satisfactionProof": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleContractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1",
+          "itemCoverage": [
+            {
+              "itemId": "send",
+              "satisfiedByStepIds": [
+                "da65bd55de3757cd4ca682da592f60cd:0"
+              ]
+            },
+            {
+              "itemId": "buy",
+              "satisfiedByStepIds": [
+                "da65bd55de3757cd4ca682da592f60cd:1"
+              ]
+            }
+          ],
+          "allItemsSatisfied": true,
+          "allHardConstraintsSatisfied": true,
+          "allExplicitDependenciesSatisfied": true,
+          "allIrreversibleStepsJustified": true
+        }
+      }
+    },
+    {
+      "scenario": "reserve-exact-boundary",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "136825",
+              "availableMinorUnits": "136825",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "financialPlan": {
+          "schemaVersion": "1",
+          "id": "cbdde6334e762d5e06506cac40db6989",
+          "goalContractId": "synthetic-transfer-then-aapl",
+          "goalContractVersion": 1,
+          "bankStateVersion": 42,
+          "compilerVersion": "c3b-1",
+          "policyVersion": "c2-1",
+          "operationLibraryVersion": "c1-1",
+          "steps": [
+            {
+              "id": "cbdde6334e762d5e06506cac40db6989:0",
+              "sequence": 0,
+              "dependsOn": [],
+              "reversible": false,
+              "action": "TRANSFER",
+              "parameters": {
+                "sourceAccountId": "sgd-source",
+                "beneficiaryId": "john-lim",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                }
+              }
+            },
+            {
+              "id": "cbdde6334e762d5e06506cac40db6989:1",
+              "sequence": 1,
+              "dependsOn": [
+                "cbdde6334e762d5e06506cac40db6989:0"
+              ],
+              "reversible": false,
+              "action": "FX_CONVERT",
+              "parameters": {
+                "sourceAccountId": "sgd-source",
+                "destinationAccountId": "usd-invest",
+                "sourceMoney": {
+                  "currency": "SGD",
+                  "minorUnits": "26800"
+                },
+                "targetCurrency": "USD",
+                "quoteId": "fx-fixed"
+              }
+            },
+            {
+              "id": "cbdde6334e762d5e06506cac40db6989:2",
+              "sequence": 2,
+              "dependsOn": [
+                "cbdde6334e762d5e06506cac40db6989:1"
+              ],
+              "reversible": false,
+              "action": "BUY_ASSET",
+              "parameters": {
+                "sourceAccountId": "usd-invest",
+                "assetId": "aapl",
+                "quantity": "1",
+                "maximumSpend": {
+                  "currency": "USD",
+                  "minorUnits": "20100"
+                },
+                "quoteId": "aapl-fixed",
+                "settlementCurrency": "USD",
+                "quotedUnitPriceMinor": "20000",
+                "quotedFeeMinor": "100",
+                "authorizedTotalMinor": "20100"
+              }
+            }
+          ],
+          "validity": {
+            "validUntil": "2026-10-12T00:05:00Z",
+            "requiredQuoteIds": [
+              "aapl-fixed",
+              "fx-fixed"
+            ]
+          },
+          "projectedOutcome": {
+            "goalSatisfied": true,
+            "deliveredMoney": {
+              "currency": "SGD",
+              "minorUnits": "10000"
+            },
+            "acquiredAssets": [
+              {
+                "assetId": "aapl",
+                "quantity": "1"
+              }
+            ],
+            "paidObligationIds": [],
+            "projectedAvailableBalances": [
+              {
+                "accountId": "sgd-source",
+                "money": {
+                  "currency": "SGD",
+                  "minorUnits": "100000"
+                }
+              },
+              {
+                "accountId": "usd-invest",
+                "money": {
+                  "currency": "USD",
+                  "minorUnits": "0"
+                }
+              }
+            ],
+            "warnings": []
+          },
+          "planHash": "97d1ee227a84dc024c8d1c9a26684535b0d76787e1ea396971147211206f9d23"
+        },
+        "satisfactionProof": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleContractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1",
+          "itemCoverage": [
+            {
+              "itemId": "send",
+              "satisfiedByStepIds": [
+                "cbdde6334e762d5e06506cac40db6989:0"
+              ]
+            },
+            {
+              "itemId": "buy",
+              "satisfiedByStepIds": [
+                "cbdde6334e762d5e06506cac40db6989:1",
+                "cbdde6334e762d5e06506cac40db6989:2"
+              ]
+            }
+          ],
+          "allItemsSatisfied": true,
+          "allHardConstraintsSatisfied": true,
+          "allExplicitDependenciesSatisfied": true,
+          "allIrreversibleStepsJustified": true
+        }
+      }
+    }
+  ],
+  "refusalFixtures": [
+    {
+      "scenario": "protected-balance",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "136824",
+              "availableMinorUnits": "136824",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "UNSAT",
+        "reason": {
+          "code": "MIN_AVAILABLE_BALANCE_VIOLATED",
+          "message": "Min available balance violated",
+          "details": {
+            "scope": "GLOBAL",
+            "currency": "SGD",
+            "accountId": "sgd-source",
+            "requiredMinorUnits": "100000",
+            "projectedMinorUnits": "99999"
+          }
+        },
+        "relaxations": []
+      }
+    },
+    {
+      "scenario": "insufficient-funding",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "0"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "4fea0ab1084abdeacff5064d4fd5fc2a7b5f6551609fab78daf1e18777f03a1d"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "36824",
+              "availableMinorUnits": "36824",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "UNSAT",
+        "reason": {
+          "code": "INSUFFICIENT_FUNDING_FUNDS",
+          "message": "Insufficient funding funds",
+          "details": {
+            "bankStateVersion": 42,
+            "fundingAccountIds": [
+              "sgd-source"
+            ],
+            "itemId": "buy",
+            "scope": "ITEM"
+          }
+        },
+        "relaxations": []
+      }
+    },
+    {
+      "scenario": "unauthorized-fx",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "f6a6594051a3ae1491b0011764bd8b9fc1bb5a80dbe923c819dbb34b931d2a48"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "UNSAT",
+        "reason": {
+          "code": "INSUFFICIENT_FUNDS",
+          "message": "Insufficient funds",
+          "details": {
+            "bankStateVersion": 42,
+            "requiredMinorUnits": 20100,
+            "currency": "USD",
+            "itemId": "buy",
+            "scope": "ITEM"
+          }
+        },
+        "relaxations": []
+      }
+    },
+    {
+      "scenario": "asset-quote-unavailable",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": []
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "UNSAT",
+        "reason": {
+          "code": "ASSET_PRICE_UNAVAILABLE",
+          "message": "Asset price unavailable",
+          "details": {
+            "bankStateVersion": 42,
+            "assetId": "aapl",
+            "itemId": "buy",
+            "scope": "ITEM"
+          }
+        },
+        "relaxations": []
+      }
+    },
+    {
+      "scenario": "asset-quote-expired",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:00:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "UNSAT",
+        "reason": {
+          "code": "ASSET_PRICE_UNAVAILABLE",
+          "message": "Asset price unavailable",
+          "details": {
+            "bankStateVersion": 42,
+            "assetId": "aapl",
+            "itemId": "buy",
+            "scope": "ITEM"
+          }
+        },
+        "relaxations": []
+      }
+    },
+    {
+      "scenario": "fx-quote-unavailable",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "UNSAT",
+        "reason": {
+          "code": "NO_FX_ROUTE",
+          "message": "No fx route",
+          "details": {
+            "bankStateVersion": 42,
+            "currency": "USD",
+            "itemId": "buy",
+            "scope": "ITEM"
+          }
+        },
+        "relaxations": []
+      }
+    },
+    {
+      "scenario": "fx-quote-expired",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:00:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "UNSAT",
+        "reason": {
+          "code": "QUOTE_EXPIRED",
+          "message": "Quote expired",
+          "details": {
+            "bankStateVersion": 42,
+            "currency": "USD",
+            "itemId": "buy",
+            "scope": "ITEM"
+          }
+        },
+        "relaxations": []
+      }
+    },
+    {
+      "scenario": "asset-not-tradable",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": false,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "POLICY_BLOCKED",
+        "reason": {
+          "code": "ASSET_NOT_TRADABLE",
+          "message": "Asset not tradable",
+          "details": {
+            "bankStateVersion": 42,
+            "assetId": "aapl",
+            "itemId": "buy",
+            "scope": "ITEM"
+          }
+        }
+      }
+    },
+    {
+      "scenario": "asset-unknown",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "UNSAT",
+        "reason": {
+          "code": "ASSET_NOT_FOUND",
+          "message": "Asset not found",
+          "details": {
+            "bankStateVersion": 42,
+            "assetId": "aapl",
+            "itemId": "buy",
+            "scope": "ITEM"
+          }
+        },
+        "relaxations": []
+      }
+    },
+    {
+      "scenario": "beneficiary-currency",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "EUR"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "UNSAT",
+        "reason": {
+          "code": "NO_TRANSFER_ROUTE",
+          "message": "No transfer route",
+          "details": {
+            "itemId": "send"
+          }
+        },
+        "relaxations": []
+      }
+    },
+    {
+      "scenario": "beneficiary-unknown",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "UNSAT",
+        "reason": {
+          "code": "BENEFICIARY_NOT_ALLOWED",
+          "message": "Beneficiary not allowed",
+          "details": {
+            "beneficiaryId": "john-lim",
+            "itemId": "send"
+          }
+        },
+        "relaxations": []
+      }
+    },
+    {
+      "scenario": "beneficiary-blocked",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "BLOCKED"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "POLICY_BLOCKED",
+        "reason": {
+          "code": "BENEFICIARY_BLOCKED",
+          "message": "Beneficiary blocked",
+          "details": {
+            "beneficiaryId": "john-lim",
+            "itemId": "send"
+          }
+        }
+      }
+    },
+    {
+      "scenario": "settlement-currency",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "send",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "EUR",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 200,
+      "response": {
+        "schemaVersion": "1",
+        "status": "UNSAT",
+        "reason": {
+          "code": "NO_ELIGIBLE_SETTLEMENT_ACCOUNT",
+          "message": "No eligible settlement account",
+          "details": {
+            "bankStateVersion": 42,
+            "assetId": "aapl",
+            "settlementCurrency": "USD",
+            "itemId": "buy",
+            "scope": "ITEM"
+          }
+        },
+        "relaxations": []
+      }
+    },
+    {
+      "scenario": "invalid-dependency",
+      "request": {
+        "goalBundle": {
+          "schemaVersion": "1",
+          "bundleId": "synthetic-transfer-then-aapl",
+          "bundleVersion": 1,
+          "items": [
+            {
+              "itemId": "send",
+              "goal": {
+                "type": "DELIVER_MONEY",
+                "amount": {
+                  "currency": "SGD",
+                  "minorUnits": "10000"
+                },
+                "recipientId": "john-lim"
+              },
+              "constraints": [],
+              "preferences": [],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "John Lim",
+                  "entityType": "BENEFICIARY",
+                  "entityId": "john-lim",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            },
+            {
+              "itemId": "buy",
+              "goal": {
+                "type": "ACQUIRE_ASSET",
+                "assetId": "aapl",
+                "quantity": "1"
+              },
+              "constraints": [],
+              "preferences": [
+                {
+                  "type": "PREFER_ACCOUNT",
+                  "accountId": "sgd-source"
+                }
+              ],
+              "bindings": [
+                {
+                  "schemaVersion": "1",
+                  "reference": "Apple (AAPL)",
+                  "entityType": "ASSET",
+                  "entityId": "aapl",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                },
+                {
+                  "schemaVersion": "1",
+                  "reference": "my SGD account",
+                  "entityType": "ACCOUNT",
+                  "entityId": "sgd-source",
+                  "resolutionMethod": "USER_CONFIRMED",
+                  "confirmed": true
+                }
+              ]
+            }
+          ],
+          "globalConstraints": [
+            {
+              "type": "MIN_AVAILABLE_BALANCE",
+              "money": {
+                "currency": "SGD",
+                "minorUnits": "100000"
+              },
+              "accountId": "sgd-source"
+            }
+          ],
+          "explicitDependencies": [
+            {
+              "beforeItemId": "missing",
+              "afterItemId": "buy",
+              "reason": "USER_EXPLICIT_ORDER"
+            }
+          ],
+          "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+        },
+        "bankState": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      "httpStatus": 422,
+      "response": {
+        "detail": [
+          {
+            "type": "value_error",
+            "loc": [
+              "body",
+              "goalBundle"
+            ],
+            "msg": "Value error, Dependency endpoint must reference an existing item",
+            "input": {
+              "schemaVersion": "1",
+              "bundleId": "synthetic-transfer-then-aapl",
+              "bundleVersion": 1,
+              "items": [
+                {
+                  "itemId": "send",
+                  "goal": {
+                    "type": "DELIVER_MONEY",
+                    "amount": {
+                      "currency": "SGD",
+                      "minorUnits": "10000"
+                    },
+                    "recipientId": "john-lim"
+                  },
+                  "constraints": [],
+                  "preferences": [],
+                  "bindings": [
+                    {
+                      "schemaVersion": "1",
+                      "reference": "John Lim",
+                      "entityType": "BENEFICIARY",
+                      "entityId": "john-lim",
+                      "resolutionMethod": "USER_CONFIRMED",
+                      "confirmed": true
+                    }
+                  ]
+                },
+                {
+                  "itemId": "buy",
+                  "goal": {
+                    "type": "ACQUIRE_ASSET",
+                    "assetId": "aapl",
+                    "quantity": "1"
+                  },
+                  "constraints": [],
+                  "preferences": [
+                    {
+                      "type": "PREFER_ACCOUNT",
+                      "accountId": "sgd-source"
+                    }
+                  ],
+                  "bindings": [
+                    {
+                      "schemaVersion": "1",
+                      "reference": "Apple (AAPL)",
+                      "entityType": "ASSET",
+                      "entityId": "aapl",
+                      "resolutionMethod": "USER_CONFIRMED",
+                      "confirmed": true
+                    },
+                    {
+                      "schemaVersion": "1",
+                      "reference": "my SGD account",
+                      "entityType": "ACCOUNT",
+                      "entityId": "sgd-source",
+                      "resolutionMethod": "USER_CONFIRMED",
+                      "confirmed": true
+                    }
+                  ]
+                }
+              ],
+              "globalConstraints": [
+                {
+                  "type": "MIN_AVAILABLE_BALANCE",
+                  "money": {
+                    "currency": "SGD",
+                    "minorUnits": "100000"
+                  },
+                  "accountId": "sgd-source"
+                }
+              ],
+              "explicitDependencies": [
+                {
+                  "beforeItemId": "missing",
+                  "afterItemId": "buy",
+                  "reason": "USER_EXPLICIT_ORDER"
+                }
+              ],
+              "contractHash": "324aaaf958dd5b4931334b11797daf4700395db6e38eb6811417166382f233c1"
+            },
+            "ctx": {
+              "error": {}
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "partialCompletion": [
+    {
+      "completedThroughStepId": "5616ac903b9e4c67d0597170d55894f8:0",
+      "state": {
+        "schemaVersion": "1",
+        "userId": "synthetic-arjun",
+        "stateVersion": 42,
+        "capturedAt": "2026-10-12T00:00:00Z",
+        "accounts": [
+          {
+            "id": "sgd-source",
+            "type": "SAVINGS",
+            "currency": "SGD",
+            "ledgerMinorUnits": "190000",
+            "availableMinorUnits": "190000",
+            "status": "ACTIVE",
+            "capabilities": [
+              "SEND_TRANSFER",
+              "CONVERT_FX",
+              "RECEIVE_TRANSFER"
+            ]
+          },
+          {
+            "id": "usd-invest",
+            "type": "BROKERAGE",
+            "currency": "USD",
+            "ledgerMinorUnits": "0",
+            "availableMinorUnits": "0",
+            "status": "ACTIVE",
+            "capabilities": [
+              "TRADE_ASSET",
+              "RECEIVE_TRANSFER"
+            ]
+          }
+        ],
+        "beneficiaries": [
+          {
+            "id": "john-lim",
+            "name": "John Lim",
+            "supportedCurrencies": [
+              "SGD"
+            ],
+            "status": "ACTIVE"
+          }
+        ],
+        "assets": [
+          {
+            "id": "aapl",
+            "symbol": "AAPL",
+            "name": "Apple Inc.",
+            "assetType": "EQUITY",
+            "tradable": true,
+            "settlementCurrency": "USD"
+          }
+        ],
+        "holdings": [],
+        "obligations": [],
+        "serviceAvailability": {
+          "transfers": true,
+          "fx": true,
+          "billPayments": true,
+          "investments": true
+        },
+        "fxQuotes": [
+          {
+            "id": "fx-fixed",
+            "fromCurrency": "SGD",
+            "toCurrency": "USD",
+            "rate": "0.75",
+            "fee": {
+              "currency": "SGD",
+              "minorUnits": "25"
+            },
+            "expiresAt": "2026-10-12T00:10:00Z"
+          }
+        ],
+        "assetQuotes": [
+          {
+            "quoteId": "aapl-fixed",
+            "assetId": "aapl",
+            "settlementCurrency": "USD",
+            "unitPriceMinor": "20000",
+            "feeMinor": "100",
+            "expiresAt": "2026-10-12T00:05:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "completedThroughStepId": "5616ac903b9e4c67d0597170d55894f8:1",
+      "state": {
+        "schemaVersion": "1",
+        "userId": "synthetic-arjun",
+        "stateVersion": 42,
+        "capturedAt": "2026-10-12T00:00:00Z",
+        "accounts": [
+          {
+            "id": "sgd-source",
+            "type": "SAVINGS",
+            "currency": "SGD",
+            "ledgerMinorUnits": "163175",
+            "availableMinorUnits": "163175",
+            "status": "ACTIVE",
+            "capabilities": [
+              "SEND_TRANSFER",
+              "CONVERT_FX",
+              "RECEIVE_TRANSFER"
+            ]
+          },
+          {
+            "id": "usd-invest",
+            "type": "BROKERAGE",
+            "currency": "USD",
+            "ledgerMinorUnits": "20100",
+            "availableMinorUnits": "20100",
+            "status": "ACTIVE",
+            "capabilities": [
+              "TRADE_ASSET",
+              "RECEIVE_TRANSFER"
+            ]
+          }
+        ],
+        "beneficiaries": [
+          {
+            "id": "john-lim",
+            "name": "John Lim",
+            "supportedCurrencies": [
+              "SGD"
+            ],
+            "status": "ACTIVE"
+          }
+        ],
+        "assets": [
+          {
+            "id": "aapl",
+            "symbol": "AAPL",
+            "name": "Apple Inc.",
+            "assetType": "EQUITY",
+            "tradable": true,
+            "settlementCurrency": "USD"
+          }
+        ],
+        "holdings": [],
+        "obligations": [],
+        "serviceAvailability": {
+          "transfers": true,
+          "fx": true,
+          "billPayments": true,
+          "investments": true
+        },
+        "fxQuotes": [
+          {
+            "id": "fx-fixed",
+            "fromCurrency": "SGD",
+            "toCurrency": "USD",
+            "rate": "0.75",
+            "fee": {
+              "currency": "SGD",
+              "minorUnits": "25"
+            },
+            "expiresAt": "2026-10-12T00:10:00Z"
+          }
+        ],
+        "assetQuotes": [
+          {
+            "quoteId": "aapl-fixed",
+            "assetId": "aapl",
+            "settlementCurrency": "USD",
+            "unitPriceMinor": "20000",
+            "feeMinor": "100",
+            "expiresAt": "2026-10-12T00:05:00Z"
+          }
+        ]
+      }
+    },
+    {
+      "completedThroughStepId": "5616ac903b9e4c67d0597170d55894f8:2",
+      "state": {
+        "schemaVersion": "1",
+        "userId": "synthetic-arjun",
+        "stateVersion": 42,
+        "capturedAt": "2026-10-12T00:00:00Z",
+        "accounts": [
+          {
+            "id": "sgd-source",
+            "type": "SAVINGS",
+            "currency": "SGD",
+            "ledgerMinorUnits": "163175",
+            "availableMinorUnits": "163175",
+            "status": "ACTIVE",
+            "capabilities": [
+              "SEND_TRANSFER",
+              "CONVERT_FX",
+              "RECEIVE_TRANSFER"
+            ]
+          },
+          {
+            "id": "usd-invest",
+            "type": "BROKERAGE",
+            "currency": "USD",
+            "ledgerMinorUnits": "0",
+            "availableMinorUnits": "0",
+            "status": "ACTIVE",
+            "capabilities": [
+              "TRADE_ASSET",
+              "RECEIVE_TRANSFER"
+            ]
+          }
+        ],
+        "beneficiaries": [
+          {
+            "id": "john-lim",
+            "name": "John Lim",
+            "supportedCurrencies": [
+              "SGD"
+            ],
+            "status": "ACTIVE"
+          }
+        ],
+        "assets": [
+          {
+            "id": "aapl",
+            "symbol": "AAPL",
+            "name": "Apple Inc.",
+            "assetType": "EQUITY",
+            "tradable": true,
+            "settlementCurrency": "USD"
+          }
+        ],
+        "holdings": [
+          {
+            "assetId": "aapl",
+            "quantity": "1"
+          }
+        ],
+        "obligations": [],
+        "serviceAvailability": {
+          "transfers": true,
+          "fx": true,
+          "billPayments": true,
+          "investments": true
+        },
+        "fxQuotes": [
+          {
+            "id": "fx-fixed",
+            "fromCurrency": "SGD",
+            "toCurrency": "USD",
+            "rate": "0.75",
+            "fee": {
+              "currency": "SGD",
+              "minorUnits": "25"
+            },
+            "expiresAt": "2026-10-12T00:10:00Z"
+          }
+        ],
+        "assetQuotes": [
+          {
+            "quoteId": "aapl-fixed",
+            "assetId": "aapl",
+            "settlementCurrency": "USD",
+            "unitPriceMinor": "20000",
+            "feeMinor": "100",
+            "expiresAt": "2026-10-12T00:05:00Z"
+          }
+        ]
+      }
+    }
+  ],
+  "unknownOutcome": {
+    "status": "UNKNOWN",
+    "goalAchieved": false,
+    "requiredAction": "Stop dependants; reconcile authoritative receipt/idempotency evidence",
+    "possibleStates": [
+      {
+        "completedThroughStepId": null,
+        "state": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "200000",
+              "availableMinorUnits": "200000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      {
+        "completedThroughStepId": "5616ac903b9e4c67d0597170d55894f8:0",
+        "state": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "190000",
+              "availableMinorUnits": "190000",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      {
+        "completedThroughStepId": "5616ac903b9e4c67d0597170d55894f8:1",
+        "state": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "163175",
+              "availableMinorUnits": "163175",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "20100",
+              "availableMinorUnits": "20100",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      },
+      {
+        "completedThroughStepId": "5616ac903b9e4c67d0597170d55894f8:2",
+        "state": {
+          "schemaVersion": "1",
+          "userId": "synthetic-arjun",
+          "stateVersion": 42,
+          "capturedAt": "2026-10-12T00:00:00Z",
+          "accounts": [
+            {
+              "id": "sgd-source",
+              "type": "SAVINGS",
+              "currency": "SGD",
+              "ledgerMinorUnits": "163175",
+              "availableMinorUnits": "163175",
+              "status": "ACTIVE",
+              "capabilities": [
+                "SEND_TRANSFER",
+                "CONVERT_FX",
+                "RECEIVE_TRANSFER"
+              ]
+            },
+            {
+              "id": "usd-invest",
+              "type": "BROKERAGE",
+              "currency": "USD",
+              "ledgerMinorUnits": "0",
+              "availableMinorUnits": "0",
+              "status": "ACTIVE",
+              "capabilities": [
+                "TRADE_ASSET",
+                "RECEIVE_TRANSFER"
+              ]
+            }
+          ],
+          "beneficiaries": [
+            {
+              "id": "john-lim",
+              "name": "John Lim",
+              "supportedCurrencies": [
+                "SGD"
+              ],
+              "status": "ACTIVE"
+            }
+          ],
+          "assets": [
+            {
+              "id": "aapl",
+              "symbol": "AAPL",
+              "name": "Apple Inc.",
+              "assetType": "EQUITY",
+              "tradable": true,
+              "settlementCurrency": "USD"
+            }
+          ],
+          "holdings": [
+            {
+              "assetId": "aapl",
+              "quantity": "1"
+            }
+          ],
+          "obligations": [],
+          "serviceAvailability": {
+            "transfers": true,
+            "fx": true,
+            "billPayments": true,
+            "investments": true
+          },
+          "fxQuotes": [
+            {
+              "id": "fx-fixed",
+              "fromCurrency": "SGD",
+              "toCurrency": "USD",
+              "rate": "0.75",
+              "fee": {
+                "currency": "SGD",
+                "minorUnits": "25"
+              },
+              "expiresAt": "2026-10-12T00:10:00Z"
+            }
+          ],
+          "assetQuotes": [
+            {
+              "quoteId": "aapl-fixed",
+              "assetId": "aapl",
+              "settlementCurrency": "USD",
+              "unitPriceMinor": "20000",
+              "feeMinor": "100",
+              "expiresAt": "2026-10-12T00:05:00Z"
+            }
+          ]
+        }
+      }
+    ],
+    "rollbackClaim": false
+  }
+}
