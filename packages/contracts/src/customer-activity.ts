@@ -8,6 +8,7 @@ export const CustomerActivityItemV1 = z.object({
   amount: MoneyV1,
   direction: z.literal("DEBIT"),
   status: z.literal("COMPLETED"),
+  planOutcome: z.enum(["COMPLETED", "PARTIALLY_COMPLETED"]).optional(),
 }).strict();
 export type CustomerActivityItemV1 = z.infer<typeof CustomerActivityItemV1>;
 

@@ -89,6 +89,30 @@ describe("authoritative customer banking presentation", () => {
     expect(html).not.toMatch(/Insights for you|Move money with confidence|Try asking about/iu);
   });
 
+  it("shows the authoritative version-8 partial outcome without calling unsettled steps completed", () => {
+    const partialState = BankStateSnapshotV1.parse({
+      ...bankState,
+      stateVersion: 8,
+      accounts: bankState.accounts.map((account) => account.id === "acc-sgd"
+        ? { ...account, ledgerMinorUnits: "190000", availableMinorUnits: "190000" }
+        : { ...account, ledgerMinorUnits: "0", availableMinorUnits: "0" }),
+      holdings: [{ assetId: "asset-aapl", quantity: "2" }],
+    });
+    const partialActivity = CustomerActivityV1.parse({ items: [{
+      occurredAt: "2026-10-13T03:31:10.396Z", description: "Transfer to John Lim", accountLabel: "SGD Account",
+      amount: { currency: "SGD", minorUnits: "10000" }, direction: "DEBIT", status: "COMPLETED", planOutcome: "PARTIALLY_COMPLETED",
+    }] });
+    const sidebar = renderToStaticMarkup(createElement(ChatBankingSidebarView, { state: partialState, activity: partialActivity, loading: false }));
+    expect(sidebar).toContain("S$1,900.00");
+    expect(sidebar).toContain("US$0.00");
+    expect(sidebar).toContain("Transfer to John Lim");
+    expect(sidebar).toContain("Settled · Part of a partially completed request");
+    expect(sidebar).not.toContain("Buy 1 AAPL");
+
+    const home = renderToStaticMarkup(createElement(BankingHomeView, { state: partialState, activity: partialActivity, loading: false }));
+    expect(home).toContain("Settled · Partial request");
+  });
+
   it("lists and searches authoritative saved payees without inventing recipient details", () => {
     const html = renderToStaticMarkup(createElement(SavedPayeesView, { state: bankState, loading: false }));
     expect(html).toContain("John Tan"); expect(html).toContain("John Lim"); expect(html).toContain("Nanyang Technological University");

@@ -69,14 +69,20 @@ function isInvestmentPresentation(presentation: PlanPresentation): boolean {
   return presentation.goal.details.some((item) => item.label === "Investment");
 }
 
+export function authoritativeOutcomeRefreshKey(state: CustomerFlowState): string | undefined {
+  if (state.phase !== "COMPLETED" && state.phase !== "PAUSED" && state.phase !== "PARTIALLY_COMPLETED") return undefined;
+  return `${state.phase}:${state.result.executionId}:${state.result.finalStateVersion ?? "unknown"}`;
+}
+
 export function ChatExperience({ initialRequest = "" }: { initialRequest?: string }) {
   const flow = useCustomerFlow(); const { state } = flow; const message = requestText(state); const isInitial = state.phase === "COMPOSE";
   const banking = useBankingState(); const investment = isInvestmentState(state);
   const refreshedExecution = useRef<string | undefined>(undefined);
   const refreshedPlan = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (state.phase === "COMPLETED" && refreshedExecution.current !== state.result.executionId) {
-      refreshedExecution.current = state.result.executionId;
+    const refreshKey = authoritativeOutcomeRefreshKey(state);
+    if (refreshKey && refreshedExecution.current !== refreshKey) {
+      refreshedExecution.current = refreshKey;
       void banking.refresh();
     }
   }, [state, banking.refresh]);

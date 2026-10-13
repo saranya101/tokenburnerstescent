@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CompilationService, ExecutionService, MessageOrchestrationService } from "../orchestration/services.js";
 import type { BankPort } from "../orchestration/ports.js";
 import type { StoredApprovalEvidence } from "../webauthn/types.js";
-import { canonicalGoalContractJson, hashGoalContract } from "../security/canonical-hash.js";
+import { canonicalGoalContractJson, hashFinancialPlan, hashGoalContract } from "../security/canonical-hash.js";
 import { PrismaParlanceRepository } from "./prisma.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
@@ -18,7 +18,7 @@ const ids = { user: "it-user-ntu", goalRow: "it-goal-row-ntu", goal: "it-goal-nt
 
 async function mockBank(): Promise<BankPort> {
   const modulePath = join(process.cwd(), "../../services/mock-bank/src/app.ts"); const { buildApp } = await import(modulePath) as { buildApp(options: { bankApiToken: string }): FastifyInstance }; const app = buildApp({ bankApiToken: "integration-bank-token" });
-  return { async getState(userId, traceId) { const response = await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: { "x-trace-id": traceId, "x-parlance-bank-token": "integration-bank-token" } }); const state = BankStateSnapshotV1.parse(response.json()); return BankStateSnapshotV1.parse({ ...state, fxQuotes: state.fxQuotes.map((quote, index) => index === 0 ? { ...quote, id: "quote-sgd-usd-1" } : quote) }); },
+  return { async getState(userId, traceId) { const response = await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: { "x-trace-id": traceId, "x-parlance-bank-token": "integration-bank-token" } }); return BankStateSnapshotV1.parse(response.json()); },
     async execute(path, payload, key, traceId) { const response = await app.inject({ method: "POST", url: `/v1/execute/${path}`, headers: { "idempotency-key": key, "x-trace-id": traceId, "x-parlance-bank-token": "integration-bank-token", "content-type": "application/json" }, body: JSON.stringify(payload) }); if (response.statusCode >= 400) throw new Error(response.json().code); return response.json(); },
     async lookupByIdempotencyKey(key, traceId) { const response = await app.inject({ method: "GET", url: `/v1/executions/idempotency/${key}`, headers: { "x-trace-id": traceId, "x-parlance-bank-token": "integration-bank-token" } }); return response.json(); } };
 }
@@ -71,7 +71,7 @@ describe.skipIf(!testDatabaseUrl)("Prisma PostgreSQL restart safety", () => {
     const repository = new PrismaParlanceRepository(db); const reloadedGoal = await repository.getConfirmedGoal(ids.goal); expect(reloadedGoal).not.toBeNull(); expect(canonicalGoalContractJson(reloadedGoal!.contract)).toBe(canonicalGoalContractJson(originalGoal)); expect(hashGoalContract(reloadedGoal!.contract)).toBe(hashGoalContract(originalGoal)); expect(hashGoalContract(reloadedGoal!.contract)).toBe(originalGoal.contractHash);
     const now = new Date();
     const fixturePlan = FinancialPlanV1.parse(fixture("financial-plan.json"));
-    const bank = await mockBank(); const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { const plan = FinancialPlanV1.parse({ ...fixturePlan, id: "it-plan-ntu", goalContractId: ids.goal, bankStateVersion: state.stateVersion, validity: { ...fixturePlan.validity, validUntil: new Date(now.getTime() + 5 * 60_000).toISOString() } }); return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan }); } };
+    const bank = await mockBank(); const compiler = { async compile(_goal: GoalContractV1, state: BankStateSnapshotV1) { const quoteId = state.fxQuotes[0]?.id; if (!quoteId) throw new Error("Expected an authoritative FX quote"); const unhashed = FinancialPlanV1.parse({ ...fixturePlan, id: "it-plan-ntu", goalContractId: ids.goal, bankStateVersion: state.stateVersion, steps: fixturePlan.steps.map((step) => step.action === "FX_CONVERT" ? { ...step, parameters: { ...step.parameters, quoteId } } : step), validity: { ...fixturePlan.validity, requiredQuoteIds: [quoteId], validUntil: new Date(now.getTime() + 5 * 60_000).toISOString() }, planHash: "0".repeat(64) }); const plan = FinancialPlanV1.parse({ ...unhashed, planHash: hashFinancialPlan(unhashed) }); return CompilerResultV1.parse({ schemaVersion: "1", status: "SAT", plan }); } };
     const compiled = await new CompilationService(repository, bank, compiler).compile(ids.goal, ids.trace); if (compiled.status !== "SAT") throw new Error("Expected SAT");
     approvalId = "it-verified-approval"; executionId = "it-verified-execution"; const evidenceId = "it-approval-evidence"; const challengeId = "it-approval-challenge"; const credentialRowId = "it-credential-row";
     await repository.saveWebAuthnCredential({ id: credentialRowId, userId: ids.user, credentialId: "it-credential", publicKey: new Uint8Array([1, 2, 3]), userHandle: new Uint8Array([4]), signCount: 0, transports: ["internal"], deviceType: "multiDevice", backedUp: true });

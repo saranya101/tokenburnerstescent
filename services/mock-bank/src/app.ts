@@ -1,12 +1,24 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import Fastify from "fastify";
-import { AssetQuoteV1, AssetV1, BankStateSnapshotV1, MoneyV1, type AssetQuoteV1 as AssetQuote } from "@parlance/contracts";
+import { AssetQuoteV1, AssetV1, BankStateSnapshotV1, FxQuoteV1, MoneyV1, type AssetQuoteV1 as AssetQuote } from "@parlance/contracts";
 import { z } from "zod";
 import { logger, resolveTraceId } from "@parlance/observability";
 
 type Scenario = "FX_UNAVAILABLE" | "TRANSFER_RAIL_UNAVAILABLE" | "ASSET_UNAVAILABLE" | "BALANCE_CHANGED" | "QUOTE_EXPIRED";
 type Asset = z.infer<typeof AssetV1>;
-interface State { stateVersion: number; balances: Record<string, bigint>; holdings: Record<string, string>; assets: Asset[]; assetQuotes: AssetQuote[]; scenarios: Set<Scenario> }
+type FxQuote = z.infer<typeof FxQuoteV1>;
+type IssuedFxQuote = { quote: FxQuote; amount?: z.infer<typeof MoneyV1> };
+interface State {
+  stateVersion: number;
+  balances: Record<string, bigint>;
+  holdings: Record<string, string>;
+  assets: Asset[];
+  assetQuotes: AssetQuote[];
+  fxQuotes: Map<string, IssuedFxQuote>;
+  expiredFxQuoteIds: Set<string>;
+  nextFxQuoteSequence: number;
+  scenarios: Set<Scenario>;
+}
 interface StoredResponse { operation: "fx" | "transfer" | "payment" | "buy"; requestHash: string; response: { accepted: true; bankReference: string; stateVersion: number } }
 export interface MockBankWriteRecord { operation: StoredResponse["operation"]; idempotencyKey: string; requestHash: string; response: StoredResponse["response"] }
 export interface MockBankOptions {
@@ -14,6 +26,7 @@ export interface MockBankOptions {
   adminAuthorization?: { demoMode: boolean; opsToken?: string; demoUserId?: string };
   bankApiToken?: string;
   initialState?: { stateVersion: number; balances: Record<string, bigint>; holdings: Record<string, string> };
+  now?: () => Date;
 }
 
 const DEFAULT_INITIAL_STATE_VERSION = 7;
@@ -52,6 +65,9 @@ const initialState = (stateVersion: number): State => ({
   holdings: {},
   assets: ASSET_DEFINITIONS.map((asset) => ({ ...asset })),
   assetQuotes: [{ ...DEMO_ASSET_QUOTE }],
+  fxQuotes: new Map(),
+  expiredFxQuoteIds: new Set(),
+  nextFxQuoteSequence: 0,
   scenarios: new Set(),
 });
 const normalize = (value: unknown): unknown => Array.isArray(value) ? value.map(normalize) : value !== null && typeof value === "object"
@@ -70,6 +86,14 @@ const multiplyRateHalfEven = (minorUnits: string, numerator: bigint, denominator
   const product = BigInt(minorUnits) * numerator; const quotient = product / denominator; const remainder = product % denominator; const doubled = remainder * 2n;
   return doubled > denominator || (doubled === denominator && quotient % 2n !== 0n) ? quotient + 1n : quotient;
 };
+const decimalRate = (rate: string): { numerator: bigint; denominator: bigint } => {
+  const match = /^(0|[1-9]\d*)(?:\.(\d+))?$/u.exec(rate);
+  if (!match) throw new Error("FX_QUOTE_RATE_INVALID");
+  const fraction = match[2] ?? "";
+  const numerator = BigInt(`${match[1]}${fraction}`);
+  if (numerator <= 0n) throw new Error("FX_QUOTE_RATE_INVALID");
+  return { numerator, denominator: 10n ** BigInt(fraction.length) };
+};
 const positiveQuantity = (quantity: string): { numerator: bigint; scale: bigint } => {
   const match = /^(0|[1-9]\d*)(?:\.(\d+))?$/.exec(quantity);
   if (!match) throw new Error("QUANTITY_INVALID");
@@ -86,9 +110,45 @@ const authoritativeAssetTotal = (quantity: string, unitPriceMinor: string, feeMi
 export function buildApp(options: MockBankOptions = {}) {
   const states = new Map<string, State>(); const idempotency = new Map<string, StoredResponse>();
   const configuredInitialState = options.initialState ?? resolveInitialStateConfiguration();
+  const now = options.now ?? (() => new Date());
   const getState = (userId: string): State => {
     const existing = states.get(userId); if (existing) return existing;
     const created = initialState(configuredInitialState.stateVersion); created.balances = { ...configuredInitialState.balances }; created.holdings = { ...configuredInitialState.holdings }; states.set(userId, created); return created;
+  };
+  const pruneFxQuotes = (state: State): void => {
+    const currentTime = now().getTime();
+    for (const [id, issued] of state.fxQuotes) {
+      if (Date.parse(issued.quote.expiresAt) <= currentTime) {
+        state.fxQuotes.delete(id);
+        state.expiredFxQuoteIds.add(id);
+      }
+    }
+  };
+  const issueFxQuote = (userId: string, state: State, fromCurrency: string, toCurrency: string, amount?: z.infer<typeof MoneyV1>): IssuedFxQuote => {
+    pruneFxQuotes(state);
+    const existing = [...state.fxQuotes.values()].find((issued) => issued.quote.fromCurrency === fromCurrency
+      && issued.quote.toCurrency === toCurrency
+      && (amount === undefined
+        ? issued.amount === undefined
+        : issued.amount?.currency === amount.currency && issued.amount.minorUnits === amount.minorUnits));
+    if (existing) return existing;
+    const issued: IssuedFxQuote = {
+      quote: FxQuoteV1.parse({
+        id: `q-${userId}-${state.stateVersion}-${++state.nextFxQuoteSequence}`,
+        fromCurrency,
+        toCurrency,
+        rate: "0.75",
+        expiresAt: new Date(now().getTime() + 60_000).toISOString(),
+      }),
+      ...(amount === undefined ? {} : { amount: { ...amount } }),
+    };
+    state.fxQuotes.set(issued.quote.id, issued);
+    return issued;
+  };
+  const activeFxQuotes = (userId: string, state: State): FxQuote[] => {
+    pruneFxQuotes(state);
+    issueFxQuote(userId, state, "SGD", "USD");
+    return [...state.fxQuotes.values()].map(({ quote }) => ({ ...quote, ...(quote.fee ? { fee: { ...quote.fee } } : {}) }));
   };
   const app = Fastify({ loggerInstance: logger });
   const securityConfiguration = () => {
@@ -128,9 +188,9 @@ export function buildApp(options: MockBankOptions = {}) {
     schemaVersion: "1", userId, stateVersion: state.stateVersion, capturedAt: new Date().toISOString(),
     accounts: ACCOUNT_DEFINITIONS.map((account) => ({ ...account, capabilities: [...account.capabilities], ledgerMinorUnits: state.balances[account.id]!.toString(), availableMinorUnits: state.balances[account.id]!.toString(), status: "ACTIVE" as const })), beneficiaries: BENEFICIARY_DEFINITIONS.map((beneficiary) => ({ ...beneficiary, supportedCurrencies: [...beneficiary.supportedCurrencies] })), assets: state.assets,
     holdings: Object.entries(state.holdings).map(([assetId, quantity]) => ({ assetId, quantity })), obligations: [], serviceAvailability: { transfers: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), fx: !state.scenarios.has("FX_UNAVAILABLE"), billPayments: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), investments: !state.scenarios.has("ASSET_UNAVAILABLE") },
-    fxQuotes: [{ id: `q-${userId}-${state.stateVersion}`, fromCurrency: "SGD", toCurrency: "USD", rate: "0.75", expiresAt: new Date(Date.now() + 60_000).toISOString() }], assetQuotes: state.assetQuotes,
+    fxQuotes: activeFxQuotes(userId, state), assetQuotes: state.assetQuotes,
   }); });
-  app.post("/v1/fx/quote", async (request, reply) => { const body = QuoteBody.parse(request.body); const state = getState(body.userId); if (state.scenarios.has("FX_UNAVAILABLE")) return reply.code(503).send({ code: "FX_UNAVAILABLE" }); return { id: `q-${body.userId}-${state.stateVersion}`, fromCurrency: body.fromCurrency, toCurrency: body.toCurrency, rate: "0.75", expiresAt: new Date(Date.now() + 60_000).toISOString() }; });
+  app.post("/v1/fx/quote", async (request, reply) => { const body = QuoteBody.parse(request.body); const state = getState(body.userId); if (state.scenarios.has("FX_UNAVAILABLE")) return reply.code(503).send({ code: "FX_UNAVAILABLE" }); return issueFxQuote(body.userId, state, body.fromCurrency, body.toCurrency, body.amount).quote; });
   const debit = (state: State, accountId: string, money: { minorUnits: string }): void => { const balance = state.balances[accountId]; if (balance === undefined) throw new Error("ACCOUNT_NOT_FOUND"); const amount = BigInt(money.minorUnits); if (balance < amount) throw new Error("INSUFFICIENT_FUNDS"); state.balances[accountId] = balance - amount; };
   const requireAccountCurrency = (accountId: string, currency: string): void => {
     const account = ACCOUNT_DEFINITIONS.find((candidate) => candidate.id === accountId);
@@ -144,7 +204,20 @@ export function buildApp(options: MockBankOptions = {}) {
     try { mutate(state, body); } catch (error) { return reply.code(409).send({ code: error instanceof Error ? error.message : "WRITE_REJECTED" }); }
     state.stateVersion += 1; const response = { accepted: true as const, bankReference: `mock-${key}`, stateVersion: state.stateVersion }; const record = { operation: path, idempotencyKey: key, requestHash: hash, response }; idempotency.set(key, { operation: path, requestHash: hash, response }); options.afterWrite?.(record); return response;
   });
-  execute("fx", FxBody, "FX_UNAVAILABLE", (state, body) => { debit(state, body.accountId, body.fromAmount); const target = fxDestinationAccountId(body.toCurrency); if (!target) throw new Error("FX_DESTINATION_ACCOUNT_NOT_FOUND"); state.balances[target] = (state.balances[target] ?? 0n) + multiplyRateHalfEven(body.fromAmount.minorUnits, 75n, 100n); });
+  execute("fx", FxBody, "FX_UNAVAILABLE", (state, body) => {
+    pruneFxQuotes(state);
+    const issued = state.fxQuotes.get(body.quoteId);
+    if (!issued) throw new Error(state.expiredFxQuoteIds.has(body.quoteId) ? "QUOTE_EXPIRED" : "FX_QUOTE_NOT_FOUND");
+    if (issued.quote.fromCurrency !== body.fromAmount.currency || issued.quote.toCurrency !== body.toCurrency) throw new Error("FX_QUOTE_CURRENCY_MISMATCH");
+    if (issued.amount && (issued.amount.currency !== body.fromAmount.currency || issued.amount.minorUnits !== body.fromAmount.minorUnits)) throw new Error("FX_QUOTE_AMOUNT_MISMATCH");
+    requireAccountCurrency(body.accountId, body.fromAmount.currency);
+    const target = fxDestinationAccountId(body.toCurrency); if (!target) throw new Error("FX_DESTINATION_ACCOUNT_NOT_FOUND");
+    const feeMinorUnits = issued.quote.fee?.minorUnits ?? "0";
+    if (issued.quote.fee && issued.quote.fee.currency !== body.fromAmount.currency) throw new Error("FX_QUOTE_FEE_CURRENCY_MISMATCH");
+    debit(state, body.accountId, { minorUnits: (BigInt(body.fromAmount.minorUnits) + BigInt(feeMinorUnits)).toString() });
+    const rate = decimalRate(issued.quote.rate);
+    state.balances[target] = (state.balances[target] ?? 0n) + multiplyRateHalfEven(body.fromAmount.minorUnits, rate.numerator, rate.denominator);
+  });
   execute("transfer", TransferBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => {
     requireAccountCurrency(body.sourceAccountId, body.amount.currency);
     if ("beneficiaryId" in body) {
@@ -164,7 +237,7 @@ export function buildApp(options: MockBankOptions = {}) {
     const asset = state.assets.find((item) => item.id === body.assetId); if (!asset?.tradable) throw new Error("ASSET_NOT_TRADABLE");
     if (quote.settlementCurrency !== body.settlementCurrency || asset.settlementCurrency !== body.settlementCurrency) throw new Error("ASSET_QUOTE_SETTLEMENT_CURRENCY_MISMATCH");
     const account = ACCOUNT_DEFINITIONS.find((item) => item.id === body.sourceAccountId); if (!account || account.currency !== body.settlementCurrency) throw new Error("SOURCE_ACCOUNT_CURRENCY_MISMATCH");
-    if (Date.parse(quote.expiresAt) <= Date.now()) throw new Error("ASSET_QUOTE_EXPIRED");
+    if (Date.parse(quote.expiresAt) <= now().getTime()) throw new Error("ASSET_QUOTE_EXPIRED");
     if (body.quotedUnitPriceMinor !== quote.unitPriceMinor) throw new Error("ASSET_QUOTE_UNIT_PRICE_MISMATCH");
     if (body.quotedFeeMinor !== quote.feeMinor) throw new Error("ASSET_QUOTE_FEE_MISMATCH");
     const total = authoritativeAssetTotal(body.quantity, quote.unitPriceMinor, quote.feeMinor);

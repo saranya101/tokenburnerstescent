@@ -8,6 +8,7 @@ export interface CustomerActivityReadService {
 type SettledStep = {
   occurredAt: Date;
   step: unknown;
+  planOutcome?: "COMPLETED" | "PARTIALLY_COMPLETED";
 };
 
 const accountLabel = (sourceAccountId: string, currency: string): string => sourceAccountId === "acc-sgd" ? "SGD Account" : sourceAccountId === "acc-usd" ? "USD Account" : `${currency} Account`;
@@ -24,6 +25,7 @@ export function presentCustomerActivity(input: SettledStep, beneficiaries: Reado
       amount: step.parameters.amount,
       direction: "DEBIT",
       status: "COMPLETED",
+      ...(input.planOutcome ? { planOutcome: input.planOutcome } : {}),
     };
   }
   if (step.action === "BUY_ASSET") {
@@ -34,6 +36,7 @@ export function presentCustomerActivity(input: SettledStep, beneficiaries: Reado
       amount: { currency: step.parameters.settlementCurrency, minorUnits: step.parameters.authorizedTotalMinor },
       direction: "DEBIT",
       status: "COMPLETED",
+      ...(input.planOutcome ? { planOutcome: input.planOutcome } : {}),
     };
   }
   return undefined;
@@ -44,14 +47,15 @@ export class PrismaCustomerActivityReadService implements CustomerActivityReadSe
 
   async list(userId: string): Promise<CustomerActivityV1> {
     const runs = await this.db.executionRun.findMany({
-      where: { userId, status: "COMPLETED" },
+      where: { userId, status: { in: ["COMPLETED", "PAUSED", "FAILED"] } },
       orderBy: { updatedAt: "desc" },
       take: 10,
-      select: { steps: { where: { status: "SETTLED" }, select: { updatedAt: true, planStep: true } } },
+      select: { status: true, steps: { where: { status: "SETTLED" }, select: { updatedAt: true, planStep: true } } },
     });
     const settled = runs.flatMap((run) => run.steps.map(({ updatedAt, planStep }) => ({
       occurredAt: updatedAt,
       step: { id: planStep.stepKey, sequence: planStep.sequence, action: planStep.action, dependsOn: planStep.dependsOn, reversible: planStep.reversible, parameters: planStep.parameters },
+      planOutcome: run.status === "COMPLETED" ? "COMPLETED" as const : "PARTIALLY_COMPLETED" as const,
     })));
     const beneficiaryIds = settled.flatMap(({ step }) => {
       const parsed = FinancialPlanStepV1.safeParse(step); return parsed.success && parsed.data.action === "TRANSFER" ? [parsed.data.parameters.beneficiaryId] : [];

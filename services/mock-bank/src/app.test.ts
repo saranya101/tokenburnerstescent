@@ -13,6 +13,10 @@ const validBuy = {
 };
 const buy = (app: ReturnType<typeof buildApp>, payload = validBuy, key = "buy-key") => app.inject({ method: "POST", url: "/v1/execute/buy", headers: { ...bankHeaders, "idempotency-key": key }, payload });
 const bankState = async (app: ReturnType<typeof buildApp>, userId = "buyer") => (await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: bankHeaders })).json();
+const executeFx = (app: ReturnType<typeof buildApp>, quoteId: string, fromAmount = { currency: "SGD", minorUnits: "26800" }, key = "fx-key") => app.inject({
+  method: "POST", url: "/v1/execute/fx", headers: { ...bankHeaders, "idempotency-key": key },
+  payload: { userId: "buyer", accountId: "acc-sgd", fromAmount, toCurrency: "USD", quoteId },
+});
 const replaceQuotes = (app: ReturnType<typeof buildApp>, assetQuotes: unknown[]) => app.inject({ method: "PUT", url: "/v1/admin/asset-quotes/buyer", headers: adminHeaders, payload: { assetQuotes } });
 
 async function expectRejectedWithoutMutation(app: ReturnType<typeof buildApp>, payload: typeof validBuy, code: string, key = `reject-${code}`) {
@@ -142,6 +146,67 @@ describe("mock bank", () => {
     const app = bankApp(); const before = await bankState(app, "u1");
     expect((await app.inject({ method: "GET", url: "/v1/executions/idempotency/missing", headers: bankHeaders })).json()).toEqual({ status: "NOT_FOUND", idempotencyKey: "missing" });
     expect((await bankState(app, "u1")).accounts).toEqual(before.accounts);
+  });
+
+  it("retains the exact approved FX quote across transfer state changes and completes the dependent purchase", async () => {
+    const app = bankApp({ initialState: { stateVersion: 7, balances: { "acc-sgd": 200_000n, "acc-usd": 0n }, holdings: { "asset-aapl": "2" } } });
+    const initial = await bankState(app);
+    const approvedQuote = initial.fxQuotes[0];
+    expect(approvedQuote).toMatchObject({ fromCurrency: "SGD", toCurrency: "USD", rate: "0.75" });
+
+    const transfer = await app.inject({
+      method: "POST", url: "/v1/execute/transfer", headers: { ...bankHeaders, "idempotency-key": "bundle-transfer" },
+      payload: { userId: "buyer", sourceAccountId: "acc-sgd", beneficiaryId: "ben-john-lim", amount: { currency: "SGD", minorUnits: "10000" } },
+    });
+    expect(transfer.json()).toMatchObject({ accepted: true, stateVersion: 8 });
+    expect((await bankState(app)).fxQuotes).toContainEqual(approvedQuote);
+
+    const fx = await executeFx(app, approvedQuote.id, undefined, "bundle-fx");
+    expect(fx.json()).toMatchObject({ accepted: true, stateVersion: 9 });
+    const purchase = await buy(app, { ...validBuy, quantity: "1", maximumSpend: { currency: "USD", minorUnits: "20100" }, authorizedTotalMinor: "20100" }, "bundle-buy");
+    expect(purchase.json()).toMatchObject({ accepted: true, stateVersion: 10 });
+
+    const final = await bankState(app);
+    expect(final.accounts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "acc-sgd", availableMinorUnits: "163200" }),
+      expect.objectContaining({ id: "acc-usd", availableMinorUnits: "0" }),
+    ]));
+    expect(final.holdings).toEqual([{ assetId: "asset-aapl", quantity: "3" }]);
+  });
+
+  it("removes expired FX quotes from snapshots and rejects their exact IDs without mutation", async () => {
+    let clock = new Date("2026-10-13T03:31:00.000Z");
+    const app = bankApp({ now: () => clock });
+    const before = await bankState(app);
+    const expiredId = before.fxQuotes[0].id;
+    clock = new Date("2026-10-13T03:32:01.000Z");
+    const refreshed = await bankState(app);
+    expect(refreshed.fxQuotes.some((item: { id: string }) => item.id === expiredId)).toBe(false);
+    const response = await executeFx(app, expiredId, undefined, "expired-fx");
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({ code: "QUOTE_EXPIRED" });
+    const after = await bankState(app);
+    expect(after.stateVersion).toBe(before.stateVersion);
+    expect(after.accounts).toEqual(before.accounts);
+  });
+
+  it("rejects unknown and amount-altered FX quotes without mutation", async () => {
+    const app = bankApp();
+    const before = await bankState(app);
+    const unknown = await executeFx(app, "unknown-fx-quote", undefined, "unknown-fx");
+    expect(unknown.statusCode).toBe(409);
+    expect(unknown.json()).toEqual({ code: "FX_QUOTE_NOT_FOUND" });
+
+    const issued = await app.inject({
+      method: "POST", url: "/v1/fx/quote", headers: bankHeaders,
+      payload: { userId: "buyer", fromCurrency: "SGD", toCurrency: "USD", amount: { currency: "SGD", minorUnits: "26800" } },
+    });
+    const altered = await executeFx(app, issued.json().id, { currency: "SGD", minorUnits: "26799" }, "altered-fx");
+    expect(altered.statusCode).toBe(409);
+    expect(altered.json()).toEqual({ code: "FX_QUOTE_AMOUNT_MISMATCH" });
+    const after = await bankState(app);
+    expect(after.stateVersion).toBe(before.stateVersion);
+    expect(after.accounts).toEqual(before.accounts);
   });
 
   it("exposes authoritative asset quotes with the bank snapshot", async () => {

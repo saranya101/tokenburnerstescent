@@ -5,7 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { useBankingState } from "../../hooks/use-banking-state";
 import { useCustomerFlow } from "../../hooks/use-customer-flow";
 import type { CustomerFlowState } from "../../lib/customer-flow";
-import { ChatExperience } from "./chat-experience";
+import { authoritativeOutcomeRefreshKey, ChatExperience } from "./chat-experience";
 
 vi.mock("../../hooks/use-customer-flow", () => ({ useCustomerFlow: vi.fn() }));
 vi.mock("../../hooks/use-banking-state", () => ({ useBankingState: vi.fn() }));
@@ -32,6 +32,14 @@ beforeEach(() => {
     activity: { schemaVersion: "1", capturedAt: "2026-10-10T06:00:00.000Z", items: [] },
     loading: false, error: undefined, refresh: vi.fn(),
   } as unknown as ReturnType<typeof useBankingState>);
+});
+
+it("refreshes authoritative banking data for completed and partial terminal outcomes only", () => {
+  const result = { executionId: "execution-1", finalStateVersion: 8 };
+  expect(authoritativeOutcomeRefreshKey({ phase: "PARTIALLY_COMPLETED", result } as unknown as CustomerFlowState)).toBe("PARTIALLY_COMPLETED:execution-1:8");
+  expect(authoritativeOutcomeRefreshKey({ phase: "PAUSED", result } as unknown as CustomerFlowState)).toBe("PAUSED:execution-1:8");
+  expect(authoritativeOutcomeRefreshKey({ phase: "COMPLETED", result } as unknown as CustomerFlowState)).toBe("COMPLETED:execution-1:8");
+  expect(authoritativeOutcomeRefreshKey({ phase: "EXECUTING", result } as unknown as CustomerFlowState)).toBeUndefined();
 });
 
 it("presents asset clarification as an investment request", () => {

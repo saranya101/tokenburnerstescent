@@ -16,11 +16,21 @@ describe("customer activity projection", () => {
     expect(presentCustomerActivity({ occurredAt, step: { id: "fx", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", from: { currency: "SGD", minorUnits: "100" }, toCurrency: "USD", quoteId: "quote" } } }, new Map(), new Map())).toBeUndefined();
   });
 
-  it("queries only completed runs for the configured user and returns settled steps newest first", async () => {
-    const findMany = vi.fn().mockResolvedValue([{ steps: [{ updatedAt: occurredAt, planStep: { stepKey: "transfer", sequence: 0, action: "TRANSFER", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-usd", beneficiaryId: "ben-john-1", amount: { currency: "USD", minorUnits: "30000" } } } }] }]);
+  it("queries terminal runs for the configured user and returns settled steps newest first", async () => {
+    const findMany = vi.fn().mockResolvedValue([{ status: "COMPLETED", steps: [{ updatedAt: occurredAt, planStep: { stepKey: "transfer", sequence: 0, action: "TRANSFER", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-usd", beneficiaryId: "ben-john-1", amount: { currency: "USD", minorUnits: "30000" } } } }] }]);
     const db = { executionRun: { findMany }, beneficiary: { findMany: vi.fn().mockResolvedValue([{ id: "ben-john-1", providerRef: "ben-john-1", name: "John Tan" }]) }, asset: { findMany: vi.fn().mockResolvedValue([]) } };
     const result = await new PrismaCustomerActivityReadService(db as never).list("configured-user");
-    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: "configured-user", status: "COMPLETED" }, take: 10 }));
-    expect(result.items).toEqual([expect.objectContaining({ description: "Transfer to John Tan", amount: { currency: "USD", minorUnits: "30000" } })]);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: "configured-user", status: { in: ["COMPLETED", "PAUSED", "FAILED"] } }, take: 10 }));
+    expect(result.items).toEqual([expect.objectContaining({ description: "Transfer to John Tan", amount: { currency: "USD", minorUnits: "30000" }, planOutcome: "COMPLETED" })]);
+  });
+
+  it("shows only definitively settled steps from a paused partial execution", async () => {
+    const findMany = vi.fn().mockResolvedValue([{ status: "PAUSED", steps: [{ updatedAt: occurredAt, planStep: { stepKey: "transfer", sequence: 0, action: "TRANSFER", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", beneficiaryId: "ben-john-lim", amount: { currency: "SGD", minorUnits: "10000" } } } }] }]);
+    const db = { executionRun: { findMany }, beneficiary: { findMany: vi.fn().mockResolvedValue([{ id: "ben-john-lim", providerRef: "ben-john-lim", name: "John Lim" }]) }, asset: { findMany: vi.fn().mockResolvedValue([]) } };
+    const result = await new PrismaCustomerActivityReadService(db as never).list("acceptance-multi-1875b4f");
+    expect(result.items).toEqual([expect.objectContaining({
+      description: "Transfer to John Lim", amount: { currency: "SGD", minorUnits: "10000" }, status: "COMPLETED", planOutcome: "PARTIALLY_COMPLETED",
+    })]);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ select: expect.objectContaining({ steps: expect.objectContaining({ where: { status: "SETTLED" } }) }) }));
   });
 });

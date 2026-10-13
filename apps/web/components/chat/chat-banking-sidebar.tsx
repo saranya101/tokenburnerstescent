@@ -32,7 +32,7 @@ export function ChatBankingSidebarView({ state, activity, loading, error }: { st
       <div className="chat-activity-list">
         {activity?.items.slice(0, 4).map((item) => <article className="chat-activity" key={`${item.occurredAt}-${item.description}-${item.accountLabel}`}>
           <span className="chat-activity-icon"><Icon name="transfer" /></span>
-          <span><strong>{item.description}</strong><small>{new Date(item.occurredAt).toLocaleDateString("en-SG", { day: "numeric", month: "short", timeZone: "Asia/Singapore" })} · {item.accountLabel}</small></span>
+          <span><strong>{item.description}</strong><small>{item.planOutcome === "PARTIALLY_COMPLETED" ? "Settled · Part of a partially completed request · " : ""}{new Date(item.occurredAt).toLocaleDateString("en-SG", { day: "numeric", month: "short", timeZone: "Asia/Singapore" })} · {item.accountLabel}</small></span>
           <b>−{formatMinorUnits(item.amount.currency, item.amount.minorUnits)}</b>
         </article>)}
         {activity && activity.items.length === 0 && <RailMessage>No completed transactions yet.</RailMessage>}
