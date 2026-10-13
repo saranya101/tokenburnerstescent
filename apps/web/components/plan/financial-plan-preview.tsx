@@ -2,7 +2,7 @@ import type { PlanPresentation } from "../chat/presentation";
 import { Icon } from "../ui/icon";
 import { PlanRoute } from "./plan-route";
 
-export function FinancialPlanPreview({ scenario, onApprove, onCancel, busy = false, reviewReady = true }: { scenario: PlanPresentation; onApprove(): void; onCancel(): void; busy?: boolean; reviewReady?: boolean }) {
+export function FinancialPlanPreview({ scenario, onApprove, onCancel, onRefreshQuote, busy = false, quoteLoading = false, reviewReady = true }: { scenario: PlanPresentation; onApprove(): void; onCancel(): void; onRefreshQuote?: () => void; busy?: boolean; quoteLoading?: boolean; reviewReady?: boolean }) {
   const amount = scenario.goal.details.find((item) => item.label === "Amount")?.value;
   const recipient = scenario.goal.details.find((item) => item.label === "To" || item.label === "Recipient")?.value;
   const combined = scenario.transactionKind === "COMBINED";
@@ -23,6 +23,6 @@ export function FinancialPlanPreview({ scenario, onApprove, onCancel, busy = fal
     {scenario.preservedConstraints.length > 1 && <div className="preserved-panel"><p>Also protected</p>{scenario.preservedConstraints.slice(1).map((constraint) => <span key={constraint}><Icon name="check" />{constraint}</span>)}</div>}
     <div className="approval-callout"><Icon name="shield" /><div><strong>Nothing moves until you confirm with your passkey.</strong><p>If these {noun} details change, you’ll be asked to review them again.</p></div></div>
     {scenario.validUntil && <p className="plan-expiry"><Icon name="warning" /> Quotes valid until {new Date(scenario.validUntil).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Singapore" })}. If they change or expire, you’ll review a new plan.</p>}
-    <div className="card-actions"><button className="button secondary" type="button" onClick={onCancel} disabled={busy}>{investment || combined ? "Make changes" : "Cancel"}</button><button className="button bank-primary" type="button" onClick={onApprove} disabled={busy || !reviewReady}>{busy ? "Waiting for passkey…" : reviewReady ? "Confirm with passkey" : "Checking quote…"}</button></div>
+    <div className="card-actions"><button className="button secondary" type="button" onClick={onCancel} disabled={busy}>{investment || combined ? "Make changes" : "Cancel"}</button><button className="button bank-primary" type="button" onClick={reviewReady ? onApprove : onRefreshQuote} disabled={busy || quoteLoading || (!reviewReady && !onRefreshQuote)}>{busy ? "Waiting for passkey…" : quoteLoading ? "Checking quote…" : reviewReady ? "Confirm with passkey" : "Refresh quote"}</button></div>
   </section>;
 }

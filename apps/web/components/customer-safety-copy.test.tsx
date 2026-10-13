@@ -277,11 +277,24 @@ it("uses investment language throughout stock plan review and completion", () =>
 });
 
 it("keeps quote expiry visible and disables passkey approval until review data is ready", () => {
-  const html = renderToStaticMarkup(createElement(FinancialPlanPreview, { scenario: { ...investmentScenario, validUntil: "2026-10-11T10:00:00.000Z" }, onCancel: vi.fn(), onApprove: vi.fn(), reviewReady: false }));
+  const html = renderToStaticMarkup(createElement(FinancialPlanPreview, { scenario: { ...investmentScenario, validUntil: "2026-10-11T10:00:00.000Z" }, onCancel: vi.fn(), onApprove: vi.fn(), onRefreshQuote: vi.fn(), quoteLoading: true, reviewReady: false }));
   expect(html).toContain("Quotes valid until");
   expect(html).toContain("review a new plan");
   expect(html).toContain("Checking quote…");
   expect(html).toMatch(/button[^>]*disabled=""[^>]*>Checking quote/u);
+});
+
+it("offers an enabled quote refresh instead of an indefinite loading state when review data mismatches", () => {
+  const html = renderToStaticMarkup(createElement(FinancialPlanPreview, { scenario: investmentScenario, onCancel: vi.fn(), onApprove: vi.fn(), onRefreshQuote: vi.fn(), reviewReady: false }));
+  expect(html).toContain(">Refresh quote</button>");
+  expect(html).not.toContain("Checking quote…");
+  expect(html).not.toMatch(/button[^>]*disabled=""[^>]*>Refresh quote/u);
+});
+
+it("enables exact-plan approval only after refreshed review data matches", () => {
+  const html = renderToStaticMarkup(createElement(FinancialPlanPreview, { scenario: investmentScenario, onCancel: vi.fn(), onApprove: vi.fn(), onRefreshQuote: vi.fn(), reviewReady: true }));
+  expect(html).toContain(">Confirm with passkey</button>");
+  expect(html).not.toMatch(/button[^>]*disabled=""[^>]*>Confirm with passkey/u);
 });
 
 it("renders the completed investment receipt from authoritative current state", () => {

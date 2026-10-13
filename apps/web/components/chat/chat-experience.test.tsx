@@ -5,7 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { useBankingState } from "../../hooks/use-banking-state";
 import { useCustomerFlow } from "../../hooks/use-customer-flow";
 import type { CustomerFlowState } from "../../lib/customer-flow";
-import { authoritativeOutcomeRefreshKey, ChatExperience } from "./chat-experience";
+import { authoritativeOutcomeRefreshKey, ChatExperience, quoteReviewState } from "./chat-experience";
 
 vi.mock("../../hooks/use-customer-flow", () => ({ useCustomerFlow: vi.fn() }));
 vi.mock("../../hooks/use-banking-state", () => ({ useBankingState: vi.fn() }));
@@ -40,6 +40,21 @@ it("refreshes authoritative banking data for completed and partial terminal outc
   expect(authoritativeOutcomeRefreshKey({ phase: "PAUSED", result } as unknown as CustomerFlowState)).toBe("PAUSED:execution-1:8");
   expect(authoritativeOutcomeRefreshKey({ phase: "COMPLETED", result } as unknown as CustomerFlowState)).toBe("COMPLETED:execution-1:8");
   expect(authoritativeOutcomeRefreshKey({ phase: "EXECUTING", result } as unknown as CustomerFlowState)).toBeUndefined();
+});
+
+it("fails quote review closed for altered quote IDs and bank-state versions", () => {
+  const plan = {
+    bankStateVersion: 7,
+    steps: [{ action: "FX_CONVERT", parameters: { quoteId: "quote-approved" } }],
+  } as unknown as Parameters<typeof quoteReviewState>[0];
+  const matching = { stateVersion: 7, fxQuotes: [{ id: "quote-approved" }] } as unknown as Parameters<typeof quoteReviewState>[1];
+  const altered = { stateVersion: 7, fxQuotes: [{ id: "quote-different" }] } as unknown as Parameters<typeof quoteReviewState>[1];
+  const staleState = { stateVersion: 8, fxQuotes: [{ id: "quote-approved" }] } as unknown as Parameters<typeof quoteReviewState>[1];
+
+  expect(quoteReviewState(plan, matching, false)).toBe("READY");
+  expect(quoteReviewState(plan, altered, false)).toBe("MISMATCH");
+  expect(quoteReviewState(plan, staleState, false)).toBe("MISMATCH");
+  expect(quoteReviewState(plan, matching, true)).toBe("LOADING");
 });
 
 it("presents asset clarification as an investment request", () => {

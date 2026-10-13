@@ -271,6 +271,10 @@ export class CustomerFlowController {
     if (this.state.phase !== "REAPPROVAL_REQUIRED" || hasSettledStep(this.state.result)) throw new Error("INVALID_FLOW_STATE");
     await this.refreshExpiredPlan(contextFrom(this.state), true);
   }
+  async refreshPlanForReview(): Promise<void> {
+    if (this.state.phase !== "PLAN_REVIEW") throw new Error("INVALID_FLOW_STATE");
+    await this.refreshExpiredPlan(contextFrom(this.state));
+  }
   async passkeyEnrolled(): Promise<void> {
     if (this.state.phase !== "PASSKEY_REQUIRED") throw new Error("INVALID_FLOW_STATE");
     const context = contextFrom(this.state); const validUntil = context.plan.validity.validUntil;

@@ -1,5 +1,6 @@
 "use client";
 
+import type { BankStateSnapshotV1, FinancialPlanV1 } from "@parlance/contracts";
 import type { CustomerFlowState } from "../../lib/customer-flow";
 import Link from "next/link";
 import { useEffect, useRef } from "react";
@@ -28,6 +29,16 @@ import { FinancialTrustJourney } from "./financial-trust-journey";
 import { SingaporeSkyline } from "./singapore-skyline";
 
 export const chatWelcomeGreeting = "Welcome back.";
+
+export type QuoteReviewState = "NOT_REQUIRED" | "LOADING" | "READY" | "MISMATCH";
+
+export function quoteReviewState(plan: Pick<FinancialPlanV1, "bankStateVersion" | "steps"> | undefined, bankingState: Pick<BankStateSnapshotV1, "stateVersion" | "fxQuotes"> | undefined, loading: boolean): QuoteReviewState {
+  const fxSteps = plan?.steps.filter((step) => step.action === "FX_CONVERT") ?? [];
+  if (fxSteps.length === 0) return "NOT_REQUIRED";
+  if (loading) return "LOADING";
+  if (!bankingState || bankingState.stateVersion !== plan?.bankStateVersion) return "MISMATCH";
+  return fxSteps.every((step) => bankingState.fxQuotes.some((quote) => quote.id === step.parameters.quoteId)) ? "READY" : "MISMATCH";
+}
 
 function requestText(state: CustomerFlowState): string | undefined { return "requestText" in state ? state.requestText : undefined; }
 function statusFor(stepId: string, state: CustomerFlowState): TimelineItem["status"] {
@@ -98,10 +109,10 @@ export function ChatExperience({ initialRequest = "" }: { initialRequest?: strin
     ? `${state.message} ${usdAvailable ? `Your current available USD balance is ${formatMinorUnits("USD", usdAvailable.availableMinorUnits)}.` : banking.loading ? "We’re checking your current available USD balance." : "Your current USD balance is temporarily unavailable."}`
     : state.phase === "UNAVAILABLE" ? state.kind === "POLICY_BLOCKED" ? customerExecutionMessage(undefined, "POLICY_BLOCKED") : state.message : undefined;
   const unresolved = state.phase === "RECOVERY_PENDING" || state.phase === "EXECUTING" || state.phase === "PAUSED" || state.phase === "AUTHORIZED";
-  const fxQuoteDetailsReady = !("plan" in state) || !state.plan.steps.some((step) => step.action === "FX_CONVERT") || Boolean(
-    banking.state?.stateVersion === state.plan.bankStateVersion
-    && state.plan.steps.filter((step) => step.action === "FX_CONVERT").every((step) => banking.state?.fxQuotes.some((quote) => quote.id === step.parameters.quoteId)),
-  );
+  const reviewPlan = "plan" in state ? state.plan : undefined;
+  const currentQuoteReview = quoteReviewState(reviewPlan, banking.state, banking.loading);
+  const fxQuoteDetailsLoading = currentQuoteReview === "LOADING";
+  const fxQuoteDetailsReady = currentQuoteReview === "NOT_REQUIRED" || currentQuoteReview === "READY";
   const planPresentation = "plan" in state ? ("bundle" in state ? presentBundlePlan(state.bundle, state.plan, banking.state) : "goal" in state ? presentPlan(state.goal, state.plan, banking.state) : undefined) : undefined;
   return <div className={`parlance-workspace ${isInitial ? "is-initial" : "is-active"}`}>
     <div className="chat-workspace-grid">
@@ -127,7 +138,7 @@ export function ChatExperience({ initialRequest = "" }: { initialRequest?: strin
         {state.phase === "UNAVAILABLE" && investment && state.reasonCode === "INSUFFICIENT_FUNDS" && <InvestmentFundingCard state={banking.state} loading={banking.loading} error={banking.error} usdAvailableMinorUnits={usdAvailable?.availableMinorUnits} onReview={(sourceAccountId, reserve) => void flow.reviewInvestmentFunding(sourceAccountId, reserve)} onNotNow={flow.reset} />}
         {state.phase === "UNAVAILABLE" && state.goal && state.reasonCode === "MIN_AVAILABLE_BALANCE_VIOLATED" && protectedBalanceFigures(state.goal, state.details, banking.state) && <ProtectedBalanceRefusalCard goal={state.goal} details={state.details} {...(banking.state ? { state: banking.state } : {})} onAmend={flow.amendRequest} onStartOver={flow.reset} />}
         {state.phase === "UNAVAILABLE" && !(investment && state.reasonCode === "INSUFFICIENT_FUNDS") && !(state.goal && state.reasonCode === "MIN_AVAILABLE_BALANCE_VIOLATED" && protectedBalanceFigures(state.goal, state.details, banking.state)) && <OutcomeCard title={investment ? "We can’t complete this investment right now" : "We can’t complete this payment right now"} detail={unavailableDetail!} onDone={flow.reset} />}
-        {planPresentation && state.phase === "PLAN_REVIEW" && <>{state.refreshed && <InlineNotice title={`${investment ? "Investment" : "Payment"} details refreshed`} detail={`Some details changed while you were reviewing this ${investment ? "investment" : "payment"}. Please review the updated ${investment ? "investment" : "payment"} before continuing.`} />}{state.passkeyReady && <InlineNotice title="Passkey ready" detail={`Review these ${investment ? "investment" : "payment"} details, then confirm with your passkey.`} />}{!fxQuoteDetailsReady && <InlineNotice title="Checking the latest conversion quote" detail={banking.loading ? "Approval will be available after the exact exchange rate and fee are displayed." : "The current banking state no longer matches this plan. Start over to prepare a new quote before approval."} />}<FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => void flow.authorizeAndExecute()} reviewReady={fxQuoteDetailsReady} /></>}
+        {planPresentation && state.phase === "PLAN_REVIEW" && <>{state.refreshed && <InlineNotice title={`${investment ? "Investment" : "Payment"} details refreshed`} detail={`Some details changed while you were reviewing this ${investment ? "investment" : "payment"}. Please review the updated ${investment ? "investment" : "payment"} before continuing.`} />}{state.passkeyReady && <InlineNotice title="Passkey ready" detail={`Review these ${investment ? "investment" : "payment"} details, then confirm with your passkey.`} />}{!fxQuoteDetailsReady && <InlineNotice title={fxQuoteDetailsLoading ? "Checking the latest conversion quote" : "Your conversion quote needs refreshing"} detail={fxQuoteDetailsLoading ? "Approval will be available after the exact exchange rate and fee are displayed." : "The current banking state no longer matches this plan. Refresh the quote to prepare a new plan for your review."} />}<FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => void flow.authorizeAndExecute()} onRefreshQuote={() => void flow.refreshPlanForReview()} quoteLoading={fxQuoteDetailsLoading} reviewReady={fxQuoteDetailsReady} /></>}
         {planPresentation && state.phase === "PASSKEY_REQUIRED" && <><FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => undefined} busy /><PasskeySetupCard transaction onReady={() => void flow.passkeyEnrolled()} /></>}
         {planPresentation && state.phase === "AUTHORIZING" && <><FinancialPlanPreview scenario={planPresentation} onCancel={() => undefined} onApprove={() => undefined} busy /><WorkingState title="Confirm with your passkey" detail="Your bank is verifying approval for this exact plan." /></>}
         {planPresentation && state.phase === "PASSKEY_CANCELLED" && <><FinancialPlanPreview scenario={planPresentation} onCancel={flow.reset} onApprove={() => void flow.authorizeAndExecute()} /><InlineNotice title="Passkey confirmation was cancelled" detail="Nothing was authorized or executed. You can try again when ready." /></>}

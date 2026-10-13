@@ -29,6 +29,7 @@ export function useCustomerFlow() {
     continueAuthorizedExecution: useCallback(() => controller.current!.continueAuthorizedExecution(), []),
     checkExecutionStatus: useCallback(() => controller.current!.checkExecutionStatus(), []),
     reviewUpdatedPlan: useCallback(() => controller.current!.reviewUpdatedPlan(), []),
+    refreshPlanForReview: useCallback(() => controller.current!.refreshPlanForReview(), []),
     passkeyEnrolled: useCallback(() => controller.current!.passkeyEnrolled(), []),
     amendRequest: useCallback(() => controller.current!.amendRequest(), []),
     reset: useCallback(() => controller.current!.reset(), []),

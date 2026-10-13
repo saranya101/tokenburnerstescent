@@ -27,6 +27,13 @@ const plan = FinancialPlanV1.parse({
   validity: { requiredQuoteIds: ["quote-1"] }, projectedOutcome: { goalSatisfied: true, deliveredMoney: { currency: "USD", minorUnits: "500000" }, acquiredAssets: [], paidObligationIds: [], projectedAvailableBalances: [], warnings: [] },
 });
 const bundlePlan = FinancialPlanV1.parse({ ...plan, id: "bundle-plan", goalContractId: bundle.bundleId, planHash: "bundle-plan-hash-1" });
+const refreshedBundlePlan = FinancialPlanV1.parse({
+  ...bundlePlan,
+  id: "bundle-plan-refreshed",
+  planHash: "bundle-plan-hash-2",
+  steps: bundlePlan.steps.map((step) => step.action === "FX_CONVERT" ? { ...step, parameters: { ...step.parameters, quoteId: "quote-2" } } : step),
+  validity: { requiredQuoteIds: ["quote-2"] },
+});
 const fundedBundle = GoalBundleContractV1.parse({
   schemaVersion: "1", bundleId: "funded-bundle", bundleVersion: 1, contractHash: "f".repeat(64),
   items: [
@@ -331,6 +338,46 @@ it("recompiles an expired plan and requires review before requesting a new passk
   expect(values.flow.state).toMatchObject({ phase: "PLAN_REVIEW", refreshed: true, plan: { id: refreshedPlan.id } });
   expect(compileGoal).toHaveBeenNthCalledWith(2, goal.id); expect(approvalOptions).toHaveBeenCalledOnce();
   expect(values.passkey.request).not.toHaveBeenCalled(); expect(values.api.verifyApproval).not.toHaveBeenCalled(); expect(values.api.runExecution).not.toHaveBeenCalled();
+});
+
+it("refreshes a single-goal plan for review without issuing approval or execution authority", async () => {
+  const compileGoal = vi.fn()
+    .mockResolvedValueOnce({ schemaVersion: "1", status: "SAT", plan })
+    .mockResolvedValueOnce({ schemaVersion: "1", status: "SAT", plan: refreshedPlan });
+  const values = setup({ compileGoal });
+  await reachPlan(values);
+  await values.flow.refreshPlanForReview();
+
+  expect(values.flow.state).toMatchObject({ phase: "PLAN_REVIEW", refreshed: true, plan: { id: refreshedPlan.id, planHash: refreshedPlan.planHash } });
+  expect(compileGoal).toHaveBeenNthCalledWith(2, goal.id);
+  expect(values.api.approvalOptions).not.toHaveBeenCalled();
+  expect(values.passkey.request).not.toHaveBeenCalled();
+  expect(values.api.verifyApproval).not.toHaveBeenCalled();
+  expect(values.api.runExecution).not.toHaveBeenCalled();
+});
+
+it("refreshes a multi-intent plan for review with a new exact quote and no financial authority", async () => {
+  const proof = { schemaVersion: "1", bundleId: bundle.bundleId, bundleContractHash: bundle.contractHash, itemCoverage: [{ itemId: "item-1", satisfiedByStepIds: ["transfer-1"] }, { itemId: "item-2", satisfiedByStepIds: ["fx-1"] }], allItemsSatisfied: true, allHardConstraintsSatisfied: true, allExplicitDependenciesSatisfied: true, allIrreversibleStepsJustified: true };
+  const compileGoalBundle = vi.fn()
+    .mockResolvedValueOnce({ financialPlan: bundlePlan, satisfactionProof: proof })
+    .mockResolvedValueOnce({ financialPlan: refreshedBundlePlan, satisfactionProof: proof });
+  const values = setup({
+    sendMessage: vi.fn().mockResolvedValue({ status: "AWAITING_BUNDLE_CONFIRMATION", candidateId: "bundle-candidate", goalBundleCandidate: bundleCandidate }),
+    confirmGoalBundle: vi.fn().mockResolvedValue(bundle),
+    compileGoalBundle,
+  });
+  await values.flow.submitMessage("Send John USD 300 and buy one Apple share.");
+  await values.flow.confirmMeaning();
+  await values.flow.refreshPlanForReview();
+
+  expect(values.flow.state).toMatchObject({ phase: "PLAN_REVIEW", refreshed: true, plan: { id: refreshedBundlePlan.id, planHash: refreshedBundlePlan.planHash } });
+  if (values.flow.state.phase !== "PLAN_REVIEW") throw new Error("Expected refreshed plan review");
+  expect(values.flow.state.plan.steps.find((step) => step.action === "FX_CONVERT")).toMatchObject({ parameters: { quoteId: "quote-2" } });
+  expect(compileGoalBundle).toHaveBeenNthCalledWith(2, bundle.bundleId);
+  expect(values.api.approvalOptions).not.toHaveBeenCalled();
+  expect(values.passkey.request).not.toHaveBeenCalled();
+  expect(values.api.verifyApproval).not.toHaveBeenCalled();
+  expect(values.api.runExecution).not.toHaveBeenCalled();
 });
 
 it("refreshes instead of authorizing when the plan expires during passkey verification", async () => {
