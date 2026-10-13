@@ -1,0 +1,50 @@
+{
+  "beneficiaries": [
+    {
+      "id": "ben-ntu",
+      "providerRef": "ben-ntu",
+      "name": "Nanyang Technological University",
+      "supportedCurrencies": ["USD"]
+    },
+    {
+      "id": "ben-john-tan",
+      "providerRef": "ben-john-tan",
+      "name": "John Tan",
+      "supportedCurrencies": ["SGD"]
+    },
+    {
+      "id": "ben-john-lim",
+      "providerRef": "ben-john-lim",
+      "name": "John Lim",
+      "supportedCurrencies": ["SGD"]
+    }
+  ],
+  "asset": {
+    "id": "asset-aapl",
+    "symbol": "AAPL",
+    "name": "Apple Inc.",
+    "assetType": "EQUITY",
+    "tradable": true,
+    "settlementCurrency": "USD"
+  },
+  "aliases": [
+    ["ASSET", "asset-aapl", "Apple"],
+    ["ASSET", "asset-aapl", "Apple Inc."],
+    ["ASSET", "asset-aapl", "Apple (AAPL)"],
+    ["ASSET", "asset-aapl", "Apple share"],
+    ["ASSET", "asset-aapl", "Apple stock"],
+    ["ASSET", "asset-aapl", "AAPL"],
+    ["ACCOUNT", "acc-sgd", "my SGD account"],
+    ["ACCOUNT", "acc-sgd", "SGD account"],
+    ["ACCOUNT", "acc-sgd", "DBS Multiplier Account"],
+    ["ACCOUNT", "acc-usd", "my USD account"],
+    ["ACCOUNT", "acc-usd", "USD account"],
+    ["ACCOUNT", "acc-usd", "USD Wallet"],
+    ["BENEFICIARY", "ben-ntu", "NTU"],
+    ["BENEFICIARY", "ben-ntu", "Nanyang Technological University"],
+    ["BENEFICIARY", "ben-john-tan", "John Tan"],
+    ["BENEFICIARY", "ben-john-tan", "John"],
+    ["BENEFICIARY", "ben-john-lim", "John Lim"],
+    ["BENEFICIARY", "ben-john-lim", "John"]
+  ]
+}
