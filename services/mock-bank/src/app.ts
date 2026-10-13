@@ -243,7 +243,7 @@ export function buildApp(options: MockBankOptions = {}) {
     const total = authoritativeAssetTotal(body.quantity, quote.unitPriceMinor, quote.feeMinor);
     if (BigInt(body.authorizedTotalMinor) !== total) throw new Error("AUTHORIZED_TOTAL_MISMATCH");
     if (body.maximumSpend.currency !== body.settlementCurrency) throw new Error("MAXIMUM_SPEND_CURRENCY_MISMATCH");
-    if (total > BigInt(body.maximumSpend.minorUnits)) throw new Error("MAXIMUM_SPEND_EXCEEDED");
+    if (BigInt(body.maximumSpend.minorUnits) < 0n || total > BigInt(body.maximumSpend.minorUnits)) throw new Error("MAXIMUM_SPEND_EXCEEDED");
     debit(state, body.sourceAccountId, { minorUnits: body.authorizedTotalMinor });
     state.holdings[body.assetId] = addDecimalStrings(state.holdings[body.assetId] ?? "0", body.quantity);
   });
