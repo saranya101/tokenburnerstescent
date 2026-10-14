@@ -6,6 +6,10 @@ cd /app
 : "${DIRECT_URL:?DIRECT_URL must reference persistent PostgreSQL}"
 : "${PARLANCE_INTERNAL_API_TOKEN:?internal API credential required}"
 : "${PARLANCE_BANK_API_TOKEN:?mock-bank credential required}"
+if [[ "${PARLANCE_SYNTHETIC_DB_MIGRATIONS_ALLOWED:-false}" == "true" ]]; then
+  node -e 'const u = new URL(process.env.DIRECT_URL); if (u.hostname !== "postgres.railway.internal") process.exit(1)'
+  pnpm --filter @parlance/db prisma:deploy
+fi
 
 export API_URL=http://127.0.0.1:4001
 export COMPILER_URL=http://127.0.0.1:8001
