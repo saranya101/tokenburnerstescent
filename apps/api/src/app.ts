@@ -16,12 +16,14 @@ import { WebAuthnService } from "./webauthn/service.js";
 import type { WebAuthnRepository } from "./webauthn/types.js";
 import { PrismaOpsReadService, type OpsReadService } from "./ops/read-model.js";
 import { PrismaCustomerActivityReadService, type CustomerActivityReadService } from "./customer/activity.js";
+import { PrismaCustomerOperationsReadService } from "./customer/operations.js";
+import { PrismaCustomerJourneysReadService } from "./customer/journeys.js";
 import { PrismaRiskRepository } from "./risk/repository.js";
 import { DeterministicApprovalRiskGate } from "./risk/gate.js";
 import { DeterministicExecutionRiskGate } from "./risk/execution-gate.js";
 import { apiAuthorizationFromEnvironment, apiSecurityConfigurationReady, type ApiAuthorizationConfig } from "./security/request-authorization.js";
 
-export interface ApiServices { repository: ParlanceRepository & BundlePlanRepository & GoalConfirmationRepository & BundleConfirmationRepository & WebAuthnRepository; messages: MessageOrchestrationService; investmentFunding: InvestmentFundingService; bundles: BundleMessageOrchestrationService; compilation: CompilationService; bundleCompilation: BundleCompilationService; execution: ExecutionService; webauthn: WebAuthnService; ops?: OpsReadService; customerActivity?: CustomerActivityReadService; dependencies: { compiler: CompilerClient; bank: MockBankClient } }
+export interface ApiServices { repository: ParlanceRepository & BundlePlanRepository & GoalConfirmationRepository & BundleConfirmationRepository & WebAuthnRepository; messages: MessageOrchestrationService; investmentFunding: InvestmentFundingService; bundles: BundleMessageOrchestrationService; compilation: CompilationService; bundleCompilation: BundleCompilationService; execution: ExecutionService; webauthn: WebAuthnService; ops?: OpsReadService; customerActivity?: CustomerActivityReadService; customerOperations?: PrismaCustomerOperationsReadService; customerJourneys?: PrismaCustomerJourneysReadService; dependencies: { compiler: CompilerClient; bank: MockBankClient } }
 export function productionServices(): ApiServices {
   const db = getPrismaClient(); const repository = new PrismaParlanceRepository(db); const bank = new MockBankClient(); const compiler = new CompilerClient();
   const riskRepository = new PrismaRiskRepository(db);
@@ -32,7 +34,7 @@ export function productionServices(): ApiServices {
   const interpreter = intentMode === "MOCK" ? new MockIntentInterpreter() : createTokenHubIntentInterpreter();
   const bundleInterpreter: IntentBundleInterpreter = intentMode === "TOKENHUB" ? createTokenHubIntentBundleInterpreter() : { async interpretUserRequest() { throw new Error("BUNDLE_INTERPRETER_UNAVAILABLE"); } };
   const grounder = (userId: string) => new PrismaEntityGrounder(db, userId);
-  return { repository, messages: new MessageOrchestrationService(repository, interpreter, grounder), investmentFunding: new InvestmentFundingService(repository, bank), bundles: new BundleMessageOrchestrationService(repository, bundleInterpreter, grounder), compilation: new CompilationService(repository, bank, compiler), bundleCompilation: new BundleCompilationService(repository, bank, compiler), execution: new ExecutionService(repository, bank, compiler, undefined, executionRiskGate), webauthn: new WebAuthnService(repository, bank, undefined, undefined, undefined, riskGate), ops: new PrismaOpsReadService(db), customerActivity: new PrismaCustomerActivityReadService(db), dependencies: { compiler, bank } };
+  return { repository, messages: new MessageOrchestrationService(repository, interpreter, grounder), investmentFunding: new InvestmentFundingService(repository, bank), bundles: new BundleMessageOrchestrationService(repository, bundleInterpreter, grounder), compilation: new CompilationService(repository, bank, compiler), bundleCompilation: new BundleCompilationService(repository, bank, compiler), execution: new ExecutionService(repository, bank, compiler, undefined, executionRiskGate), webauthn: new WebAuthnService(repository, bank, undefined, undefined, undefined, riskGate), ops: new PrismaOpsReadService(db), customerActivity: new PrismaCustomerActivityReadService(db), customerOperations: new PrismaCustomerOperationsReadService(db), customerJourneys: new PrismaCustomerJourneysReadService(db, repository), dependencies: { compiler, bank } };
 }
 export function buildApp(services = productionServices(), authorization: ApiAuthorizationConfig = apiAuthorizationFromEnvironment()) {
   const app = Fastify({ loggerInstance: logger });

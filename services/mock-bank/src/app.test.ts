@@ -1,10 +1,14 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { buildApp, resolveInitialStateConfiguration } from "./app.js";
+import { buildApp, resolveBeneficiaryDefinitions, resolveInitialStateConfiguration } from "./app.js";
 
 const groundingFixture = JSON.parse(readFileSync(new URL("../../../packages/db/prisma/demo-grounding-fixture.json", import.meta.url), "utf8")) as {
   beneficiaries: Array<{ id: string; providerRef: string; name: string; supportedCurrencies: string[] }>;
   asset: { id: string; symbol: string; name: string; assetType: string; tradable: boolean; settlementCurrency: string };
+  aliases: Array<[string, string, string]>;
+};
+const syntheticPayees = JSON.parse(readFileSync(new URL("../../../packages/db/prisma/synthetic-payees-v2.json", import.meta.url), "utf8")) as {
+  beneficiaries: Array<{ id: string; providerRef: string; name: string; supportedCurrencies: string[] }>;
   aliases: Array<[string, string, string]>;
 };
 
@@ -90,6 +94,17 @@ describe("mock bank", () => {
     ]);
     expect(groundingFixture.aliases.filter((alias) => alias[0] === "BENEFICIARY" && alias[2] === "John").map((alias) => alias[1]).sort()).toEqual(["ben-john-lim", "ben-john-tan"]);
     expect(groundingFixture.aliases.filter((alias) => alias[0] === "ASSET" && alias[1] === "asset-aapl").map((alias) => alias[2])).toEqual(expect.arrayContaining(["Apple", "Apple Inc.", "Apple (AAPL)", "AAPL"]));
+  });
+  it("enables twelve extra payees only for the matching isolated fixture", async () => {
+    expect(resolveBeneficiaryDefinitions({ PARLANCE_SYNTHETIC_PAYEES_V2: "true" })).toHaveLength(3);
+    expect(resolveBeneficiaryDefinitions({ PARLANCE_LOCAL_TEST_MODE: "true" })).toHaveLength(3);
+    const definitions = resolveBeneficiaryDefinitions({ PARLANCE_LOCAL_TEST_MODE: "true", PARLANCE_SYNTHETIC_PAYEES_V2: "true" });
+    const state = await bankState(bankApp({ beneficiaryDefinitions: definitions }), "isolated-customer");
+    expect(state.beneficiaries).toHaveLength(15);
+    expect(state.beneficiaries.slice(3)).toEqual(syntheticPayees.beneficiaries.map(({ id, name, supportedCurrencies }) => ({ id, name, supportedCurrencies, status: "ACTIVE" })));
+    expect(new Set(state.beneficiaries.map(({ id }: { id: string }) => id)).size).toBe(15);
+    expect(syntheticPayees.beneficiaries.every(({ id }) => syntheticPayees.aliases.some(([type, entityId, alias]) => type === "BENEFICIARY" && entityId === id && alias.length > 0))).toBe(true);
+    expect(syntheticPayees.aliases.filter(([type, , alias]) => type === "BENEFICIARY" && alias === "Alex").map(([, id]) => id).sort()).toEqual(["ben-alex-chen", "ben-alex-tan"]);
   });
   it("enforces the advertised beneficiary currencies before mutating a transfer", async () => {
     const accepted = bankApp();

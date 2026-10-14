@@ -60,6 +60,8 @@ export async function registerRoutes(app: FastifyInstance, options: { services: 
     if (!services.customerActivity) return reply.code(503).send({ code: "CUSTOMER_ACTIVITY_UNAVAILABLE" });
     return services.customerActivity.list(principal(request).userId);
   });
+  app.get("/v1/customer/operations", customer, async (request, reply) => services.customerOperations ? services.customerOperations.list(principal(request).userId) : reply.code(503).send({ code: "CUSTOMER_OPERATIONS_UNAVAILABLE" }));
+  app.get("/v1/customer/journeys", customer, async (request, reply) => services.customerJourneys ? services.customerJourneys.list(principal(request).userId) : reply.code(503).send({ code: "CUSTOMER_JOURNEYS_UNAVAILABLE" }));
   app.post("/v1/messages", customer, async (request) => {
     const external = CustomerMessageBoundary.parse(request.body);
     const body = ConversationalMessageInput.parse({ ...external, userId: principal(request).userId });

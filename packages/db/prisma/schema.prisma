@@ -140,6 +140,38 @@ model User {
   riskReservations    RiskReservation[]
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
+  externalIdentities  ExternalIdentity[]
+  mobileSessions      MobileSession[]
+}
+
+model ExternalIdentity {
+  id        String   @id @default(cuid())
+  issuer    String
+  subject   String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([issuer, subject])
+  @@index([userId])
+}
+
+model MobileSession {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id])
+  issuer           String
+  subject          String
+  accessHash       String    @unique
+  refreshHash      String    @unique
+  accessExpiresAt  DateTime
+  refreshExpiresAt DateTime
+  createdAt        DateTime  @default(now())
+  lastUsedAt       DateTime  @default(now())
+  revokedAt        DateTime?
+
+  @@index([userId, revokedAt])
+  @@index([refreshExpiresAt])
 }
 
 model WebAuthnCredential {

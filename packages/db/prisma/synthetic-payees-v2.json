@@ -1,0 +1,32 @@
+{
+  "beneficiaries": [
+    { "id": "ben-alex-chen", "providerRef": "ben-alex-chen", "name": "Alex Chen", "supportedCurrencies": ["SGD"] },
+    { "id": "ben-alex-tan", "providerRef": "ben-alex-tan", "name": "Alex Tan", "supportedCurrencies": ["SGD"] },
+    { "id": "ben-aisha-rahman", "providerRef": "ben-aisha-rahman", "name": "Aisha Rahman", "supportedCurrencies": ["SGD"] },
+    { "id": "ben-benjamin-ong", "providerRef": "ben-benjamin-ong", "name": "Benjamin Ong", "supportedCurrencies": ["SGD"] },
+    { "id": "ben-chloe-goh", "providerRef": "ben-chloe-goh", "name": "Chloe Goh", "supportedCurrencies": ["SGD", "USD"] },
+    { "id": "ben-daniel-lee", "providerRef": "ben-daniel-lee", "name": "Daniel Lee", "supportedCurrencies": ["SGD"] },
+    { "id": "ben-evelyn-koh", "providerRef": "ben-evelyn-koh", "name": "Evelyn Koh", "supportedCurrencies": ["SGD"] },
+    { "id": "ben-farah-ismail", "providerRef": "ben-farah-ismail", "name": "Farah Ismail", "supportedCurrencies": ["SGD"] },
+    { "id": "ben-gabriel-wong", "providerRef": "ben-gabriel-wong", "name": "Gabriel Wong", "supportedCurrencies": ["SGD", "USD"] },
+    { "id": "ben-hannah-ng", "providerRef": "ben-hannah-ng", "name": "Hannah Ng", "supportedCurrencies": ["SGD"] },
+    { "id": "ben-mei-lin", "providerRef": "ben-mei-lin", "name": "Mei Lin", "supportedCurrencies": ["SGD"] },
+    { "id": "ben-priya-nair", "providerRef": "ben-priya-nair", "name": "Priya Nair", "supportedCurrencies": ["SGD"] }
+  ],
+  "aliases": [
+    ["BENEFICIARY", "ben-alex-chen", "Alex Chen"],
+    ["BENEFICIARY", "ben-alex-chen", "Alex"],
+    ["BENEFICIARY", "ben-alex-tan", "Alex Tan"],
+    ["BENEFICIARY", "ben-alex-tan", "Alex"],
+    ["BENEFICIARY", "ben-aisha-rahman", "Aisha Rahman"],
+    ["BENEFICIARY", "ben-benjamin-ong", "Benjamin Ong"],
+    ["BENEFICIARY", "ben-chloe-goh", "Chloe Goh"],
+    ["BENEFICIARY", "ben-daniel-lee", "Daniel Lee"],
+    ["BENEFICIARY", "ben-evelyn-koh", "Evelyn Koh"],
+    ["BENEFICIARY", "ben-farah-ismail", "Farah Ismail"],
+    ["BENEFICIARY", "ben-gabriel-wong", "Gabriel Wong"],
+    ["BENEFICIARY", "ben-hannah-ng", "Hannah Ng"],
+    ["BENEFICIARY", "ben-mei-lin", "Mei Lin"],
+    ["BENEFICIARY", "ben-priya-nair", "Priya Nair"]
+  ]
+}

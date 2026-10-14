@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@parlance/db";
+import { readFileSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import { PrismaEntityGrounder } from "./prisma-grounder.js";
 
@@ -17,6 +18,10 @@ function database(
 }
 
 const apple = { id: "asset-aapl", name: "Apple Inc.", symbol: "AAPL" };
+const syntheticPayees = JSON.parse(readFileSync(new URL("../../../../packages/db/prisma/synthetic-payees-v2.json", import.meta.url), "utf8")) as {
+  beneficiaries: Array<{ id: string; providerRef: string; name: string; supportedCurrencies: string[] }>;
+  aliases: Array<[string, string, string]>;
+};
 
 it.each([
   ["Buy 1 share of Apple.", "Apple"],
@@ -107,6 +112,25 @@ it("keeps two customer-owned John aliases ambiguous while resolving an exact ful
   await expect(grounder.ground({ reference: "John Tan", expectedEntityType: "BENEFICIARY" })).resolves.toMatchObject({
     status: "RESOLVED", entityId: "ben-john-tan", resolutionMethod: "EXACT",
   });
+});
+
+it("grounds the isolated synthetic payee fixture and keeps Alex ambiguous", async () => {
+  expect(syntheticPayees.beneficiaries).toHaveLength(12);
+  const db = database([], syntheticPayees.aliases.map(([entityType, entityId, alias]) => ({ entityType, entityId, alias })),
+    syntheticPayees.beneficiaries.map(({ providerRef, name }) => ({ providerRef, name })));
+  const grounder = new PrismaEntityGrounder(db, "isolated-customer");
+  await expect(grounder.ground({ reference: "Alex", expectedEntityType: "BENEFICIARY" })).resolves.toMatchObject({
+    status: "AMBIGUOUS", candidates: [{ entityId: "ben-alex-chen" }, { entityId: "ben-alex-tan" }],
+  });
+  await expect(grounder.ground({ reference: "Chloe Goh", expectedEntityType: "BENEFICIARY" })).resolves.toMatchObject({
+    status: "RESOLVED", entityId: "ben-chloe-goh",
+  });
+  expect(db.beneficiary.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: "isolated-customer", status: "ACTIVE", providerRef: { not: null } } }));
+});
+
+it("does not ground a synthetic payee alias without its customer-owned record", async () => {
+  const db = database([], [{ entityType: "BENEFICIARY", entityId: "ben-alex-chen", alias: "Alex" }]);
+  await expect(new PrismaEntityGrounder(db, "customer-without-payee").ground({ reference: "Alex", expectedEntityType: "BENEFICIARY" })).resolves.toMatchObject({ status: "NOT_FOUND" });
 });
 
 it("returns real names and balances when more than one SGD account is eligible", async () => {

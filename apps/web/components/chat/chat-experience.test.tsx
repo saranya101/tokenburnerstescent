@@ -114,6 +114,15 @@ it("shows live USD availability when an investment has insufficient settled fund
   expect(html).not.toContain("complete this payment");
 });
 
+it("does not offer the standalone funding action for a bundle failure", () => {
+  const html = render({
+    phase: "UNAVAILABLE", requestText: "Send S$100 and buy Apple", kind: "UNSAT", reasonCode: "INSUFFICIENT_FUNDS",
+    message: "The combined plan needs more funds.", bundle: { items: [{ goal: { type: "ACQUIRE_ASSET" } }] },
+  } as CustomerFlowState);
+  expect(html).toContain("The combined plan needs more funds.");
+  expect(html).not.toContain("Review funding options");
+});
+
 it("presents a verified protected-balance refusal from compiler and live banking data", () => {
   vi.mocked(useBankingState).mockReturnValue({
     state: {

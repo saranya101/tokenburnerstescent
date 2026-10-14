@@ -25,13 +25,9 @@ export class PrismaEntityGrounder implements EntityGrounder {
       ...beneficiaries.flatMap((beneficiary) => beneficiary.providerRef === null ? [] : [entity("BENEFICIARY", beneficiary.providerRef, beneficiary.name, aliasMap)]),
       ...assets.map((asset) => assetEntity(asset, aliasMap)),
     ];
-    for (const alias of aliases) {
-      if (entities.some((item) => item.entityType === alias.entityType && item.entityId === alias.entityId)) continue;
-      // An asset alias is only evidence about an asset already loaded from the
-      // authoritative catalog. It must never manufacture a tradable asset ID.
-      if (alias.entityType === "ASSET") continue;
-      entities.push(entity(alias.entityType as GroundingEntity["entityType"], alias.entityId, alias.alias, aliasMap));
-    }
+    // An alias is only evidence about a customer-owned account or payee, or an
+    // asset already loaded from the authoritative catalogue. It cannot create
+    // an entity when its underlying record is absent.
     return new DeterministicEntityGrounder(new InMemoryEntityRepository(entities)).ground(input);
   }
 }

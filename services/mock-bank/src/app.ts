@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
 import Fastify from "fastify";
 import { AssetQuoteV1, AssetV1, BankStateSnapshotV1, FxQuoteV1, MoneyV1, type AssetQuoteV1 as AssetQuote } from "@parlance/contracts";
 import { z } from "zod";
@@ -26,6 +27,7 @@ export interface MockBankOptions {
   adminAuthorization?: { demoMode: boolean; opsToken?: string; demoUserId?: string };
   bankApiToken?: string;
   initialState?: { stateVersion: number; balances: Record<string, bigint>; holdings: Record<string, string> };
+  beneficiaryDefinitions?: readonly BeneficiaryDefinition[];
   now?: () => Date;
 }
 
@@ -48,11 +50,23 @@ const ACCOUNT_DEFINITIONS = [
   { id: "acc-sgd", type: "CHECKING" as const, currency: "SGD", capabilities: ["SEND_TRANSFER", "RECEIVE_TRANSFER", "CONVERT_FX", "PAY_BILL", "TRADE_ASSET"] as const },
   { id: "acc-usd", type: "CHECKING" as const, currency: "USD", capabilities: ["SEND_TRANSFER", "RECEIVE_TRANSFER", "CONVERT_FX", "TRADE_ASSET"] as const },
 ];
-const BENEFICIARY_DEFINITIONS = [
+type BeneficiaryDefinition = { id: string; name: string; supportedCurrencies: string[]; status: "ACTIVE" };
+const BASE_BENEFICIARY_DEFINITIONS: BeneficiaryDefinition[] = [
   { id: "ben-ntu", name: "Nanyang Technological University", supportedCurrencies: ["USD"], status: "ACTIVE" as const },
   { id: "ben-john-tan", name: "John Tan", supportedCurrencies: ["SGD"], status: "ACTIVE" as const },
   { id: "ben-john-lim", name: "John Lim", supportedCurrencies: ["SGD"], status: "ACTIVE" as const },
 ];
+const syntheticFixture = z.object({ beneficiaries: z.array(z.object({
+  id: z.string().min(1), providerRef: z.string().min(1), name: z.string().min(1),
+  supportedCurrencies: z.array(z.enum(["SGD", "USD"])).min(1),
+}).strict()) }).parse(JSON.parse(readFileSync(new URL("../../../packages/db/prisma/synthetic-payees-v2.json", import.meta.url), "utf8")));
+
+export function resolveBeneficiaryDefinitions(environment: NodeJS.ProcessEnv = process.env): BeneficiaryDefinition[] {
+  if (environment.PARLANCE_LOCAL_TEST_MODE !== "true" || environment.PARLANCE_SYNTHETIC_PAYEES_V2 !== "true") return BASE_BENEFICIARY_DEFINITIONS;
+  return [...BASE_BENEFICIARY_DEFINITIONS, ...syntheticFixture.beneficiaries.map((item) => ({
+    id: item.id, name: item.name, supportedCurrencies: item.supportedCurrencies, status: "ACTIVE" as const,
+  }))];
+}
 const ASSET_DEFINITIONS = [{ id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY" as const, tradable: true, settlementCurrency: "USD" }];
 const DEMO_ASSET_QUOTE = AssetQuoteV1.parse({
   quoteId: "asset-quote-aapl-usd-v1", assetId: "asset-aapl", settlementCurrency: "USD",
@@ -110,6 +124,7 @@ const authoritativeAssetTotal = (quantity: string, unitPriceMinor: string, feeMi
 export function buildApp(options: MockBankOptions = {}) {
   const states = new Map<string, State>(); const idempotency = new Map<string, StoredResponse>();
   const configuredInitialState = options.initialState ?? resolveInitialStateConfiguration();
+  const beneficiaryDefinitions = options.beneficiaryDefinitions ?? resolveBeneficiaryDefinitions();
   const now = options.now ?? (() => new Date());
   const getState = (userId: string): State => {
     const existing = states.get(userId); if (existing) return existing;
@@ -186,7 +201,7 @@ export function buildApp(options: MockBankOptions = {}) {
   });
   app.get("/v1/state/:userId", async (request) => { const { userId } = z.object({ userId: Id }).parse(request.params); const state = getState(userId); return BankStateSnapshotV1.parse({
     schemaVersion: "1", userId, stateVersion: state.stateVersion, capturedAt: new Date().toISOString(),
-    accounts: ACCOUNT_DEFINITIONS.map((account) => ({ ...account, capabilities: [...account.capabilities], ledgerMinorUnits: state.balances[account.id]!.toString(), availableMinorUnits: state.balances[account.id]!.toString(), status: "ACTIVE" as const })), beneficiaries: BENEFICIARY_DEFINITIONS.map((beneficiary) => ({ ...beneficiary, supportedCurrencies: [...beneficiary.supportedCurrencies] })), assets: state.assets,
+    accounts: ACCOUNT_DEFINITIONS.map((account) => ({ ...account, capabilities: [...account.capabilities], ledgerMinorUnits: state.balances[account.id]!.toString(), availableMinorUnits: state.balances[account.id]!.toString(), status: "ACTIVE" as const })), beneficiaries: beneficiaryDefinitions.map((beneficiary) => ({ ...beneficiary, supportedCurrencies: [...beneficiary.supportedCurrencies] })), assets: state.assets,
     holdings: Object.entries(state.holdings).map(([assetId, quantity]) => ({ assetId, quantity })), obligations: [], serviceAvailability: { transfers: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), fx: !state.scenarios.has("FX_UNAVAILABLE"), billPayments: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), investments: !state.scenarios.has("ASSET_UNAVAILABLE") },
     fxQuotes: activeFxQuotes(userId, state), assetQuotes: state.assetQuotes,
   }); });
@@ -221,7 +236,7 @@ export function buildApp(options: MockBankOptions = {}) {
   execute("transfer", TransferBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => {
     requireAccountCurrency(body.sourceAccountId, body.amount.currency);
     if ("beneficiaryId" in body) {
-      const beneficiary = BENEFICIARY_DEFINITIONS.find((candidate) => candidate.id === body.beneficiaryId);
+      const beneficiary = beneficiaryDefinitions.find((candidate) => candidate.id === body.beneficiaryId);
       if (!beneficiary) throw new Error("BENEFICIARY_NOT_FOUND");
       if (beneficiary.status !== "ACTIVE") throw new Error("BENEFICIARY_UNAVAILABLE");
       if (!beneficiary.supportedCurrencies.some((currency) => currency === body.amount.currency)) throw new Error("BENEFICIARY_CURRENCY_UNSUPPORTED");
