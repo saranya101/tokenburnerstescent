@@ -11,6 +11,7 @@ import type { Activity, BankState, Clarification, Interpretation, Journey, Mobil
 import { ApiError, MobileTokens as MobileTokensSchema, mobileApi, publicConfig } from "./api";
 import { describeCandidate, holdingValue, money, quotedPortfolioValues, sgdReserveMinorUnits } from "./presentation";
 import { verifiedCustomerSnapshot } from "./sync";
+import { connectionConfigured, discoveryUrl, trustedDiscovery } from "./connection";
 
 WebBrowser.maybeCompleteAuthSession();
 const C = { red: "#b3272d", ink: "#18222d", muted: "#64717f", bg: "#f5f6f7", line: "#e5e8eb", white: "#fff", pale: "#fff1f1", green: "#1d795b" };
@@ -35,18 +36,23 @@ function Empty({ title, detail }: { title: string; detail: string }) { return <C
 function Section({ title, action }: { title: string; action?: string }) { return <View style={styles.sectionHead}><Text style={styles.sectionTitle}>{title}</Text>{action && <Text style={styles.sectionAction}>{action}</Text>}</View>; }
 
 function useSession() {
-  const configurationKey = `${publicConfig.apiBaseUrl}\0${publicConfig.oidcIssuer}\0${publicConfig.oidcClientId}`;
+  const configurationKey = `${publicConfig.apiBaseUrl}\0${publicConfig.oidcIssuer}\0${publicConfig.oidcClientId}\0${publicConfig.oidcAudience}`;
   const [discovery, setDiscovery] = useState<AuthSession.DiscoveryDocument | null>(null);
   const redirectUri = AuthSession.makeRedirectUri({ scheme: "parlance", path: "auth" });
-  const [request, response, prompt] = AuthSession.useAuthRequest({ clientId: publicConfig.oidcClientId || "unconfigured", responseType: AuthSession.ResponseType.Code, redirectUri, scopes: ["openid", "profile"], usePKCE: true }, discovery);
+  const [request, response, prompt] = AuthSession.useAuthRequest({ clientId: publicConfig.oidcClientId || "unconfigured", responseType: AuthSession.ResponseType.Code, redirectUri, scopes: ["openid", "profile"], usePKCE: true, extraParams: { audience: publicConfig.oidcAudience } }, discovery);
   const [tokens, setTokens] = useState<MobileTokens>(); const [loading, setLoading] = useState(true); const [error, setError] = useState<string>();
   const refreshing = useRef<Promise<string | undefined> | null>(null);
   const token = tokens?.accessToken;
-  const configured = publicConfig.apiBaseUrl.startsWith("https://") && publicConfig.oidcIssuer.startsWith("https://") && !!publicConfig.oidcClientId;
+  const configured = connectionConfigured(publicConfig);
   useEffect(() => {
     if (!configured) return;
     let active = true;
-    void AuthSession.fetchDiscoveryAsync(publicConfig.oidcIssuer).then((value) => { if (active) setDiscovery(value); }).catch(() => { if (active) setError("Identity provider is unavailable. Try again later."); });
+    void fetch(discoveryUrl(publicConfig.oidcIssuer)).then(async (response) => {
+      if (!response.ok) throw new Error("IDENTITY_DISCOVERY_UNAVAILABLE");
+      const value = trustedDiscovery(publicConfig.oidcIssuer, await response.json());
+      if (!value) throw new Error("IDENTITY_DISCOVERY_UNTRUSTED");
+      if (active) setDiscovery(value);
+    }).catch((failure) => { if (active) setError(failure instanceof Error && failure.message === "IDENTITY_DISCOVERY_UNTRUSTED" ? "Identity provider configuration could not be verified." : "Identity provider is unavailable. Try again later."); });
     return () => { active = false; };
   }, [configured]);
   const persist = useCallback(async (next: MobileTokens) => { await SecureStore.setItemAsync("parlance.mobile.session", JSON.stringify({ configurationKey, tokens: next })); setTokens(next); }, [configurationKey]);

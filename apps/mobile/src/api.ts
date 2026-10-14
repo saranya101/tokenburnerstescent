@@ -6,6 +6,7 @@ export const publicConfig = {
   apiBaseUrl: String(Constants.expoConfig?.extra?.apiBaseUrl ?? "").replace(/\/$/u, ""),
   oidcIssuer: String(Constants.expoConfig?.extra?.oidcIssuer ?? ""),
   oidcClientId: String(Constants.expoConfig?.extra?.oidcClientId ?? ""),
+  oidcAudience: String(Constants.expoConfig?.extra?.oidcAudience ?? ""),
 };
 
 export type BankState = BankStateSnapshotV1;

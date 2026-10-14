@@ -9,6 +9,7 @@
     "prebuild": "expo prebuild --platform android",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "check:connection": "node scripts/check-connection.mjs",
     "ios": "expo run:ios"
   },
   "dependencies": {

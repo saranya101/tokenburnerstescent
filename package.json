@@ -3,9 +3,11 @@
   "private": true,
   "packageManager": "pnpm@11.19.0",
   "scripts": {
+    "start": "cd apps/web && node node_modules/next/dist/bin/next start -H 0.0.0.0 -p ${PORT:-8080}",
     "dev": "node --env-file=.env ./node_modules/turbo/bin/turbo dev --env-mode=loose",
     "dev:safe": "node --env-file=.env scripts/dev-safe.mjs",
     "dev:restart": "node --env-file=.env scripts/dev-safe.mjs --restart",
+    "prebuild": "pnpm --filter @parlance/db prisma:generate",
     "test:dev-safe": "node --test scripts/dev-safe.test.mjs",
     "security": "pnpm security:assurance",
     "security:assurance": "node scripts/security-assurance.mjs",
