@@ -20,7 +20,9 @@ export function ClarificationCard({ clarification, beneficiaries = [], busy = fa
   const question = isTransferAmount
     ? "How much would you like to send, and in which currency?"
     : isTransferCurrency
-      ? "Which currency should I use for this transfer?"
+      ? clarification.options.length === 2
+        ? `Do you mean ${clarification.options[0]?.displayName} or ${clarification.options[1]?.displayName} for the ${clarification.originalReference}?`
+        : "Which currency should I use for this transfer?"
     : isTransferRecipient
       ? "Who would you like to send money to?"
     : clarification.options.length > 1 && accountCurrency
@@ -55,6 +57,7 @@ export function ClarificationCard({ clarification, beneficiaries = [], busy = fa
 }
 
 function candidateDetail(candidate: ClarificationOption, beneficiaries: readonly Beneficiary[]): string {
+  if (candidate.entityType === "CURRENCY") return "Choose this exact transfer currency";
   if (candidate.currency && candidate.availableMinorUnits) return formatMoney({ currency: candidate.currency, minorUnits: candidate.availableMinorUnits });
   if (candidate.entityType === "BENEFICIARY") {
     const beneficiary = beneficiaries.find((item) => item.id === candidate.entityId);

@@ -349,6 +349,22 @@ describe("ClarificationCard", () => {
     expect(html).not.toContain("DBS Multiplier Account");
   });
 
+  it("presents only the server-issued choices for an ambiguous spoken transfer currency", () => {
+    const html = renderToStaticMarkup(createElement(ClarificationCard, {
+      clarification: {
+        reason: "MISSING_FIELD", field: "items[0].goal.amount.currency", originalReference: "transfer to John Lim", questionKey: "clarify.transfer.currency",
+        options: [
+          { entityId: "currency-sgd-10000", entityType: "CURRENCY" as const, displayName: "SGD 100", currency: "SGD" },
+          { entityId: "currency-usd-10000", entityType: "CURRENCY" as const, displayName: "USD 100", currency: "USD" },
+        ],
+      },
+      onSelect: vi.fn(), onCancel: vi.fn(),
+    }));
+    expect(html).toContain("Do you mean SGD 100 or USD 100 for the transfer to John Lim?");
+    expect(html.match(/Choose this exact transfer currency/gu)).toHaveLength(2);
+    expect(html).not.toContain("Enter SGD or USD");
+  });
+
   it("shows real account balances and keeps typed clarification available", () => {
     const options = [
       { entityId: "acc-1", entityType: "ACCOUNT" as const, displayName: "DBS Multiplier Account", currency: "SGD", availableMinorUnits: "1733334" },

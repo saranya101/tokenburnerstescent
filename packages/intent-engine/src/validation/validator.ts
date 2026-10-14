@@ -167,8 +167,11 @@ function validateConstraints(sourceText: string, draft: IntentDraft, candidate: 
         break;
       case "MIN_AVAILABLE_BALANCE":
         if (observed.type !== "MIN_AVAILABLE_BALANCE") break;
-        validateMoney(sourceText, `${field}.money`, expected.money, observed.money, add);
-        if (!sourceSupportsMinimumBalance(sourceText, expected.money)) add("CONSTRAINT_NOT_SUPPORTED_BY_SOURCE", field, { observed: expected.type });
+        validateMoneyEquality(`${field}.money`, expected.money, observed.money, add);
+        if (!sourceSupportsMinimumBalance(sourceText, expected.money)) {
+          if (!sourceSupportsMoney(sourceText, expected.money)) add("MONEY_NOT_SUPPORTED_BY_SOURCE", `${field}.money`, { observed: describeMoney(expected.money) });
+          add("CONSTRAINT_NOT_SUPPORTED_BY_SOURCE", field, { observed: expected.type });
+        }
         if (expected.accountReference === undefined !== (observed.accountId === undefined)) {
           add("CONSTRAINT_MISMATCH", `${field}.accountReference`);
         } else if (expected.accountReference !== undefined && observed.accountId !== undefined) {
@@ -244,10 +247,14 @@ function validateOmissions(sourceText: string, draft: IntentDraft, add: AddMisma
 }
 
 function validateMoney(sourceText: string, field: string, expected: MoneyV1, observed: MoneyV1, add: AddMismatch): void {
+  validateMoneyEquality(field, expected, observed, add);
+  if (!sourceSupportsMoney(sourceText, expected)) add("MONEY_NOT_SUPPORTED_BY_SOURCE", field, { observed: describeMoney(expected) });
+}
+
+function validateMoneyEquality(field: string, expected: MoneyV1, observed: MoneyV1, add: AddMismatch): void {
   if (expected.currency !== observed.currency || expected.minorUnits !== observed.minorUnits) {
     add("MONEY_MISMATCH", field, { expected: describeMoney(expected), observed: describeMoney(observed) });
   }
-  if (!sourceSupportsMoney(sourceText, expected)) add("MONEY_NOT_SUPPORTED_BY_SOURCE", field, { observed: describeMoney(expected) });
 }
 
 function validateSemanticReference(

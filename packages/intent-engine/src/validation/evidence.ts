@@ -5,6 +5,7 @@ interface MoneyEvidence {
   readonly minorUnits: string;
   readonly start: number;
   readonly end: number;
+  readonly kind?: "SPOKEN_DOLLARS";
 }
 
 export type SourceActionGoalType = "DELIVER_MONEY" | "ACQUIRE_ASSET" | "PAY_BILL" | "MOVE_FUNDS";
@@ -17,9 +18,19 @@ export interface SourceActionSignal {
 
 const PREFIX_MONEY = /(?:\b(USD|SGD)\b\s*|\b(US\$|S\$)\s*|(\$)\s*)([0-9][0-9,]*(?:\.[0-9]{1,2})?)/giu;
 const SUFFIX_MONEY = /\b([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*(USD|SGD)\b/giu;
+const SPOKEN_DOLLARS = /\b(?:(USD|SGD)\s+)?((?:(?:one|two|three|four|five|six|seven|eight|nine)\s+)?hundred(?:\s+and\s+(?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen))?|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[- ](?:one|two|three|four|five|six|seven|eight|nine))?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\s+(?:(US|Singapore)\s+)?dollars?\b/giu;
 
 export function sourceSupportsMoney(sourceText: string, money: MoneyV1): boolean {
   return matchingMoneyEvidence(sourceText, money).length > 0;
+}
+
+/**
+ * Returns true only for a bounded spoken-dollar amount whose currency is unresolved.
+ * Supported words cover 1..999 (whole dollars only); symbols and bare numerals are excluded.
+ */
+export function sourceSupportsAmbiguousSpokenDollarAmount(sourceText: string, minorUnits: string): boolean {
+  return moneyEvidence(sourceText).some((evidence) => evidence.kind === "SPOKEN_DOLLARS"
+    && evidence.currency === undefined && evidence.minorUnits === minorUnits);
 }
 
 export function sourceSupportsGoalType(sourceText: string, goalType: string): boolean {
@@ -74,7 +85,11 @@ export function sourceSignalsMaxTotalCost(sourceText: string): boolean {
 }
 
 export function sourceSupportsMinimumBalance(sourceText: string, money: MoneyV1): boolean {
-  return matchingMoneyEvidence(sourceText, money).some((evidence) => moneyHasMinimumBalanceContext(sourceText, evidence));
+  return moneyEvidence(sourceText).some((evidence) =>
+    evidence.minorUnits === money.minorUnits
+    && effectiveMinimumBalanceCurrency(sourceText, evidence) === money.currency
+    && moneyHasMinimumBalanceContext(sourceText, evidence)
+  );
 }
 
 /**
@@ -84,11 +99,12 @@ export function sourceSupportsMinimumBalance(sourceText: string, money: MoneyV1)
 export function sourceMinimumBalanceMoney(sourceText: string): readonly MoneyV1[] {
   const seen = new Set<string>();
   return moneyEvidence(sourceText).flatMap((evidence) => {
-    if (evidence.currency === undefined || !moneyHasMinimumBalanceContext(sourceText, evidence)) return [];
-    const key = `${evidence.currency}\u0000${evidence.minorUnits}`;
+    const currency = effectiveMinimumBalanceCurrency(sourceText, evidence);
+    if (currency === undefined || !moneyHasMinimumBalanceContext(sourceText, evidence)) return [];
+    const key = `${currency}\u0000${evidence.minorUnits}`;
     if (seen.has(key)) return [];
     seen.add(key);
-    return [{ currency: evidence.currency, minorUnits: evidence.minorUnits }];
+    return [{ currency, minorUnits: evidence.minorUnits }];
   });
 }
 
@@ -184,8 +200,8 @@ function sourceSupportsPreferredReference(sourceText: string, reference: string)
 export function sourceConditionalFundingCurrencies(sourceText: string): ReadonlySet<string> {
   const currencies = new Set<string>();
   const patterns = [
-    /\b(?:use|using)\s+(?:my\s+)?(USD|SGD)(?:\s+account)?\s+(?:if|when)\s+(?:necessary|needed|required|the\s+[^.;!?]{0,50}\s+is\s+insufficient)\b/giu,
-    /\b(?:if|when)\s+[^.;!?]{0,90}\b(?:insufficient|not\s+enough|short)\b[^.;!?]{0,90}\b(?:convert|use|using)\s+(?:my\s+)?(USD|SGD)\b/giu,
+    /\b(?:use|using)\s+(?:my\s+)?(USD|SGD)(?:\s+account)?\s+(?:if|when)\s+(?:necessary|(?:it(?:'s|\s+is)\s+)?needed|required|the\s+[^.;!?]{0,50}\s+is\s+insufficient)\b/giu,
+    /\b(?:if|when)\s+[^.;!?]{0,120}\b(?:insufficient|not\s+enough|doesn['’]?t\s+have\s+enough|short)\b[^.;!?]{0,120}\b(?:convert|use|using)\s+(?:only\s+the\s+amount\s+of\s+)?(?:my\s+)?(USD|SGD)\b/giu,
     /\b(?:convert|use|using)\s+(?:my\s+)?(USD|SGD)(?:\s+account)?\s+(?:as\s+needed|if\s+necessary|if\s+needed|to\s+cover\s+(?:the\s+)?shortfall)\b/giu,
   ];
   for (const pattern of patterns) {
@@ -219,7 +235,43 @@ function moneyEvidence(sourceText: string): readonly MoneyEvidence[] {
       evidence.push({ currency, minorUnits, start, end: start + match[0].length });
     }
   }
+  for (const match of sourceText.matchAll(SPOKEN_DOLLARS)) {
+    const words = match[2];
+    if (words === undefined) continue;
+    const majorUnits = spokenWholeDollars(words);
+    if (majorUnits === undefined) continue;
+    const prefixCurrency = match[1]?.toUpperCase();
+    const suffixCurrency = match[3]?.toLocaleLowerCase() === "us" ? "USD"
+      : match[3]?.toLocaleLowerCase() === "singapore" ? "SGD" : undefined;
+    if (prefixCurrency !== undefined && suffixCurrency !== undefined && prefixCurrency !== suffixCurrency) continue;
+    const currency = prefixCurrency ?? suffixCurrency;
+    const start = match.index;
+    const item = { minorUnits: (BigInt(majorUnits) * 100n).toString(), start, end: start + match[0].length, kind: "SPOKEN_DOLLARS" as const };
+    evidence.push(currency === undefined ? item : { ...item, currency });
+  }
   return evidence;
+}
+
+function spokenWholeDollars(value: string): number | undefined {
+  const normalized = value.toLocaleLowerCase().replaceAll("-", " ").replace(/\s+/gu, " ").trim();
+  const units: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19 };
+  const tens: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+  const hundred = /^(?:(one|two|three|four|five|six|seven|eight|nine) )?hundred(?: and (.+))?$/u.exec(normalized);
+  if (hundred) {
+    const multiplier = hundred[1] === undefined ? 1 : units[hundred[1]];
+    const remainder = hundred[2] === undefined ? 0 : spokenUnderHundred(hundred[2], units, tens);
+    return multiplier === undefined || remainder === undefined ? undefined : multiplier * 100 + remainder;
+  }
+  return spokenUnderHundred(normalized, units, tens);
+}
+
+function spokenUnderHundred(value: string, units: Readonly<Record<string, number>>, tens: Readonly<Record<string, number>>): number | undefined {
+  if (units[value] !== undefined) return units[value];
+  const [tensWord, unitsWord, extra] = value.split(" ");
+  if (extra !== undefined || tensWord === undefined || tens[tensWord] === undefined) return undefined;
+  if (unitsWord === undefined) return tens[tensWord];
+  const unit = units[unitsWord];
+  return unit === undefined || unit >= 10 ? undefined : tens[tensWord]! + unit;
 }
 
 function symbolCurrency(symbol: string | undefined): string | undefined {
@@ -270,7 +322,9 @@ function isExplicitlyNonInstructionAction(sourceText: string, actionStart: numbe
 
 function isNominalAction(sourceText: string, actionStart: number, verb: string): boolean {
   if (!/^(?:purchase|transfer|payment)/u.test(verb)) return false;
-  return /\b(?:the|this|that|a)\s+$/iu.test(sourceText.slice(Math.max(0, actionStart - 20), actionStart));
+  const before = sourceText.slice(Math.max(0, actionStart - 32), actionStart);
+  return /\b(?:the|this|that|a)\s+$/iu.test(before)
+    || /^purchase/u.test(verb) && /\b(?:the|this|that|a|an)\s+(?:stock|asset|share)\s+$/iu.test(before);
 }
 
 function financialGetContext(followingText: string): boolean {
@@ -351,6 +405,19 @@ function moneyHasMinimumBalanceContext(sourceText: string, evidence: MoneyEviden
   const before = sourceText.slice(Math.max(0, evidence.start - 90), evidence.start);
   const after = sourceText.slice(evidence.end, evidence.end + 90);
   return /\b(?:keep|maintain|leave)\b[\s\S]{0,70}\b(?:at\s+least|minimum)\s*$/iu.test(before)
+    || /\b(?:at\s+least|minimum)\s+(?:keep|maintain|leave)\s*$/iu.test(before)
     || /\bminimum(?:\s+available)?(?:\s+balance)?(?:\s+of)?\s*$/iu.test(before)
     || /^\s*(?:or\s+more\s+)?(?:available|remaining|minimum\s+(?:available\s+)?balance)\b/iu.test(after);
+}
+
+function effectiveMinimumBalanceCurrency(sourceText: string, evidence: MoneyEvidence): string | undefined {
+  const accountCurrency = nearbyAccountCurrency(sourceText, evidence);
+  if (evidence.currency !== undefined && accountCurrency !== undefined && evidence.currency !== accountCurrency) return undefined;
+  return evidence.currency ?? accountCurrency;
+}
+
+function nearbyAccountCurrency(sourceText: string, evidence: MoneyEvidence): string | undefined {
+  const after = sourceText.slice(evidence.end, evidence.end + 48);
+  const match = /^\s*(?:or\s+more\s+)?(?:available\s+)?in\s+(?:my\s+|the\s+)?(SGD|USD)\s+account\b/iu.exec(after);
+  return match?.[1]?.toUpperCase();
 }
