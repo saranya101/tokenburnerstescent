@@ -8,13 +8,22 @@ export type AmbiguityReasonCode =
   | "MISSING_FIELD"
   | "INVALID_FIELD";
 
-export interface ClarificationOption {
+interface EntityClarificationOption {
   entityId: string;
   entityType: GroundableEntityType;
   displayName: string;
   currency?: string;
   availableMinorUnits?: string;
 }
+
+interface CurrencyClarificationOption {
+  entityId: string;
+  entityType: "CURRENCY";
+  displayName: string;
+  currency: "SGD" | "USD";
+}
+
+export type ClarificationOption = EntityClarificationOption | CurrencyClarificationOption;
 
 /** Structured clarification data; UI wording can be localized without changing its meaning. */
 export interface ClarificationItem {

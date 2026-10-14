@@ -97,6 +97,74 @@ describe("deterministic bundle routing", () => {
 });
 
 describe("production bundle message orchestration", () => {
+  it("preserves a voice bundle while requiring a server-issued transfer currency choice", async () => {
+    const text = "Okay send hundred dollars to John Lim and then buy one share of Apple stock and use SGD if it's needed but at least keep $1000 in my SGD account";
+    const value = IntentBundleDraftV1.parse({
+      schemaVersion: "1",
+      items: [
+        { itemId: "model-transfer", goal: { type: "DELIVER_MONEY", recipientReference: "John Lim", amount: { currency: "USD", minorUnits: "10000" } }, constraints: [], preferences: [] },
+        { itemId: "model-asset", goal: { type: "ACQUIRE_ASSET", assetReference: "Apple", quantity: "1" }, constraints: [], preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }] },
+      ],
+      globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountReference: "my SGD account" }],
+      explicitDependencies: [{ beforeItemId: "model-transfer", afterItemId: "model-asset", reason: "USER_EXPLICIT_ORDER" }],
+    });
+    const repository = new MemoryBundleRepository();
+    const service = new BundleMessageOrchestrationService(repository, interpreter(value), () => grounder(), undefined, undefined, undefined, undefined, () => new Date("2026-10-14T00:00:00Z"), (() => { let id = 0; return () => `voice-${++id}`; })());
+
+    const pending = await service.receive({ userId: "voice-user", text, inputMode: "VOICE", voice: { rawTranscript: text, provider: "browser", transcribedAt: "2026-10-14T00:00:00Z" } }, "trace-voice");
+    expect(pending, JSON.stringify(repository.lastValidation)).toMatchObject({
+      status: "NEEDS_BUNDLE_CLARIFICATION",
+      clarifications: [{
+        field: "items[0].goal.amount.currency",
+        originalReference: "transfer to John Lim",
+        questionKey: "clarify.transfer.currency",
+        options: [
+          { entityId: "currency-sgd-10000", entityType: "CURRENCY", displayName: "SGD 100" },
+          { entityId: "currency-usd-10000", entityType: "CURRENCY", displayName: "USD 100" },
+        ],
+      }],
+    });
+    expect(repository.rejected).toBe(0);
+    await expect(service.answerClarification("voice-1", { selectedCandidateId: "currency-eur-10000" }, "trace-arbitrary")).rejects.toThrow("CLARIFICATION_OPTION_INVALID");
+    await expect(service.answerClarification("voice-1", { answerText: "SGD" }, "trace-unissued")).rejects.toThrow("CLARIFICATION_OPTION_INVALID");
+
+    const continued = await service.answerClarification("voice-1", { selectedCandidateId: "currency-sgd-10000" }, "trace-currency");
+    expect(continued, JSON.stringify(repository.lastValidation)).toMatchObject({
+      status: "AWAITING_BUNDLE_CONFIRMATION",
+      goalBundleCandidate: {
+        items: [
+          { goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientId: "ben-john-lim" } },
+          { goal: { type: "ACQUIRE_ASSET", assetId: "asset-aapl", quantity: "1" } },
+        ],
+        globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }],
+        explicitDependencies: [{ beforeItemId: "item-1", afterItemId: "item-2", reason: "USER_EXPLICIT_ORDER" }],
+      },
+    });
+    expect(repository.candidate?.clarificationAnswers).toEqual([{ field: "items[0].goal.amount.currency", originalReference: "transfer to John Lim", answer: "SGD 100" }]);
+  });
+
+  it("accepts the long typed request as exactly two goals without treating purchase fees as an action", async () => {
+    const text = "I want to send S$100 to John Lim first, and then buy 1 share of Apple (AAPL). I currently have money in my SGD account, so if my USD account doesn't have enough to cover the stock purchase and its fees, convert only the amount of SGD needed into USD. Please make sure I still have at least S$1,000 available in my SGD account after everything, include all applicable fees, and show me the complete plan and projected balances before I approve anything.";
+    const value = IntentBundleDraftV1.parse({
+      schemaVersion: "1",
+      items: [
+        { itemId: "model-transfer", goal: { type: "DELIVER_MONEY", recipientReference: "John Lim", amount: { currency: "SGD", minorUnits: "10000" } }, constraints: [], preferences: [] },
+        { itemId: "model-asset", goal: { type: "ACQUIRE_ASSET", assetReference: "Apple (AAPL)", quantity: "1" }, constraints: [], preferences: [{ type: "PREFER_ACCOUNT", accountReference: "my SGD account" }] },
+      ],
+      globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountReference: "my SGD account" }],
+      explicitDependencies: [{ beforeItemId: "model-transfer", afterItemId: "model-asset", reason: "USER_EXPLICIT_ORDER" }],
+    });
+    const repository = new MemoryBundleRepository();
+    const service = new BundleMessageOrchestrationService(repository, interpreter(value), () => grounder());
+
+    const result = await service.receive({ userId: "typed-user", text }, "trace-long-typed");
+
+    expect(result, JSON.stringify(repository.lastValidation)).toMatchObject({ status: "AWAITING_BUNDLE_CONFIRMATION" });
+    expect(repository.candidate?.candidate.items.map(({ goal }) => goal.type)).toEqual(["DELIVER_MONEY", "ACQUIRE_ASSET"]);
+    expect(repository.candidate?.candidate.explicitDependencies).toHaveLength(1);
+    expect(repository.candidate?.candidate.globalConstraints).toEqual([{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "acc-sgd" }]);
+  });
+
   it("grounds the complete ordered John Lim and Apple request into one confirmation candidate", async () => {
     const text = "Send S$100 to John Lim, then buy 1 share of Apple (AAPL), using SGD if needed, but keep at least S$1,000 in my SGD account.";
     const value = IntentBundleDraftV1.parse({

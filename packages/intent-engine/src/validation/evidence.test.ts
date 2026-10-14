@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sourceActionSignals, sourceMinimumBalanceMoney, sourceSupportsMoney, sourceSupportsQuantity } from "./evidence.js";
+import { sourceActionSignals, sourceMinimumBalanceMoney, sourceSupportsAmbiguousSpokenDollarAmount, sourceSupportsMoney, sourceSupportsQuantity } from "./evidence.js";
 
 describe("deterministic source evidence", () => {
   it.each(["Send John $100", "Transfer $300 to John", "Buy Apple with a budget of $500"])(
@@ -21,6 +21,21 @@ describe("deterministic source evidence", () => {
   });
 
   it.each([
+    ["Send hundred dollars to John", "10000"],
+    ["Send one hundred and twenty-five dollars to John", "12500"],
+    ["Send ninety nine dollars to John", "9900"],
+  ] as const)("extracts bounded spoken amounts without inventing a currency: %s", (sourceText, minorUnits) => {
+    expect(sourceSupportsAmbiguousSpokenDollarAmount(sourceText, minorUnits)).toBe(true);
+    expect(sourceSupportsMoney(sourceText, { currency: "SGD", minorUnits })).toBe(false);
+    expect(sourceSupportsMoney(sourceText, { currency: "USD", minorUnits })).toBe(false);
+  });
+
+  it.each(["Send $100 to John", "Send 100 to John", "Send one thousand dollars to John"])(
+    "does not widen ambiguous spoken-dollar evidence beyond the bounded grammar: %s",
+    (sourceText) => expect(sourceSupportsAmbiguousSpokenDollarAmount(sourceText, "10000")).toBe(false),
+  );
+
+  it.each([
     ["Keep at least S$16,000 available.", "1600000"],
     ["Keep at least S$16,700 available in my SGD account.", "1670000"],
     ["Keep at least S$17,000 available.", "1700000"],
@@ -33,6 +48,12 @@ describe("deterministic source evidence", () => {
       { currency: "SGD", minorUnits: "1670000" },
       { currency: "SGD", minorUnits: "500000" },
     ]);
+  });
+
+  it("binds a bare dollar reserve only through an explicit nearby account currency", () => {
+    expect(sourceMinimumBalanceMoney("Keep at least $1000 in my SGD account.")).toEqual([{ currency: "SGD", minorUnits: "100000" }]);
+    expect(sourceMinimumBalanceMoney("Keep at least $1000 available.")).toEqual([]);
+    expect(sourceMinimumBalanceMoney("Keep at least US$1000 in my SGD account.")).toEqual([]);
   });
 
   it.each([
@@ -57,6 +78,11 @@ describe("deterministic source evidence", () => {
   it("keeps ordinary positive financial actions", () => {
     expect(sourceActionSignals("Send John USD 10 and get one Apple share.").map(({ type }) => type))
       .toEqual(["DELIVER_MONEY", "ACQUIRE_ASSET"]);
+  });
+
+  it("distinguishes a nominal stock purchase from an imperative purchase", () => {
+    expect(sourceActionSignals("Buy one Apple share and cover the stock purchase and its fees.").map(({ type }) => type)).toEqual(["ACQUIRE_ASSET"]);
+    expect(sourceActionSignals("Send John SGD 100, then purchase one Apple share.").map(({ type }) => type)).toEqual(["DELIVER_MONEY", "ACQUIRE_ASSET"]);
   });
 
   it.each([
