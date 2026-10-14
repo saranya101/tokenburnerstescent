@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { PrismaClient } from "@prisma/client";
 
 const userId = process.env.PARLANCE_CUSTOMER_USER_ID;
 if (!userId) throw new Error("PARLANCE_CUSTOMER_USER_ID_MISSING");
 
 const db = new PrismaClient();
+const groundingFixture = JSON.parse(readFileSync(new URL("./demo-grounding-fixture.json", import.meta.url), "utf8"));
 
 const accounts = [
   {
@@ -31,30 +33,9 @@ const accounts = [
   },
 ];
 
-const beneficiaries = [
-  { id: "ben-ntu", providerRef: "ben-ntu", name: "Nanyang Technological University", supportedCurrencies: ["USD"] },
-  { id: "ben-john-1", providerRef: "ben-john-1", name: "John Tan", supportedCurrencies: ["USD"] },
-  { id: "ben-john-2", providerRef: "ben-john-2", name: "John Lim", supportedCurrencies: ["USD"] },
-];
-
-const aliases = [
-  ["ASSET", "asset-aapl", "Apple"],
-  ["ASSET", "asset-aapl", "Apple share"],
-  ["ASSET", "asset-aapl", "Apple stock"],
-  ["ASSET", "asset-aapl", "AAPL"],
-  ["ACCOUNT", "acc-sgd", "my SGD account"],
-  ["ACCOUNT", "acc-sgd", "SGD account"],
-  ["ACCOUNT", "acc-sgd", "DBS Multiplier Account"],
-  ["ACCOUNT", "acc-usd", "my USD account"],
-  ["ACCOUNT", "acc-usd", "USD account"],
-  ["ACCOUNT", "acc-usd", "USD Wallet"],
-  ["BENEFICIARY", "ben-ntu", "NTU"],
-  ["BENEFICIARY", "ben-ntu", "Nanyang Technological University"],
-  ["BENEFICIARY", "ben-john-1", "John Tan"],
-  ["BENEFICIARY", "ben-john-1", "John"],
-  ["BENEFICIARY", "ben-john-2", "John Lim"],
-  ["BENEFICIARY", "ben-john-2", "John"],
-];
+const beneficiaries = groundingFixture.beneficiaries;
+const aliases = groundingFixture.aliases;
+const asset = groundingFixture.asset;
 
 function aliasId(entityType, entityId, alias) {
   const digest = createHash("sha256").update(`${userId}\0${entityType}\0${entityId}\0${alias}`).digest("hex").slice(0, 24);
@@ -88,9 +69,9 @@ try {
     }
 
     await tx.asset.upsert({
-      where: { id: "asset-aapl" },
-      create: { id: "asset-aapl", symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: true, settlementCurrency: "USD" },
-      update: { symbol: "AAPL", name: "Apple Inc.", assetType: "EQUITY", tradable: true, settlementCurrency: "USD" },
+      where: { id: asset.id },
+      create: asset,
+      update: asset,
     });
 
     for (const [entityType, entityId, alias] of aliases) {
