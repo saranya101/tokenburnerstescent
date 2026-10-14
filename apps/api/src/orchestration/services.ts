@@ -417,8 +417,8 @@ function semanticValidationFailed() {
 }
 
 function selectedGrounding(clarification: ClarificationItem, entityId: string, expectedEntityType: GroundableEntityType | undefined): EntityGroundingResult {
-  const option = clarification.options.find((item) => item.entityId === entityId && (expectedEntityType === undefined || item.entityType === expectedEntityType));
-  if (option === undefined) throw new Error("CLARIFICATION_OPTION_INVALID");
+  const option = clarification.options.find((item) => item.entityType !== "CURRENCY" && item.entityId === entityId && (expectedEntityType === undefined || item.entityType === expectedEntityType));
+  if (option === undefined || option.entityType === "CURRENCY") throw new Error("CLARIFICATION_OPTION_INVALID");
   return { status: "RESOLVED", reference: clarification.originalReference, entityType: option.entityType, entityId: option.entityId, resolutionMethod: "USER_CONFIRMED" };
 }
 

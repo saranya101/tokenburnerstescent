@@ -7,7 +7,7 @@ import { hashGoalBundleContract } from "@parlance/contracts/server";
 import {
   DeterministicGoalContractBuilder, DeterministicIntentBundleAmbiguityDetector, DeterministicIntentBundleCoverageValidator,
   DeterministicReadOnlyIntentValidator, GoalContractCandidateV1, groundingRequirementsForIntentBundle, intentDraftForBundleItem,
-  replaceClarifiedIntentBundleItem, sourceActionSignals,
+  replaceClarifiedIntentBundleItem, sourceActionClause, sourceActionSignals, sourceSupportsAmbiguousSpokenDollarAmount,
   type ClarificationItem, type EntityGrounder, type EntityGroundingResult, type GoalContractBuilder,
   type GroundableEntityType, type IndependentIntentValidationResult, type IndependentIntentValidator,
   type IntentBundleAmbiguityDetector, type IntentBundleInterpreter, type IntentBundleItemGroundingResults,
@@ -51,13 +51,24 @@ export class BundleMessageOrchestrationService {
     const intentBundle = IntentBundleDraftV1.parse(await this.interpreter.interpretUserRequest(input));
     const coverage = this.coverageValidator.validate({ sourceText: input.text, bundle: intentBundle });
     const createdAt = this.now().toISOString(); const recordId = this.newId();
+    const bundleId = this.newId();
     if (coverage.status === "FAIL") {
+      const currencyClarification = ambiguousTransferCurrencyClarification(input.text, intentBundle, coverage);
+      if (currencyClarification !== undefined) {
+        const grounding = await groundBundle(intentBundle, this.grounderForUser(input.userId));
+        const ambiguity = this.ambiguityDetector.analyze({ bundle: intentBundle, ...grounding });
+        const clarifications = [currencyClarification, ...(ambiguity.status === "NEEDS_CLARIFICATION" ? bundleClarifications(ambiguity) : [])];
+        const stored = await this.repository.saveBundleClarification({
+          clarificationId: recordId, bundleId, userId: input.userId, version: 1, createdAt, originalText: input.text,
+          intentBundle, ...grounding, clarifications, clarificationAnswers: [], inputProvenance: provenance, traceId,
+        });
+        return bundleClarificationResponse(stored);
+      }
       await this.repository.rejectBundleSemanticValidation({ recordId, userId: input.userId, schemaVersion: "1", createdAt, originalText: input.text, inputProvenance: provenance, validation: evidence(coverage, provenance), traceId });
       return semanticValidationFailed();
     }
     const grounding = await groundBundle(intentBundle, this.grounderForUser(input.userId));
     const ambiguity = this.ambiguityDetector.analyze({ bundle: intentBundle, ...grounding });
-    const bundleId = this.newId();
     if (ambiguity.status === "NEEDS_CLARIFICATION") {
       const clarifications = bundleClarifications(ambiguity);
       const stored = await this.repository.saveBundleClarification({
@@ -89,6 +100,28 @@ export class BundleMessageOrchestrationService {
     }
     const clarification = pending.clarifications[0];
     if (clarification === undefined) throw new Error("BUNDLE_CLARIFICATION_NOT_ANSWERABLE");
+    if (clarification.questionKey === "clarify.transfer.currency") {
+      if (!("selectedCandidateId" in answer)) throw new Error("CLARIFICATION_OPTION_INVALID");
+      const option = clarification.options.find((item) => item.entityId === answer.selectedCandidateId && item.entityType === "CURRENCY");
+      if (option?.currency !== "SGD" && option?.currency !== "USD") throw new Error("CLARIFICATION_OPTION_INVALID");
+      const intentBundle = updateClarifiedBundle(pending.intentBundle, clarification.field, option.currency);
+      const grounding = await groundBundle(intentBundle, this.grounderForUser(pending.userId));
+      const ambiguity = this.ambiguityDetector.analyze({ bundle: intentBundle, ...grounding });
+      const clarificationAnswers = [...pending.clarificationAnswers, { field: clarification.field, originalReference: clarification.originalReference, answer: option.displayName }];
+      const provenance = pending.inputProvenance ?? { inputMode: "TYPED" as const, submittedText: pending.originalText, edited: false as const };
+      const candidate = ambiguity.status === "CLEAR" ? buildCandidate(intentBundle, grounding.itemGroundingResults, grounding.globalGroundingResults, this.goalBuilder) : undefined;
+      const validation = candidate === undefined ? undefined : validateCandidate(pending.originalText, intentBundle, candidate, clarificationAnswers, this.coverageValidator, this.itemValidator);
+      if (validation?.status === "FAIL") {
+        await this.repository.rejectBundleSemanticValidation({ recordId: clarificationId, userId: pending.userId, schemaVersion: "1", createdAt: pending.createdAt, originalText: pending.originalText, inputProvenance: provenance, answerText: option.displayName, validation: evidence(validation, provenance, clarificationAnswers.map(({ answer: item }) => item)), traceId });
+        return semanticValidationFailed();
+      }
+      const progress = await this.repository.advanceBundleClarification({
+        ...pending, intentBundle, ...grounding, clarificationAnswers, answerText: option.displayName, traceId,
+        clarifications: ambiguity.status === "CLEAR" ? [] : bundleClarifications(ambiguity),
+        ...(candidate === undefined ? {} : { candidate, semanticValidation: evidence(validation!, provenance, clarificationAnswers.map(({ answer: item }) => item)) }),
+      });
+      return progress.status === "AWAITING_BUNDLE_CONFIRMATION" ? bundleCandidateResponse(progress.candidate) : bundleClarificationResponse(progress.request);
+    }
     const requirement = groundingRequirementsForIntentBundle(pending.intentBundle).find((item) => item.field === clarification.field && item.reference === clarification.originalReference);
     if (requirement === undefined) throw new Error("BUNDLE_CLARIFICATION_REQUIREMENT_NOT_FOUND");
     const answerText = "selectedCandidateId" in answer
@@ -179,6 +212,8 @@ function validateCandidate(sourceText: string, bundle: IntentBundleDraft, candid
   const clarifiedFields = new Set(answers.map(({ field }) => field));
   const mismatches = coverageValidator.validate({ sourceText, bundle }).mismatches.filter((mismatch) =>
     mismatch.code !== "REFERENCE_NOT_SUPPORTED_BY_SOURCE" || !clarifiedFields.has(mismatch.field)
+  ).filter((mismatch) =>
+    mismatch.code !== "MONEY_NOT_SUPPORTED_BY_SOURCE" || !clarifiedFields.has(`${mismatch.field}.currency`)
   );
   const actualEvidence = [sourceText, ...answers.map(({ answer }) => answer)].join("\n");
   const globalBindings = globalConstraintBindings(bundle, candidate, answers);
@@ -264,9 +299,38 @@ function replaceGrounding(results: readonly EntityGroundingResult[], reference: 
 }
 
 function selectedGrounding(clarification: ClarificationItem, entityId: string, expected: GroundableEntityType | undefined, reference: string): EntityGroundingResult {
-  const option = clarification.options.find((item) => item.entityId === entityId && (expected === undefined || item.entityType === expected));
-  if (!option) throw new Error("CLARIFICATION_OPTION_INVALID");
+  const option = clarification.options.find((item) => item.entityType !== "CURRENCY" && item.entityId === entityId && (expected === undefined || item.entityType === expected));
+  if (!option || option.entityType === "CURRENCY") throw new Error("CLARIFICATION_OPTION_INVALID");
   return { status: "RESOLVED", reference, entityType: option.entityType, entityId: option.entityId, resolutionMethod: "USER_CONFIRMED" };
+}
+
+function ambiguousTransferCurrencyClarification(sourceText: string, bundle: IntentBundleDraft, validation: IndependentIntentValidationResult): ClarificationItem | undefined {
+  if (validation.status !== "FAIL" || validation.mismatches.length !== 1) return undefined;
+  const mismatch = validation.mismatches[0];
+  const match = mismatch?.code === "MONEY_NOT_SUPPORTED_BY_SOURCE" ? /^items\[(\d+)\]\.goal\.amount$/u.exec(mismatch.field) : null;
+  if (!match) return undefined;
+  const index = Number(match[1]);
+  const item = bundle.items[index];
+  const signals = sourceActionSignals(sourceText);
+  const clause = sourceActionClause(sourceText, signals, index);
+  if (item?.goal.type !== "DELIVER_MONEY" || clause === undefined || !sourceSupportsAmbiguousSpokenDollarAmount(clause, item.goal.amount.minorUnits)) return undefined;
+  const amount = displayWholeMoney(item.goal.amount.minorUnits);
+  if (amount === undefined) return undefined;
+  return {
+    reason: "MISSING_FIELD",
+    field: `items[${index}].goal.amount.currency`,
+    originalReference: `transfer to ${item.goal.recipientReference}`,
+    questionKey: "clarify.transfer.currency",
+    options: [
+      { entityId: `currency-sgd-${item.goal.amount.minorUnits}`, entityType: "CURRENCY", displayName: `SGD ${amount}`, currency: "SGD" },
+      { entityId: `currency-usd-${item.goal.amount.minorUnits}`, entityType: "CURRENCY", displayName: `USD ${amount}`, currency: "USD" },
+    ],
+  };
+}
+
+function displayWholeMoney(minorUnits: string): string | undefined {
+  const value = BigInt(minorUnits);
+  return value > 0n && value % 100n === 0n ? (value / 100n).toString() : undefined;
 }
 
 function rebaseGrounding(result: EntityGroundingResult, reference: string, expected: GroundableEntityType | undefined): EntityGroundingResult {

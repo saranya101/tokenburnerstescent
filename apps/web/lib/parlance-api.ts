@@ -6,7 +6,7 @@ import {
 
 export type GoalCandidate = Pick<GoalContract, "schemaVersion" | "goal" | "constraints" | "preferences" | "entityBindings">;
 export type GoalBundleCandidate = Pick<GoalBundleContract, "schemaVersion" | "items" | "globalConstraints" | "explicitDependencies">;
-export type ClarificationOption = { entityId: string; entityType: "ACCOUNT" | "BENEFICIARY" | "ASSET" | "BILLER" | "OBLIGATION"; displayName: string; currency?: string; availableMinorUnits?: string };
+export type ClarificationOption = { entityId: string; entityType: "ACCOUNT" | "BENEFICIARY" | "ASSET" | "BILLER" | "OBLIGATION" | "CURRENCY"; displayName: string; currency?: string; availableMinorUnits?: string };
 export type Clarification = { reason: string; field: string; originalReference: string; questionKey: string; options: ClarificationOption[] };
 export type MessageResponse =
   | { status: "NEEDS_CLARIFICATION"; clarificationId: string; clarifications: Clarification[] }

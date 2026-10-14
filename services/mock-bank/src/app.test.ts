@@ -1,5 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildApp, resolveInitialStateConfiguration } from "./app.js";
+
+const groundingFixture = JSON.parse(readFileSync(new URL("../../../packages/db/prisma/demo-grounding-fixture.json", import.meta.url), "utf8")) as {
+  beneficiaries: Array<{ id: string; providerRef: string; name: string; supportedCurrencies: string[] }>;
+  asset: { id: string; symbol: string; name: string; assetType: string; tradable: boolean; settlementCurrency: string };
+  aliases: Array<[string, string, string]>;
+};
 
 const quote = { quoteId: "asset-quote-aapl-usd-v1", assetId: "asset-aapl", settlementCurrency: "USD", unitPriceMinor: "20000", feeMinor: "100", expiresAt: "2099-01-01T00:00:00.000Z" };
 const adminAuthorization = { demoMode: true, opsToken: "test-ops-token", demoUserId: "buyer" };
@@ -67,6 +74,22 @@ describe("mock bank", () => {
       { id: "ben-john-tan", name: "John Tan", supportedCurrencies: ["SGD"], status: "ACTIVE" },
       { id: "ben-john-lim", name: "John Lim", supportedCurrencies: ["SGD"], status: "ACTIVE" },
     ]);
+  });
+  it("keeps the Prisma grounding fixture aligned with the authoritative mock-bank catalog", async () => {
+    const state = await bankState(bankApp(), "fixture-customer");
+    expect(groundingFixture.beneficiaries.map((beneficiary) => ({
+      id: beneficiary.id,
+      name: beneficiary.name,
+      supportedCurrencies: beneficiary.supportedCurrencies,
+      status: "ACTIVE",
+    }))).toEqual(state.beneficiaries);
+    expect(state.assets).toContainEqual(groundingFixture.asset);
+    expect(groundingFixture.beneficiaries.filter(({ name }) => name.startsWith("John"))).toEqual([
+      { id: "ben-john-tan", providerRef: "ben-john-tan", name: "John Tan", supportedCurrencies: ["SGD"] },
+      { id: "ben-john-lim", providerRef: "ben-john-lim", name: "John Lim", supportedCurrencies: ["SGD"] },
+    ]);
+    expect(groundingFixture.aliases.filter((alias) => alias[0] === "BENEFICIARY" && alias[2] === "John").map((alias) => alias[1]).sort()).toEqual(["ben-john-lim", "ben-john-tan"]);
+    expect(groundingFixture.aliases.filter((alias) => alias[0] === "ASSET" && alias[1] === "asset-aapl").map((alias) => alias[2])).toEqual(expect.arrayContaining(["Apple", "Apple Inc.", "Apple (AAPL)", "AAPL"]));
   });
   it("enforces the advertised beneficiary currencies before mutating a transfer", async () => {
     const accepted = bankApp();

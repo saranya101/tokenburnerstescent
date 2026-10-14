@@ -16,7 +16,7 @@ const bankState = BankStateSnapshotV1.parse({
   stateVersion: 3,
   capturedAt: "2026-10-03T00:00:00.000Z",
   accounts: [
-    { id: "acc-sgd", type: "CHECKING", currency: "SGD", ledgerMinorUnits: "2000000", availableMinorUnits: "2000000", status: "ACTIVE", capabilities: ["SEND_TRANSFER", "RECEIVE_TRANSFER"] },
+    { id: "acc-sgd", type: "CHECKING", currency: "SGD", ledgerMinorUnits: "2000000", availableMinorUnits: "2000000", status: "ACTIVE", capabilities: ["SEND_TRANSFER", "RECEIVE_TRANSFER", "TRADE_ASSET"] },
     { id: "acc-usd", type: "BROKERAGE", currency: "USD", ledgerMinorUnits: "449900", availableMinorUnits: "449900", status: "ACTIVE", capabilities: ["SEND_TRANSFER", "TRADE_ASSET"] },
   ],
   beneficiaries: [
@@ -33,6 +33,7 @@ const bankState = BankStateSnapshotV1.parse({
 });
 const activity = CustomerActivityV1.parse({ items: [
   { occurredAt: "2026-10-03T10:00:00.000Z", description: "Transfer to John Tan", accountLabel: "USD Account", amount: { currency: "USD", minorUnits: "30000" }, direction: "DEBIT", status: "COMPLETED" },
+  { occurredAt: "2026-10-03T10:00:30.000Z", description: "Convert SGD to USD", accountLabel: "SGD Account", amount: { currency: "SGD", minorUnits: "26800" }, direction: "DEBIT", status: "COMPLETED" },
   { occurredAt: "2026-10-03T10:01:00.000Z", description: "Buy 1 AAPL", accountLabel: "USD Account", amount: { currency: "USD", minorUnits: "20100" }, direction: "DEBIT", status: "COMPLETED" },
 ] });
 
@@ -50,7 +51,10 @@ describe("authoritative customer banking presentation", () => {
     expect(html).toContain("S$20,000.00");
     expect(html).toContain("US$4,499.00");
     expect(html).toContain("Buy 1 AAPL");
-    expect(html).toContain("Market watch");
+    expect(html).not.toContain("Convert SGD to USD");
+    expect(html).toContain("Explore &amp; Invest");
+    expect(html).toContain("Buy more");
+    expect(html).toContain("draft=Buy+1+share+of+Apple+Inc.+%28AAPL%29.");
     expect(html).toContain("Historical valuation data is not available");
     expect(html).not.toMatch(/daily gain|top gainers|most active|US\$201\.24/iu);
     expect(html).toContain("not external market prices");
@@ -62,7 +66,7 @@ describe("authoritative customer banking presentation", () => {
     expect(html).toContain("Apple Inc.");
     expect(html).toContain("1 share");
     expect(html).toContain("No fresh quote");
-    expect(html).toContain("Current value</dt><dd>Unavailable");
+    expect(html).toContain('data-label="Market value">Unavailable');
   });
 
   it("treats an expired quote as unavailable instead of valuing the portfolio", () => {
@@ -79,6 +83,7 @@ describe("authoritative customer banking presentation", () => {
     expect(html).toContain("US$4,499.00");
     expect(html).toContain("AAPL"); expect(html).toContain("1 share"); expect(html).toContain("US$200.00");
     expect(html).toContain("Transfer to John Tan"); expect(html).toContain("−US$300.00"); expect(html).toContain("−US$201.00");
+    expect(html).toContain("Convert SGD to USD"); expect(html).toContain("−S$268.00");
     expect(html).not.toMatch(/24,830\.40|4,750\.00|S\$24,499\.00|Total balance|Monthly cashflow|Illustrative/u);
   });
 
@@ -86,6 +91,7 @@ describe("authoritative customer banking presentation", () => {
     const html = renderToStaticMarkup(createElement(ChatBankingSidebarView, { state: bankState, activity, loading: false }));
     expect(html).toContain("Your accounts"); expect(html).toContain("S$20,000.00"); expect(html).toContain("US$4,499.00");
     expect(html).toContain("Recent transactions"); expect(html).toContain("Transfer to John Tan"); expect(html).toContain("−US$300.00");
+    expect(html).toContain("Convert SGD to USD"); expect(html).toContain("−S$268.00");
     expect(html).not.toMatch(/Insights for you|Move money with confidence|Try asking about/iu);
   });
 
@@ -157,10 +163,21 @@ describe("authoritative customer banking presentation", () => {
     expect(html).not.toMatch(/AI Insights|Portfolio Insights/iu);
   });
 
+  it("renders honest investment loading and error states", () => {
+    const loading = renderToStaticMarkup(createElement(InvestmentView, { loading: true }));
+    expect(loading).toContain("Loading your investments");
+    expect(loading).toContain("Checking your current holdings, accounts and demo bank quotes");
+
+    const failed = renderToStaticMarkup(createElement(InvestmentView, { loading: false, error: "CUSTOMER_STATE_UNAVAILABLE" }));
+    expect(failed).toContain("Investments are temporarily unavailable");
+    expect(failed).toContain("Please refresh and try again");
+  });
+
   it("links authoritative sections to dedicated customer pages", () => {
     expect(customerDesktopNavigation.find((item) => item.id === "home")?.href).toBe("/");
     expect(customerDesktopNavigation.find((item) => item.id === "accounts")?.href).toBe("/accounts");
     expect(customerDesktopNavigation.find((item) => item.id === "invest")?.href).toBe("/invest");
     expect(customerDesktopNavigation.find((item) => item.id === "parlance")?.href).toBe("/chat");
+    expect(customerDesktopNavigation.some((item) => item.id === "cards")).toBe(false);
   });
 });
