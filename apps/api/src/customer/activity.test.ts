@@ -6,14 +6,12 @@ describe("customer activity projection", () => {
 
   it("projects settled plan semantics without operator-only fields", () => {
     const transfer = presentCustomerActivity({ occurredAt, step: { id: "transfer", sequence: 0, action: "TRANSFER", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-usd", beneficiaryId: "ben-john-1", amount: { currency: "USD", minorUnits: "30000" } } } }, new Map([["ben-john-1", "John Tan"]]), new Map());
+    const fx = presentCustomerActivity({ occurredAt, step: { id: "fx", sequence: 1, action: "FX_CONVERT", dependsOn: ["transfer"], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", sourceMoney: { currency: "SGD", minorUnits: "26800" }, targetCurrency: "USD", quoteId: "quote-sgd-usd-v1" } } }, new Map(), new Map());
     const buy = presentCustomerActivity({ occurredAt, step: { id: "buy", sequence: 1, action: "BUY_ASSET", dependsOn: ["transfer"], reversible: false, parameters: { sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1", maximumSpend: { currency: "USD", minorUnits: "25000" }, quoteId: "asset-quote-aapl-usd-v1", settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } } }, new Map(), new Map([["asset-aapl", "AAPL"]]));
     expect(transfer).toEqual(expect.objectContaining({ description: "Transfer to John Tan", accountLabel: "USD Account", amount: { currency: "USD", minorUnits: "30000" }, status: "COMPLETED" }));
+    expect(fx).toEqual(expect.objectContaining({ description: "Convert SGD to USD", accountLabel: "SGD Account", amount: { currency: "SGD", minorUnits: "26800" }, status: "COMPLETED" }));
     expect(buy).toEqual(expect.objectContaining({ description: "Buy 1 AAPL", accountLabel: "USD Account", amount: { currency: "USD", minorUnits: "20100" }, status: "COMPLETED" }));
-    expect(JSON.stringify([transfer, buy])).not.toMatch(/idempotency|bankReference|planHash|traceId/u);
-  });
-
-  it("does not expose unsupported plan actions", () => {
-    expect(presentCustomerActivity({ occurredAt, step: { id: "fx", sequence: 0, action: "FX_CONVERT", dependsOn: [], reversible: false, parameters: { sourceAccountId: "acc-sgd", destinationAccountId: "acc-usd", from: { currency: "SGD", minorUnits: "100" }, toCurrency: "USD", quoteId: "quote" } } }, new Map(), new Map())).toBeUndefined();
+    expect(JSON.stringify([transfer, fx, buy])).not.toMatch(/idempotency|bankReference|planHash|traceId/u);
   });
 
   it("queries terminal runs for the configured user and returns settled steps newest first", async () => {

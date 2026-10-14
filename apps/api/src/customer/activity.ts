@@ -28,6 +28,17 @@ export function presentCustomerActivity(input: SettledStep, beneficiaries: Reado
       ...(input.planOutcome ? { planOutcome: input.planOutcome } : {}),
     };
   }
+  if (step.action === "FX_CONVERT") {
+    return {
+      occurredAt: input.occurredAt.toISOString(),
+      description: `Convert ${step.parameters.sourceMoney.currency} to ${step.parameters.targetCurrency}`,
+      accountLabel: accountLabel(step.parameters.sourceAccountId, step.parameters.sourceMoney.currency),
+      amount: step.parameters.sourceMoney,
+      direction: "DEBIT",
+      status: "COMPLETED",
+      ...(input.planOutcome ? { planOutcome: input.planOutcome } : {}),
+    };
+  }
   if (step.action === "BUY_ASSET") {
     return {
       occurredAt: input.occurredAt.toISOString(),

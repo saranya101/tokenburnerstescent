@@ -595,6 +595,94 @@ svg { display:block; }
 @media (max-width:767px) { .is-invest-shell .banking-content { background:#f5f6f8; }.investment-page-heading { min-height:112px; }.investment-page-heading h1 { font-size:1.9rem; }.wealth-main-grid { grid-template-columns:1fr; }.wealth-portfolio-card,.wealth-featured-card,.wealth-allocation-card,.wealth-accounts-card { grid-column:1; }.wealth-portfolio-card { padding:24px 21px; }.wealth-portfolio-card h2 { font-size:2.55rem; }.wealth-featured-card { padding:21px; }.wealth-featured-card dl { grid-template-columns:1fr; gap:9px; }.wealth-featured-card dl>div+div { padding:9px 0 0; border-left:0; border-top:1px solid #eceef0; }.wealth-allocation-card,.wealth-accounts-card { padding:20px; }.market-pulse,.investment-activity-wide { padding:20px 17px 10px; }.market-pulse>header { align-items:flex-start; }.market-boundary { font-size:.58rem; }.investment-activity-wide .investment-activity-list article { grid-template-columns:66px minmax(0,1fr) auto; gap:8px; }.investment-activity-wide .investment-activity-list article>span { display:none; } }
 @media (max-width:480px) { .investment-page-heading>.button { padding-inline:13px; }.wealth-tabs { gap:18px; }.wealth-portfolio-card dl { grid-template-columns:1fr; }.wealth-portfolio-card dl>div:nth-child(even) { padding-left:0; border-left:0; }.wealth-allocation-card,.wealth-accounts-card { grid-column:1; }.investment-activity-wide .investment-activity-list article { grid-template-columns:1fr auto; }.investment-activity-wide .investment-activity-list time { grid-column:1/-1; }.investment-activity-wide .investment-activity-list article>small { grid-column:1; }.investment-activity-wide .investment-activity-list article>b { grid-column:2; grid-row:2; } }
 
+/* Light investment workspace */
+.is-invest-shell .banking-sidebar { border-right-color:rgba(22,24,29,.07); background:#fff; }
+.is-invest-shell .banking-sidebar nav a { color:#555b64; }
+.is-invest-shell .banking-sidebar nav a svg { color:#7e838b; }
+.is-invest-shell .banking-sidebar nav a:hover { color:var(--ink); background:#f5f6f7; }
+.is-invest-shell .banking-sidebar nav a.is-active { border-radius:0; color:var(--red); background:#fff; }
+.is-invest-shell .banking-sidebar nav a.is-active svg { color:var(--red); }
+.is-invest-shell .banking-sidebar nav a.is-active::before { display:block; }
+.is-invest-shell .banking-sidebar .sidebar-secondary { border-top-color:var(--line); }
+.is-invest-shell .sidebar-secondary a { color:#787d85!important; }
+.is-invest-shell .banking-content { background:var(--page); }
+.investment-page { width:min(1180px,100%); max-width:none; margin:0 auto; }
+.investment-page-heading { min-height:auto; align-items:flex-end; padding:0 0 20px; }
+.investment-page-heading h1 { font-size:clamp(1.8rem,2.4vw,2.2rem); }
+.investment-page-heading>div>span { font-size:.78rem; }
+.wealth-dashboard-final { gap:18px; }
+.wealth-dashboard-final .wealth-tabs { margin:0; }
+.wealth-overview-grid { display:grid; grid-template-columns:minmax(280px,1.1fr) minmax(220px,.72fr) minmax(280px,1fr); gap:16px; }
+.wealth-portfolio-card,.wealth-allocation-card,.wealth-accounts-card { min-width:0; padding:20px 22px; border:1px solid #dfe2e5; border-radius:10px; color:var(--ink); background:#fff; box-shadow:0 5px 18px rgba(25,29,36,.035); }
+.wealth-portfolio-card { grid-row:auto; overflow:visible; }
+.wealth-card-kicker { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.wealth-card-kicker>span,.wealth-allocation-card header>span,.wealth-accounts-card header>span { color:var(--muted); font-size:.59rem; font-weight:720; letter-spacing:.035em; text-transform:uppercase; }
+.wealth-card-kicker small { display:flex; align-items:center; gap:6px; color:#697079; font-size:.56rem; }
+.wealth-card-kicker i { width:6px; height:6px; border-radius:50%; background:var(--green); }
+.portfolio-value { display:grid; gap:3px; margin:15px 0 4px; }
+.portfolio-value strong { font-size:clamp(1.75rem,2.7vw,2.2rem); line-height:1.08; font-weight:670; letter-spacing:-.045em; font-variant-numeric:tabular-nums; }
+.wealth-portfolio-card>p { margin:0; color:var(--body); font-size:.63rem; }
+.wealth-portfolio-card dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0; margin:18px 0 0; border-block:1px solid #eceef0; }
+.wealth-portfolio-card dl>div { display:grid; gap:4px; padding:12px 0; border:0; }
+.wealth-portfolio-card dl>div:nth-child(even) { padding-left:18px; border-left:1px solid #eceef0; }
+.wealth-portfolio-card dt { color:var(--muted); font-size:.56rem; }
+.wealth-portfolio-card dd { margin:0; color:var(--ink); font-size:.72rem; font-weight:680; }
+.wealth-portfolio-card footer { display:flex; align-items:flex-start; gap:8px; margin-top:12px; color:#6f757e; font-size:.57rem; line-height:1.45; }
+.wealth-portfolio-card footer svg { width:14px; flex:none; color:var(--green); }
+.wealth-allocation-card,.wealth-accounts-card { padding:20px; }
+.wealth-allocation-card header h2,.wealth-accounts-card header h2 { margin:4px 0 0; font-size:.92rem; }
+.allocation-list { display:grid; gap:14px; margin-top:20px; }
+.allocation-list>div { display:grid; gap:7px; }
+.allocation-list>div>div { display:flex; align-items:center; justify-content:space-between; font-size:.64rem; }
+.allocation-list b { font-size:.65rem; font-variant-numeric:tabular-nums; }
+.allocation-track { height:5px; overflow:hidden; border-radius:99px; background:#eceef0; }
+.allocation-track i { display:block; height:100%; max-width:100%; border-radius:inherit; background:var(--red); }
+.allocation-unavailable { padding:25px 0 10px; }
+.wealth-accounts-card>div { margin-top:11px; }
+.wealth-accounts-card section { min-height:57px; }
+.wealth-accounts-card section>span { width:31px; height:31px; border-radius:8px; }
+.wealth-accounts-card section>b { white-space:nowrap; }
+.wealth-card { border-color:#dfe2e5; border-radius:10px; box-shadow:0 5px 18px rgba(25,29,36,.035); }
+.wealth-holdings>header { padding:19px 22px 14px; }
+.wealth-table-head { min-height:36px; padding:0 22px; }
+.wealth-table>article { min-height:70px; padding:11px 22px; }
+.asset-mark { color:#9f2026; background:#fff0f1; box-shadow:none; }
+.wealth-row-action { width:fit-content; color:var(--red-dark); font-size:.63rem; font-weight:720; }
+.wealth-row-action:hover { text-decoration:underline; text-underline-offset:3px; }
+.holdings-empty { display:grid; justify-items:center; padding:31px 22px 35px; text-align:center; }
+.holdings-empty>span { width:43px; height:43px; display:grid; place-items:center; border-radius:11px; color:#737a83; background:#f1f3f4; }
+.holdings-empty svg { width:21px; }
+.holdings-empty h3 { margin:12px 0 4px; font-size:.86rem; }
+.holdings-empty p { margin:0 0 16px; color:var(--body); font-size:.65rem; }
+.market-pulse,.investment-activity-wide { padding:20px 22px 10px; }
+.market-pulse-strip article { border-radius:8px; background:#fff; }
+.market-boundary { border-radius:6px; }
+.investment-activity-head { border-radius:4px; }
+.investment-disclosure { border-left-color:#8f969f; }
+
+@media (max-width:1080px) {
+  .wealth-overview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .wealth-portfolio-card { grid-column:1/-1; }
+}
+@media (max-width:767px) {
+  .investment-page-heading { min-height:auto; align-items:flex-end; }
+  .investment-page-heading h1 { font-size:1.75rem; }
+  .wealth-overview-grid { grid-template-columns:1fr; }
+  .wealth-portfolio-card,.wealth-allocation-card,.wealth-accounts-card { grid-column:1; padding:18px; }
+  .wealth-holdings>header { padding:18px 17px 14px; }
+  .wealth-table>article { padding:16px 17px; }
+  .wealth-table>article>.wealth-row-action,.wealth-table>article>.wealth-status { justify-self:end; }
+  .market-pulse,.investment-activity-wide { padding:18px 17px 10px; }
+}
+@media (max-width:480px) {
+  .investment-page-heading { gap:14px; }
+  .investment-page-heading>div>span { font-size:.69rem; }
+  .wealth-tabs { gap:18px; }
+  .wealth-portfolio-card dl { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .wealth-portfolio-card dl>div:nth-child(even) { padding-left:14px; border-left:1px solid #eceef0; }
+  .portfolio-value strong { font-size:1.75rem; }
+}
+
 /* Saved payees */
 .workspace-payees-link { display:inline-flex; align-items:center; gap:8px; flex:none; padding:10px 13px; border:1px solid #dfe2e5; border-radius:10px; color:#30343a; background:rgba(255,255,255,.78); font-size:.68rem; font-weight:700; text-decoration:none; }.workspace-payees-link:hover { border-color:#d71920; color:#d71920; }.workspace-payees-link svg { width:17px; }
 .payees-page { max-width:980px; }.saved-payees { display:grid; gap:18px; }.payee-search { width:min(430px,100%); min-height:46px; display:flex; align-items:center; gap:10px; padding:0 14px; border:1px solid #dfe2e5; border-radius:10px; background:#fff; box-shadow:0 4px 14px rgba(20,24,32,.03); }.payee-search:focus-within { border-color:#d71920; box-shadow:0 0 0 3px rgba(215,25,32,.09); }.payee-search svg { width:18px; color:#747a83; }.payee-search input { width:100%; border:0; outline:0; color:#20242a; background:transparent; font:inherit; font-size:.74rem; }.payee-list { overflow:hidden; border:1px solid #dfe2e5; border-radius:12px; background:#fff; box-shadow:0 8px 24px rgba(27,32,40,.04); }.payee-row { min-height:88px; display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:17px; padding:16px 19px; }.payee-row+.payee-row { border-top:1px solid #eceef0; }.payee-avatar { width:48px; height:48px; display:grid; place-items:center; border-radius:50%; color:#fff; background:#31363d; font-size:.7rem; font-weight:800; letter-spacing:.02em; }.payee-identity h2 { margin:0; font-size:.88rem; }.payee-identity p { margin:5px 0 0; color:#747a83; font-size:.65rem; }.payee-status { padding:5px 8px; border-radius:999px; color:#23744b; background:#eaf7f0; font-size:.58rem; font-weight:750; }.payee-status.is-unavailable { color:#7c6161; background:#f4eeee; }.payee-send { min-width:116px; justify-content:center; }.payee-send svg { width:15px; }.payee-safety-note { display:flex; align-items:flex-start; gap:8px; margin:0; color:#6d737b; font-size:.62rem; line-height:1.55; }.payee-safety-note svg { width:16px; flex:none; color:#28754e; }
