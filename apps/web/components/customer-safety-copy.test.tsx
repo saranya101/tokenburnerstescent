@@ -21,6 +21,7 @@ import { UnderstoodGoalCard } from "./goal/understood-goal-card";
 import { UnderstoodBundleCard } from "./goal/understood-bundle-card";
 import { FinancialPlanPreview } from "./plan/financial-plan-preview";
 import { RiskOutcomeCard } from "./risk/risk-outcome-card";
+import { PasskeyUnavailableCard } from "./security/passkey-setup-card";
 
 const scenario: PlanPresentation = {
   goal: { eyebrow: "Send money", title: "Send USD 70.00 to Nanyang Technological University", description: "Send money", details: [{ label: "Amount", value: "USD 70.00" }, { label: "To", value: "Nanyang Technological University" }], constraints: [], preferences: [] },
@@ -295,6 +296,21 @@ it("enables exact-plan approval only after refreshed review data matches", () =>
   const html = renderToStaticMarkup(createElement(FinancialPlanPreview, { scenario: investmentScenario, onCancel: vi.fn(), onApprove: vi.fn(), onRefreshQuote: vi.fn(), reviewReady: true }));
   expect(html).toContain(">Confirm with passkey</button>");
   expect(html).not.toMatch(/button[^>]*disabled=""[^>]*>Confirm with passkey/u);
+});
+
+it("keeps public plan review visible without a financial authorization action", () => {
+  const html = renderToStaticMarkup(createElement(FinancialPlanPreview, {
+    scenario: combinedScenario, onCancel: vi.fn(), onApprove: vi.fn(), authorizationAvailable: false,
+  }));
+  expect(html).toContain("Plan review only. Financial authorization is unavailable.");
+  expect(html).toContain("Keep at least SGD 1,000.00");
+  expect(html).not.toContain("Confirm with passkey");
+});
+
+it("explains public passkey unavailability without offering an unusable retry", () => {
+  const html = renderToStaticMarkup(createElement(PasskeyUnavailableCard));
+  expect(html).toContain("Passkey setup and financial execution are disabled");
+  expect(html).not.toContain("Try again");
 });
 
 it("renders the completed investment receipt from authoritative current state", () => {

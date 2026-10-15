@@ -16,6 +16,17 @@ const copy = {
   FAILED: ["Passkey setup could not be verified", "No transaction was authorized. Try again when ready."],
 } as const;
 
+export function PasskeyUnavailableCard() {
+  return <section className={`product-card ${styles.card}`} aria-live="polite">
+    <div className={styles.icon}><Icon name="shield" /></div>
+    <div className={styles.content}>
+      <p className="eyebrow">Security / Passkeys</p>
+      <h2>Financial authorization is unavailable</h2>
+      <p className="card-description">You can review banking plans here. Passkey setup and financial execution are disabled on this public demonstration.</p>
+    </div>
+  </section>;
+}
+
 export function PasskeySetupCard({ transaction, onReady }: { transaction?: boolean; onReady?(): void }) {
   const { state, enroll, reload } = usePasskeyOnboarding(); const prior = useRef(state.phase);
   useEffect(() => { if (state.phase === "READY" && prior.current === "ENROLLING") onReady?.(); prior.current = state.phase; }, [onReady, state.phase]);
