@@ -196,7 +196,10 @@ export function buildApp(options: MockBankOptions = {}) {
   app.get("/health", async () => ({ status: "ok", service: "mock-bank" }));
   app.get("/ready", async (_request, reply) => securityConfiguration().ready ? { status: "ready" } : reply.code(503).send({ status: "not_ready" }));
   app.get("/v1/service/ready", async () => ({ status: "ready" }));
-  app.get("/v1/executions/idempotency/:key", async (request) => {
+  app.get("/v1/executions/idempotency/:key", async (request, reply) => {
+    // A PostgreSQL customer snapshot has no durable bank-operation ledger yet.
+    // An in-memory NOT_FOUND would falsely authorize a retry after a restart.
+    if (options.customerSnapshot) return reply.code(503).send({ code: "BANK_LOOKUP_UNAVAILABLE" });
     const { key } = z.object({ key: Id }).parse(request.params); const prior = idempotency.get(key);
     return prior ? { status: "COMPLETED" as const, idempotencyKey: key, operation: prior.operation, requestHash: prior.requestHash, ...prior.response } : { status: "NOT_FOUND" as const, idempotencyKey: key };
   });

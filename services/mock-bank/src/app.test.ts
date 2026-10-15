@@ -33,6 +33,9 @@ it("serves a persisted customer snapshot while blocking all bank execution", asy
   expect(await bankState(app, "approved-customer")).toMatchObject({ userId: "approved-customer", stateVersion: 9, holdings: [{ assetId: "asset-aapl", quantity: "2" }] });
   expect((await buy(app)).statusCode).toBe(403);
   expect((await executeFx(app, "quote-id")).statusCode).toBe(403);
+  const lookup = await app.inject({ method: "GET", url: "/v1/executions/idempotency/restarted-key", headers: bankHeaders });
+  expect(lookup.statusCode).toBe(503);
+  expect(lookup.json()).toEqual({ code: "BANK_LOOKUP_UNAVAILABLE" });
   await app.close();
 });
 const executeFx = (app: ReturnType<typeof buildApp>, quoteId: string, fromAmount = { currency: "SGD", minorUnits: "26800" }, key = "fx-key") => app.inject({
