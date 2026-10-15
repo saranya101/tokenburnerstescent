@@ -40,12 +40,14 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const path = parts.join("/");
   if (!allowed(method, path)) return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
   const publicSafe = process.env.PARLANCE_PUBLIC_SAFE_MODE === "true";
-  // Browser passkey authorization and execution remain closed in public mode.
+  const enrollmentEnabled = process.env.PARLANCE_PUBLIC_PASSKEY_ENROLLMENT_ENABLED === "true";
+  const enrollmentRoute = method === "GET" ? /^webauthn\/registration\/status$/u.test(path) : /^webauthn\/registration\/(?:options|verify)$/u.test(path);
+  // Enrollment can be enabled independently; approval and execution remain closed.
   if (publicSafe && !([/^customer\/(?:state|activity)$/u, /^executions\/[^/]+\/detail$/u].some((pattern) => method === "GET" && pattern.test(path)) ||
       [/^messages$/u, /^clarifications\/[^/]+\/answer$/u, /^bundle-clarifications\/[^/]+\/answer$/u,
         /^goal-candidates\/[^/]+\/confirm$/u, /^goal-bundle-candidates\/[^/]+\/confirm$/u,
         /^goals\/[^/]+\/(?:compile|funding-candidate)$/u, /^goal-bundles\/[^/]+\/compile$/u]
-        .some((pattern) => method === "POST" && pattern.test(path)))) return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
+        .some((pattern) => method === "POST" && pattern.test(path)) || enrollmentEnabled && enrollmentRoute)) return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
   if (publicSafe && (!webAuthEnabled() || (method === "POST" && !sameOrigin(request)))) return NextResponse.json({ code: "FORBIDDEN" }, { status: 403 });
   let customer: Awaited<ReturnType<typeof webCustomer>>;
   if (publicSafe) {

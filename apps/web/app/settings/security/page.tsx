@@ -6,5 +6,6 @@ import styles from "./security.module.css";
 export default async function SecuritySettingsPage() {
   await connection();
   const publicSafeMode = process.env.PARLANCE_PUBLIC_SAFE_MODE === "true";
-  return <BankingShell active="settings"><div className={styles.page}><header><p>Settings</p><h1>Security</h1><span>Manage how you verify sensitive banking actions.</span></header>{publicSafeMode ? <PasskeyUnavailableCard /> : <PasskeySetupCard />}</div></BankingShell>;
+  const enrollmentEnabled = process.env.PARLANCE_PUBLIC_PASSKEY_ENROLLMENT_ENABLED === "true";
+  return <BankingShell active="settings"><div className={styles.page}><header><p>Settings</p><h1>Security</h1><span>Manage how you verify sensitive banking actions.</span></header>{publicSafeMode && !enrollmentEnabled ? <PasskeyUnavailableCard /> : <PasskeySetupCard enrollmentOnly={publicSafeMode} />}</div></BankingShell>;
 }

@@ -27,14 +27,14 @@ export function PasskeyUnavailableCard() {
   </section>;
 }
 
-export function PasskeySetupCard({ transaction, onReady }: { transaction?: boolean; onReady?(): void }) {
+export function PasskeySetupCard({ transaction, enrollmentOnly = false, onReady }: { transaction?: boolean; enrollmentOnly?: boolean; onReady?(): void }) {
   const { state, enroll, reload } = usePasskeyOnboarding(); const prior = useRef(state.phase);
   useEffect(() => { if (state.phase === "READY" && prior.current === "ENROLLING") onReady?.(); prior.current = state.phase; }, [onReady, state.phase]);
   const [title, detail] = copy[state.phase]; const canEnroll = ["NOT_ENROLLED", "CANCELLED", "EXPIRED", "UNAVAILABLE", "FAILED"].includes(state.phase);
   return <section className={`product-card ${styles.card}`} aria-live="polite">
     <div className={styles.icon}><Icon name="shield" /></div>
     <div className={styles.content}>
-      <p className="eyebrow">Security / Passkeys</p><h2>{transaction && state.phase === "NOT_ENROLLED" ? "Set up a passkey to authorize transactions" : title}</h2><p className="card-description">{detail}</p>
+      <p className="eyebrow">Security / Passkeys</p><h2>{transaction && state.phase === "NOT_ENROLLED" ? "Set up a passkey to authorize transactions" : title}</h2><p className="card-description">{enrollmentOnly ? state.phase === "READY" ? "Your passkey is enrolled. Financial execution is currently disabled." : "Set up a passkey for future synthetic transaction approval. Financial execution is currently disabled." : detail}</p>
       <div className={styles.requirement}><Icon name="check" /><span>User verification required</span></div>
       <div className="card-actions">
         {canEnroll && <button className="button bank-primary" type="button" onClick={() => void enroll()}>{state.phase === "NOT_ENROLLED" ? "Set up passkey" : "Try again"}</button>}
