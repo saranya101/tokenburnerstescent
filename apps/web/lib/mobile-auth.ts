@@ -80,3 +80,8 @@ export async function revokeMobileSession(refreshToken: string): Promise<void> {
   if (!TOKEN_PATTERN.test(refreshToken)) return;
   await getPrismaClient().mobileSession.updateMany({ where: { refreshHash: hash(refreshToken), revokedAt: null }, data: { revokedAt: new Date() } });
 }
+
+export async function revokeAccessSession(accessToken: string): Promise<void> {
+  if (!TOKEN_PATTERN.test(accessToken)) return;
+  await getPrismaClient().mobileSession.updateMany({ where: { accessHash: hash(accessToken), revokedAt: null }, data: { revokedAt: new Date() } });
+}

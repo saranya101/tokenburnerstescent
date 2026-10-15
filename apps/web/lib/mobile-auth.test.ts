@@ -11,15 +11,15 @@ vi.mock("@parlance/db", () => ({ getPrismaClient: () => ({
   mobileSession: {
     create: async ({ data }: { data: Omit<SessionRow, "id" | "revokedAt"> }) => { memory.sessions.set("session-1", { ...data, id: "session-1", revokedAt: null }); },
     findUnique: async ({ where }: { where: { accessHash?: string; refreshHash?: string } }) => [...memory.sessions.values()].find((row) => row.accessHash === where.accessHash || row.refreshHash === where.refreshHash) ?? null,
-    updateMany: async ({ where, data }: { where: { id?: string; refreshHash?: string; refreshExpiresAt?: { gt: Date } }; data: Partial<SessionRow> }) => {
-      const row = [...memory.sessions.values()].find((item) => (where.id ? item.id === where.id : item.refreshHash === where.refreshHash));
+    updateMany: async ({ where, data }: { where: { id?: string; accessHash?: string; refreshHash?: string; refreshExpiresAt?: { gt: Date } }; data: Partial<SessionRow> }) => {
+      const row = [...memory.sessions.values()].find((item) => (where.id ? item.id === where.id : where.accessHash ? item.accessHash === where.accessHash : item.refreshHash === where.refreshHash));
       if (!row || row.revokedAt || (where.refreshHash && row.refreshHash !== where.refreshHash) || (where.refreshExpiresAt && row.refreshExpiresAt <= where.refreshExpiresAt.gt)) return { count: 0 };
       Object.assign(row, data); return { count: 1 };
     },
   },
 }) }));
 
-import { createMobileSession, mobileSessionCustomer, revokeMobileSession, rotateMobileSession } from "./mobile-auth";
+import { createMobileSession, mobileSessionCustomer, revokeAccessSession, revokeMobileSession, rotateMobileSession } from "./mobile-auth";
 
 const identity = { userId: "customer-a", issuer: "https://identity.example", subject: "subject-a" };
 beforeEach(() => { memory.sessions.clear(); memory.identities.clear(); memory.identities.set(`${identity.issuer}\0${identity.subject}`, identity.userId); });
@@ -50,6 +50,12 @@ describe("mobile sessions", () => {
     expect(await mobileSessionCustomer(`Bearer ${tokens.accessToken}`)).toBeUndefined();
     row.accessExpiresAt = new Date(Date.now() + 60000);
     await revokeMobileSession(tokens.refreshToken);
+    expect(await mobileSessionCustomer(`Bearer ${tokens.accessToken}`)).toBeUndefined();
+    expect(await rotateMobileSession(tokens.refreshToken)).toBeUndefined();
+  });
+  it("revokes a browser access session even when its refresh cookie is missing", async () => {
+    const tokens = await createMobileSession(identity);
+    await revokeAccessSession(tokens.accessToken);
     expect(await mobileSessionCustomer(`Bearer ${tokens.accessToken}`)).toBeUndefined();
     expect(await rotateMobileSession(tokens.refreshToken)).toBeUndefined();
   });
