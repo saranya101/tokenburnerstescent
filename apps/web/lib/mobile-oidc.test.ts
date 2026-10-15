@@ -56,4 +56,16 @@ describe("external mobile identity verification", () => {
     process.env.PARLANCE_MOBILE_OIDC_JWKS_URI = "http://identity.example/keys";
     await expect(verifiedMobileIdentity(`Bearer ${await token()}`)).resolves.toBeUndefined();
   });
+  it("rejects a token signed by a different key, even with matching claims and key ID", async () => {
+    const forgedKey = (await generateKeyPair("ES256")).privateKey;
+    const forged = await new SignJWT({ azp: "native-client" })
+      .setProtectedHeader({ alg: "ES256", kid: "test-key" })
+      .setIssuer("https://identity.example")
+      .setAudience("parlance-mobile-api")
+      .setSubject("customer-subject")
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(forgedKey);
+    await expect(verifiedMobileIdentity(`Bearer ${forged}`)).resolves.toBeUndefined();
+  });
 });
