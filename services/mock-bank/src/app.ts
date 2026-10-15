@@ -29,6 +29,7 @@ export interface MockBankOptions {
   initialState?: { stateVersion: number; balances: Record<string, bigint>; holdings: Record<string, string> };
   beneficiaryDefinitions?: readonly BeneficiaryDefinition[];
   now?: () => Date;
+  customerSnapshot?: (userId: string) => Promise<z.infer<typeof BankStateSnapshotV1>>;
 }
 
 const DEFAULT_INITIAL_STATE_VERSION = 7;
@@ -199,7 +200,7 @@ export function buildApp(options: MockBankOptions = {}) {
     const { key } = z.object({ key: Id }).parse(request.params); const prior = idempotency.get(key);
     return prior ? { status: "COMPLETED" as const, idempotencyKey: key, operation: prior.operation, requestHash: prior.requestHash, ...prior.response } : { status: "NOT_FOUND" as const, idempotencyKey: key };
   });
-  app.get("/v1/state/:userId", async (request) => { const { userId } = z.object({ userId: Id }).parse(request.params); const state = getState(userId); return BankStateSnapshotV1.parse({
+  app.get("/v1/state/:userId", async (request) => { const { userId } = z.object({ userId: Id }).parse(request.params); if (options.customerSnapshot) return options.customerSnapshot(userId); const state = getState(userId); return BankStateSnapshotV1.parse({
     schemaVersion: "1", userId, stateVersion: state.stateVersion, capturedAt: new Date().toISOString(),
     accounts: ACCOUNT_DEFINITIONS.map((account) => ({ ...account, capabilities: [...account.capabilities], ledgerMinorUnits: state.balances[account.id]!.toString(), availableMinorUnits: state.balances[account.id]!.toString(), status: "ACTIVE" as const })), beneficiaries: beneficiaryDefinitions.map((beneficiary) => ({ ...beneficiary, supportedCurrencies: [...beneficiary.supportedCurrencies] })), assets: state.assets,
     holdings: Object.entries(state.holdings).map(([assetId, quantity]) => ({ assetId, quantity })), obligations: [], serviceAvailability: { transfers: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), fx: !state.scenarios.has("FX_UNAVAILABLE"), billPayments: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), investments: !state.scenarios.has("ASSET_UNAVAILABLE") },
@@ -213,6 +214,7 @@ export function buildApp(options: MockBankOptions = {}) {
     if (account.currency !== currency) throw new Error("ACCOUNT_CURRENCY_MISMATCH");
   };
   const execute = <T extends WriteBody>(path: "fx" | "transfer" | "payment" | "buy", schema: z.ZodType<T>, blocked: Scenario, mutate: (state: State, body: T) => void) => app.post(`/v1/execute/${path}`, async (request, reply) => {
+    if (options.customerSnapshot) return reply.code(403).send({ code: "BANK_EXECUTION_DISABLED" });
     const key = request.headers["idempotency-key"]; if (typeof key !== "string" || !key) return reply.code(400).send({ code: "IDEMPOTENCY_KEY_REQUIRED" });
     const body = schema.parse(request.body); const hash = requestHash(body); const prior = idempotency.get(key); if (prior) return prior.operation === path && prior.requestHash === hash ? prior.response : reply.code(409).send({ code: "IDEMPOTENCY_KEY_REUSED" });
     const state = getState(body.userId); if (state.scenarios.has(blocked)) return reply.code(503).send({ code: blocked }); if (path === "fx" && state.scenarios.has("QUOTE_EXPIRED")) return reply.code(409).send({ code: "QUOTE_EXPIRED" }); if (state.scenarios.has("BALANCE_CHANGED")) return reply.code(409).send({ code: "BALANCE_CHANGED", stateVersion: state.stateVersion });

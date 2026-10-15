@@ -24,6 +24,17 @@ const validBuy = {
 };
 const buy = (app: ReturnType<typeof buildApp>, payload = validBuy, key = "buy-key") => app.inject({ method: "POST", url: "/v1/execute/buy", headers: { ...bankHeaders, "idempotency-key": key }, payload });
 const bankState = async (app: ReturnType<typeof buildApp>, userId = "buyer") => (await app.inject({ method: "GET", url: `/v1/state/${userId}`, headers: bankHeaders })).json();
+
+it("serves a persisted customer snapshot while blocking all bank execution", async () => {
+  const fixtureBank = bankApp();
+  const fixture = await bankState(fixtureBank);
+  await fixtureBank.close();
+  const app = bankApp({ customerSnapshot: async (userId) => ({ ...fixture, userId, stateVersion: 9, holdings: [{ assetId: "asset-aapl", quantity: "2" }] }) });
+  expect(await bankState(app, "approved-customer")).toMatchObject({ userId: "approved-customer", stateVersion: 9, holdings: [{ assetId: "asset-aapl", quantity: "2" }] });
+  expect((await buy(app)).statusCode).toBe(403);
+  expect((await executeFx(app, "quote-id")).statusCode).toBe(403);
+  await app.close();
+});
 const executeFx = (app: ReturnType<typeof buildApp>, quoteId: string, fromAmount = { currency: "SGD", minorUnits: "26800" }, key = "fx-key") => app.inject({
   method: "POST", url: "/v1/execute/fx", headers: { ...bankHeaders, "idempotency-key": key },
   payload: { userId: "buyer", accountId: "acc-sgd", fromAmount, toCurrency: "USD", quoteId },

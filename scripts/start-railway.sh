@@ -10,6 +10,12 @@ if [[ "${PARLANCE_SYNTHETIC_DB_MIGRATIONS_ALLOWED:-false}" == "true" ]]; then
   node -e 'const u = new URL(process.env.DIRECT_URL); if (u.hostname !== "postgres.railway.internal") process.exit(1)'
   pnpm --filter @parlance/db prisma:deploy
 fi
+if [[ "${PARLANCE_ISOLATED_SYNTHETIC_INSPECT:-false}" == "true" ]]; then
+  node packages/db/prisma/railway-isolated-synthetic.mjs --inspect
+fi
+if [[ "${PARLANCE_ISOLATED_SYNTHETIC_SEED_APPROVED:-false}" == "true" ]]; then
+  node packages/db/prisma/railway-isolated-synthetic.mjs --seed
+fi
 
 export API_URL=http://127.0.0.1:4001
 export COMPILER_URL=http://127.0.0.1:8001
