@@ -139,7 +139,6 @@ async function approvalCeremony(values: ReturnType<typeof setup>) {
 
 beforeEach(() => {
   vi.stubEnv("PARLANCE_WEBAUTHN_RP_ID", "localhost"); vi.stubEnv("PARLANCE_WEBAUTHN_ORIGIN", "http://localhost:3000");
-  vi.stubEnv("PARLANCE_DEMO_WEBAUTHN_ENROLLMENT", "true"); vi.stubEnv("PARLANCE_DEMO_USER_ID", "demo-user"); vi.stubEnv("PARLANCE_CUSTOMER_USER_ID", "demo-user");
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -257,23 +256,23 @@ it("does not issue a passkey challenge when deterministic risk blocks the plan",
 describe("WebAuthn Phase 1 registration", () => {
   it("reports whether the configured customer already has an active passkey", async () => {
     const values = setup();
-    await expect(values.service.registrationStatus()).resolves.toEqual({ status: "NOT_ENROLLED", userVerification: "required" });
+    await expect(values.service.registrationStatus("demo-user")).resolves.toEqual({ status: "NOT_ENROLLED", userVerification: "required" });
     await values.repository.saveWebAuthnCredential({ id: "credential-row", userId: "demo-user", credentialId: "credential-1", publicKey: new Uint8Array([1]), userHandle: new Uint8Array([2]), signCount: 0, transports: ["internal"], deviceType: "multiDevice", backedUp: true });
-    await expect(values.service.registrationStatus()).resolves.toEqual({ status: "READY", userVerification: "required" });
-    await expect(values.service.registrationOptions()).rejects.toThrow("PASSKEY_ALREADY_ENROLLED");
+    await expect(values.service.registrationStatus("demo-user")).resolves.toEqual({ status: "READY", userVerification: "required" });
+    await expect(values.service.registrationOptions("demo-user")).rejects.toThrow("PASSKEY_ALREADY_ENROLLED");
     expect(values.repository.challenges.size).toBe(0);
   });
 
-  it("issues and persists a cryptographic registration challenge for the configured demo user and RP", async () => {
-    const { service, repository } = setup(); const issued = await service.registrationOptions(); const stored = repository.challenges.get(issued.challengeId)!;
+  it("issues and persists a cryptographic registration challenge for the authenticated customer and RP", async () => {
+    const { service, repository } = setup(); const issued = await service.registrationOptions("demo-user"); const stored = repository.challenges.get(issued.challengeId)!;
     expect(stored).toMatchObject({ userId: "demo-user", purpose: "REGISTRATION", expectedRpId: "localhost", expectedOrigin: "http://localhost:3000", status: "ISSUED" });
     expect(stored.challenge).toBe(issued.options.challenge); expect(Buffer.from(stored.challenge, "base64url")).toHaveLength(32);
     expect(issued.options.rp.id).toBe("localhost"); expect(issued.options.authenticatorSelection?.userVerification).toBe("required");
   });
 
   it("verifies the expected ceremony, consumes once, and persists a credential for the bound user", async () => {
-    const { service, repository, verifier } = setup(); const issued = await service.registrationOptions(); const challenge = repository.challenges.get(issued.challengeId)!;
-    await expect(service.verifyRegistration(issued.challengeId, response(challenge.challenge))).resolves.toEqual({ credentialId: "credential-1", userId: "demo-user", verified: true });
+    const { service, repository, verifier } = setup(); const issued = await service.registrationOptions("demo-user"); const challenge = repository.challenges.get(issued.challengeId)!;
+    await expect(service.verifyRegistration("demo-user", issued.challengeId, response(challenge.challenge))).resolves.toEqual({ credentialId: "credential-1", userId: "demo-user", verified: true });
     expect(verifier.calls[0]).toMatchObject({ expectedChallenge: challenge.challenge, expectedOrigin: "http://localhost:3000", expectedRpId: "localhost" });
     expect(repository.credentials.get("credential-1")).toMatchObject({ userId: "demo-user", signCount: 0, backedUp: true });
     expect(repository.challenges.get(issued.challengeId)?.status).toBe("CONSUMED");
@@ -281,37 +280,45 @@ describe("WebAuthn Phase 1 registration", () => {
   });
 
   it("rejects expired, revoked, replayed, and incorrectly signed challenges", async () => {
-    const expired = setup(); const expiredIssue = await expired.service.registrationOptions(); expired.repository.challenges.get(expiredIssue.challengeId)!.expiresAt = new Date(fixedNow.getTime() - 1);
-    await expect(expired.service.verifyRegistration(expiredIssue.challengeId, response("anything"))).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_EXPIRED");
+    const expired = setup(); const expiredIssue = await expired.service.registrationOptions("demo-user"); expired.repository.challenges.get(expiredIssue.challengeId)!.expiresAt = new Date(fixedNow.getTime() - 1);
+    await expect(expired.service.verifyRegistration("demo-user", expiredIssue.challengeId, response("anything"))).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_EXPIRED");
     expect(expired.repository.credentials.size).toBe(0);
 
-    const revoked = setup(); const revokedIssue = await revoked.service.registrationOptions(); const revokedChallenge = revoked.repository.challenges.get(revokedIssue.challengeId)!; await revoked.repository.revokeWebAuthnChallenge(revokedIssue.challengeId, fixedNow);
-    await expect(revoked.service.verifyRegistration(revokedIssue.challengeId, response(revokedChallenge.challenge))).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
+    const revoked = setup(); const revokedIssue = await revoked.service.registrationOptions("demo-user"); const revokedChallenge = revoked.repository.challenges.get(revokedIssue.challengeId)!; await revoked.repository.revokeWebAuthnChallenge(revokedIssue.challengeId, fixedNow);
+    await expect(revoked.service.verifyRegistration("demo-user", revokedIssue.challengeId, response(revokedChallenge.challenge))).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
 
-    const wrong = setup(); const wrongIssue = await wrong.service.registrationOptions(); await expect(wrong.service.verifyRegistration(wrongIssue.challengeId, response("wrong-challenge"))).rejects.toThrow("WEBAUTHN_REGISTRATION_VERIFICATION_FAILED");
+    const wrong = setup(); const wrongIssue = await wrong.service.registrationOptions("demo-user"); await expect(wrong.service.verifyRegistration("demo-user", wrongIssue.challengeId, response("wrong-challenge"))).rejects.toThrow("WEBAUTHN_REGISTRATION_VERIFICATION_FAILED");
 
-    const replay = setup(); const replayIssue = await replay.service.registrationOptions(); const replayChallenge = replay.repository.challenges.get(replayIssue.challengeId)!; await replay.service.verifyRegistration(replayIssue.challengeId, response(replayChallenge.challenge));
-    await expect(replay.service.verifyRegistration(replayIssue.challengeId, response(replayChallenge.challenge))).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
+    const replay = setup(); const replayIssue = await replay.service.registrationOptions("demo-user"); const replayChallenge = replay.repository.challenges.get(replayIssue.challengeId)!; await replay.service.verifyRegistration("demo-user", replayIssue.challengeId, response(replayChallenge.challenge));
+    await expect(replay.service.verifyRegistration("demo-user", replayIssue.challengeId, response(replayChallenge.challenge))).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
   });
 
   it("rejects origin or RP configuration drift before verification", async () => {
-    const origin = setup(); const originIssue = await origin.service.registrationOptions(); const originChallenge = origin.repository.challenges.get(originIssue.challengeId)!; vi.stubEnv("PARLANCE_WEBAUTHN_ORIGIN", "http://localhost:3001");
-    await expect(origin.service.verifyRegistration(originIssue.challengeId, response(originChallenge.challenge))).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
-    vi.stubEnv("PARLANCE_WEBAUTHN_ORIGIN", "http://localhost:3000"); const rp = setup(); const rpIssue = await rp.service.registrationOptions(); const rpChallenge = rp.repository.challenges.get(rpIssue.challengeId)!; vi.stubEnv("PARLANCE_WEBAUTHN_RP_ID", "example.com"); vi.stubEnv("PARLANCE_WEBAUTHN_ORIGIN", "https://example.com");
-    await expect(rp.service.verifyRegistration(rpIssue.challengeId, response(rpChallenge.challenge))).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
+    const origin = setup(); const originIssue = await origin.service.registrationOptions("demo-user"); const originChallenge = origin.repository.challenges.get(originIssue.challengeId)!; vi.stubEnv("PARLANCE_WEBAUTHN_ORIGIN", "http://localhost:3001");
+    await expect(origin.service.verifyRegistration("demo-user", originIssue.challengeId, response(originChallenge.challenge))).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
+    vi.stubEnv("PARLANCE_WEBAUTHN_ORIGIN", "http://localhost:3000"); const rp = setup(); const rpIssue = await rp.service.registrationOptions("demo-user"); const rpChallenge = rp.repository.challenges.get(rpIssue.challengeId)!; vi.stubEnv("PARLANCE_WEBAUTHN_RP_ID", "example.com"); vi.stubEnv("PARLANCE_WEBAUTHN_ORIGIN", "https://example.com");
+    await expect(rp.service.verifyRegistration("demo-user", rpIssue.challengeId, response(rpChallenge.challenge))).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
   });
 
   it("allows exactly one concurrent challenge consumer", async () => {
-    const { service, repository } = setup(); const issued = await service.registrationOptions(); const challenge = repository.challenges.get(issued.challengeId)!;
-    const results = await Promise.allSettled([service.verifyRegistration(issued.challengeId, response(challenge.challenge)), service.verifyRegistration(issued.challengeId, response(challenge.challenge))]);
+    const { service, repository } = setup(); const issued = await service.registrationOptions("demo-user"); const challenge = repository.challenges.get(issued.challengeId)!;
+    const results = await Promise.allSettled([service.verifyRegistration("demo-user", issued.challengeId, response(challenge.challenge)), service.verifyRegistration("demo-user", issued.challengeId, response(challenge.challenge))]);
     expect(results.filter((item) => item.status === "fulfilled")).toHaveLength(1); expect(results.filter((item) => item.status === "rejected")).toHaveLength(1); expect(repository.credentials.size).toBe(1);
   });
 
-  it("fails closed unless demo enrollment is explicitly enabled and rejects caller-selected users", async () => {
-    const disabled = setup(); vi.stubEnv("PARLANCE_DEMO_WEBAUTHN_ENROLLMENT", "false"); await expect(disabled.service.registrationOptions()).rejects.toThrow("DEMO_WEBAUTHN_ENROLLMENT_DISABLED");
-    vi.stubEnv("PARLANCE_DEMO_WEBAUTHN_ENROLLMENT", "true"); const enabled = setup();
+  it("rejects unknown customers and caller-selected user IDs", async () => {
+    const enabled = setup();
+    await expect(enabled.service.registrationOptions("unknown-user")).rejects.toThrow("WEBAUTHN_USER_NOT_FOUND");
     const app = buildApp({ webauthn: enabled.service, repository: enabled.repository } as unknown as ApiServices, routeAuthorization); const result = await app.inject({ method: "POST", url: "/v1/webauthn/registration/options", headers: routeHeaders, payload: { userId: "attacker" } });
     expect(result.statusCode).toBe(400); expect(enabled.repository.challenges.size).toBe(0); await app.close();
+  });
+
+  it("rejects registration under another authenticated customer's identity", async () => {
+    const values = setup(); values.repository.users.add("other-user");
+    const issued = await values.service.registrationOptions("demo-user");
+    const challenge = values.repository.challenges.get(issued.challengeId)!;
+    await expect(values.service.verifyRegistration("other-user", issued.challengeId, response(challenge.challenge))).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
+    expect(values.repository.credentials.size).toBe(0);
   });
 });
 

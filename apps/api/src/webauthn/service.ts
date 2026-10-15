@@ -37,13 +37,6 @@ function webAuthnConfig(): { rpId: string; origin: string } {
   return { rpId, origin };
 }
 
-function demoEnrollmentUser(): string {
-  if (process.env.PARLANCE_DEMO_WEBAUTHN_ENROLLMENT !== "true") throw new Error("DEMO_WEBAUTHN_ENROLLMENT_DISABLED");
-  const userId = process.env.PARLANCE_DEMO_USER_ID?.trim();
-  if (!userId) throw new Error("DEMO_WEBAUTHN_USER_MISSING");
-  return userId;
-}
-
 const simpleWebAuthnVerifier: RegistrationVerifier = {
   verify: (input) => verifyRegistrationResponse({
     response: input.response,
@@ -77,17 +70,15 @@ export class WebAuthnService {
     private readonly riskGate?: ApprovalRiskGate,
   ) {}
 
-  async registrationStatus() {
-    const userId = demoEnrollmentUser();
-    if (!(await this.repository.webAuthnUserExists(userId))) throw new Error("DEMO_WEBAUTHN_USER_NOT_FOUND");
+  async registrationStatus(userId: string) {
+    if (!(await this.repository.webAuthnUserExists(userId))) throw new Error("WEBAUTHN_USER_NOT_FOUND");
     const credentials = await this.repository.listActiveWebAuthnCredentials(userId);
     return { status: credentials.length > 0 ? "READY" as const : "NOT_ENROLLED" as const, userVerification: "required" as const };
   }
 
-  async registrationOptions() {
+  async registrationOptions(userId: string) {
     const config = webAuthnConfig();
-    const userId = demoEnrollmentUser();
-    if (!(await this.repository.webAuthnUserExists(userId))) throw new Error("DEMO_WEBAUTHN_USER_NOT_FOUND");
+    if (!(await this.repository.webAuthnUserExists(userId))) throw new Error("WEBAUTHN_USER_NOT_FOUND");
     const existing = await this.repository.listActiveWebAuthnCredentials(userId);
     if (existing.length > 0) throw new Error("PASSKEY_ALREADY_ENROLLED");
     const userHandle = existing[0]?.userHandle ?? new Uint8Array(randomBytes(32));
@@ -97,7 +88,7 @@ export class WebAuthnService {
       rpID: config.rpId,
       userID: userHandle,
       userName: userId,
-      userDisplayName: "Parlance demo user",
+      userDisplayName: "Parlance customer",
       challenge: challengeBytes,
       timeout: CHALLENGE_TTL_MS,
       attestationType: "none",
@@ -113,11 +104,10 @@ export class WebAuthnService {
     return { challengeId: stored.id, options };
   }
 
-  async verifyRegistration(challengeId: string, response: RegistrationResponseJSON) {
+  async verifyRegistration(userId: string, challengeId: string, response: RegistrationResponseJSON) {
     const config = webAuthnConfig();
-    const demoUserId = demoEnrollmentUser();
     const challenge = await this.repository.getWebAuthnChallenge(challengeId);
-    if (!challenge || challenge.purpose !== "REGISTRATION" || challenge.userId !== demoUserId) throw new Error("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
+    if (!challenge || challenge.purpose !== "REGISTRATION" || challenge.userId !== userId) throw new Error("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
     if (challenge.status !== "ISSUED" || challenge.revokedAt) throw new Error("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
     const now = this.now();
     if (challenge.expiresAt.getTime() <= now.getTime()) {
