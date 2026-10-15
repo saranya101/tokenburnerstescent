@@ -6,7 +6,7 @@ const projectId = "55d5cb65-c1ce-4431-877c-63d08969713e";
 const environmentId = "17977510-a832-4949-b083-e24e4b36c7c6";
 const appServiceId = "1ff8b7d4-ab42-4edb-a0b8-988291c8c9ad";
 const mode = process.argv[2];
-if (mode !== "--inspect" && mode !== "--seed") throw new Error("INSPECT_OR_SEED_MODE_REQUIRED");
+if (!["--inspect", "--seed", "--verify"].includes(mode)) throw new Error("INSPECT_SEED_OR_VERIFY_MODE_REQUIRED");
 if (process.env.RAILWAY_PROJECT_ID !== projectId || process.env.RAILWAY_ENVIRONMENT_ID !== environmentId || process.env.RAILWAY_SERVICE_ID !== appServiceId) {
   throw new Error("UNAPPROVED_RAILWAY_TARGET");
 }
@@ -52,6 +52,23 @@ try {
   if (mode === "--inspect") {
     const state = await databaseState(db);
     console.log(`ISOLATED_DATABASE_INSPECTION ${JSON.stringify(state)}`);
+  } else if (mode === "--verify") {
+    const state = await databaseState(db);
+    const issuer = process.env.PARLANCE_MOBILE_OIDC_ISSUER;
+    const subject = process.env.PARLANCE_AUTH0_TEST_SUB;
+    if (!issuer?.startsWith("https://") || !/^auth0\|[A-Za-z0-9]+$/u.test(subject ?? "")) throw new Error("VERIFIED_AUTH0_IDENTITY_REQUIRED");
+    const userId = `synthetic-${createHash("sha256").update(`${issuer}\0${subject}`).digest("hex").slice(0, 24)}`;
+    const identities = await db.externalIdentity.findMany({ select: { issuer: true, subject: true, userId: true } });
+    if (state.tableCounts.User !== 1 || identities.length !== 1 || identities[0].issuer !== issuer || identities[0].subject !== subject || identities[0].userId !== userId) {
+      throw new Error("ISOLATED_IDENTITY_MAPPING_MISMATCH");
+    }
+    const { databaseCustomerSnapshot } = await import("../../../services/mock-bank/dist/database-snapshot.js");
+    const snapshot = await databaseCustomerSnapshot(userId);
+    const currencies = snapshot.accounts.map((item) => item.currency).sort();
+    if (currencies.join(",") !== "SGD,USD" || snapshot.beneficiaries.length !== 15 || snapshot.holdings.length !== 1 || !snapshot.assets.some((item) => item.symbol === "AAPL") || snapshot.assetQuotes.length !== 1) {
+      throw new Error("ISOLATED_CUSTOMER_SNAPSHOT_MISMATCH");
+    }
+    console.log(`ISOLATED_SYNTHETIC_VERIFIED ${JSON.stringify({ identityCount: identities.length, currencies, payeeCount: snapshot.beneficiaries.length, holdingCount: snapshot.holdings.length, quoteCount: snapshot.assetQuotes.length, stateVersion: snapshot.stateVersion })}`);
   } else {
     if (process.env.PARLANCE_ISOLATED_SYNTHETIC_SEED_APPROVED !== "true") throw new Error("EXPLICIT_SYNTHETIC_SEED_APPROVAL_REQUIRED");
     const issuer = process.env.PARLANCE_MOBILE_OIDC_ISSUER;

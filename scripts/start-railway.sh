@@ -16,6 +16,9 @@ fi
 if [[ "${PARLANCE_ISOLATED_SYNTHETIC_SEED_APPROVED:-false}" == "true" ]]; then
   node packages/db/prisma/railway-isolated-synthetic.mjs --seed
 fi
+if [[ "${PARLANCE_ISOLATED_SYNTHETIC_VERIFY:-false}" == "true" ]]; then
+  node packages/db/prisma/railway-isolated-synthetic.mjs --verify
+fi
 
 export API_URL=http://127.0.0.1:4001
 export COMPILER_URL=http://127.0.0.1:8001
