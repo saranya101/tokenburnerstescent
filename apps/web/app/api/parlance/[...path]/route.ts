@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiBaseUrl, customerApiHeaders } from "../../../../lib/server-api-auth";
+import { apiBaseUrl, customerApiHeaders, CUSTOMER_PRINCIPAL_HEADER, INTERNAL_TOKEN_HEADER, webSecurityConfigurationValid } from "../../../../lib/server-api-auth";
+import { sameOrigin, setWebSessionCookies, webAuthEnabled, webCustomer } from "../../../../lib/web-auth";
 
 const postRoutes = [
   /^messages$/u,
@@ -34,16 +35,40 @@ function messageBody(input: unknown): Record<string, unknown> | undefined {
 }
 
 async function proxy(request: NextRequest, context: { params: Promise<{ path: string[] }> }, method: "GET" | "POST") {
-  const path = (await context.params).path.join("/");
+  const parts = (await context.params).path;
+  if (parts.some((part) => !part || part === "." || part === ".." || part.includes("%") || part.includes("\\"))) return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
+  const path = parts.join("/");
   if (!allowed(method, path)) return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
-  // Browser headers are untrusted; only server configuration supplies API credentials and customer identity.
-  const trustedHeaders = customerApiHeaders();
+  const publicSafe = process.env.PARLANCE_PUBLIC_SAFE_MODE === "true";
+  // Browser passkey authorization and execution remain closed in public mode.
+  if (publicSafe && !([/^customer\/(?:state|activity)$/u, /^executions\/[^/]+\/detail$/u].some((pattern) => method === "GET" && pattern.test(path)) ||
+      [/^messages$/u, /^clarifications\/[^/]+\/answer$/u, /^bundle-clarifications\/[^/]+\/answer$/u,
+        /^goal-candidates\/[^/]+\/confirm$/u, /^goal-bundle-candidates\/[^/]+\/confirm$/u,
+        /^goals\/[^/]+\/(?:compile|funding-candidate)$/u, /^goal-bundles\/[^/]+\/compile$/u]
+        .some((pattern) => method === "POST" && pattern.test(path)))) return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
+  if (publicSafe && (!webAuthEnabled() || (method === "POST" && !sameOrigin(request)))) return NextResponse.json({ code: "FORBIDDEN" }, { status: 403 });
+  let customer: Awaited<ReturnType<typeof webCustomer>>;
+  if (publicSafe) {
+    try { customer = await webCustomer(request); }
+    catch { return NextResponse.json({ code: "SERVICE_UNAVAILABLE" }, { status: 503 }); }
+    if (!customer) return NextResponse.json({ code: "UNAUTHORIZED" }, { status: 401 });
+  }
+  // Browser headers are untrusted; only a validated session supplies customer identity.
+  const trustedHeaders = publicSafe ?
+    (customer && process.env.PARLANCE_INTERNAL_API_TOKEN?.trim() && webSecurityConfigurationValid() ?
+      { [INTERNAL_TOKEN_HEADER]: process.env.PARLANCE_INTERNAL_API_TOKEN.trim(), [CUSTOMER_PRINCIPAL_HEADER]: customer.userId } : undefined) :
+    customerApiHeaders();
   if (!trustedHeaders) return NextResponse.json({ code: "SERVICE_UNAVAILABLE" }, { status: 503 });
 
   let body: string | undefined;
   if (method === "POST") {
+    const declaredLength = Number(request.headers.get("content-length") ?? 0);
+    if (Number.isFinite(declaredLength) && declaredLength > 32768) return NextResponse.json({ code: "REQUEST_TOO_LARGE" }, { status: 413 });
     let input: unknown;
-    try { input = await request.json(); } catch { input = {}; }
+    let raw: string;
+    try { raw = await request.text(); } catch { return NextResponse.json({ code: "INVALID_REQUEST" }, { status: 400 }); }
+    if (raw.length > 32768) return NextResponse.json({ code: "REQUEST_TOO_LARGE" }, { status: 413 });
+    try { input = raw ? JSON.parse(raw) : {}; } catch { return NextResponse.json({ code: "INVALID_REQUEST" }, { status: 400 }); }
     if (path === "messages") {
       const normalized = messageBody(input);
       if (!normalized) return NextResponse.json({ code: "INVALID_REQUEST" }, { status: 400 });
@@ -65,10 +90,12 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   }
   const responseBody = await response.text();
   if (response.status === 401 || response.status === 403) return NextResponse.json({ code: "REQUEST_NOT_AUTHORIZED" }, { status: response.status });
-  return new NextResponse(responseBody, {
+  const result = new NextResponse(responseBody, {
     status: response.status,
-    headers: { "content-type": response.headers.get("content-type") ?? "application/json", ...(response.headers.get("x-trace-id") ? { "x-trace-id": response.headers.get("x-trace-id")! } : {}) },
+    headers: { "content-type": response.headers.get("content-type") ?? "application/json", "cache-control": "no-store", ...(response.headers.get("x-trace-id") ? { "x-trace-id": response.headers.get("x-trace-id")! } : {}) },
   });
+  if (customer?.rotated) setWebSessionCookies(result, customer.rotated);
+  return result;
 }
 
 export function POST(request: NextRequest, context: { params: Promise<{ path: string[] }> }) { return proxy(request, context, "POST"); }

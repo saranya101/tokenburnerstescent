@@ -15,10 +15,10 @@ function bearer(authorization: string | null): string | undefined {
 function hash(token: string): string { return createHash("sha256").update(token).digest("hex"); }
 function freshToken(): string { return randomBytes(32).toString("base64url"); }
 
-export async function verifiedMobileIdentity(authorization: string | null): Promise<{ userId: string; issuer: string; subject: string } | undefined> {
+export async function verifiedOidcIdentity(authorization: string | null, expectedClientId?: string): Promise<{ userId: string; issuer: string; subject: string } | undefined> {
   const issuer = process.env.PARLANCE_MOBILE_OIDC_ISSUER?.trim();
   const audience = process.env.PARLANCE_MOBILE_OIDC_AUDIENCE?.trim();
-  const clientId = process.env.PARLANCE_MOBILE_OIDC_CLIENT_ID?.trim();
+  const clientId = expectedClientId ?? process.env.PARLANCE_MOBILE_OIDC_CLIENT_ID?.trim();
   const jwksUri = process.env.PARLANCE_MOBILE_OIDC_JWKS_URI?.trim();
   const token = bearer(authorization);
   if (!issuer || !audience || !clientId || !jwksUri || !token) return;
@@ -34,6 +34,10 @@ export async function verifiedMobileIdentity(authorization: string | null): Prom
     const identity = await getPrismaClient().externalIdentity.findUnique({ where: { issuer_subject: { issuer, subject: payload.sub } }, select: { userId: true } });
     return identity ? { userId: identity.userId, issuer, subject: payload.sub } : undefined;
   } catch { return; }
+}
+
+export function verifiedMobileIdentity(authorization: string | null) {
+  return verifiedOidcIdentity(authorization);
 }
 
 export async function createMobileSession(identity: { userId: string; issuer: string; subject: string }) {
@@ -75,4 +79,9 @@ export async function rotateMobileSession(refreshToken: string): Promise<Awaited
 export async function revokeMobileSession(refreshToken: string): Promise<void> {
   if (!TOKEN_PATTERN.test(refreshToken)) return;
   await getPrismaClient().mobileSession.updateMany({ where: { refreshHash: hash(refreshToken), revokedAt: null }, data: { revokedAt: new Date() } });
+}
+
+export async function revokeAccessSession(accessToken: string): Promise<void> {
+  if (!TOKEN_PATTERN.test(accessToken)) return;
+  await getPrismaClient().mobileSession.updateMany({ where: { accessHash: hash(accessToken), revokedAt: null }, data: { revokedAt: new Date() } });
 }
