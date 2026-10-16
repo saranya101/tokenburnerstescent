@@ -58,6 +58,6 @@ export class ExecutionGateway {
   async execute(input: ExecutionAuthorization, traceId: string): Promise<BankWriteResult> {
     verifyExecutionAuthorization(input);
     const operation = bankOperation(input.goal.userId, input.proposedStep);
-    return this.bank.execute(operation.path, operation.payload, input.idempotencyKey, traceId);
+    return this.bank.execute(operation.path, operation.payload, input.idempotencyKey, traceId, input.currentStateVersion);
   }
 }

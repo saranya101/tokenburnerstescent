@@ -74,9 +74,9 @@ export async function registerRoutes(app: FastifyInstance, options: { services: 
   app.post("/v1/goals/:id/compile", customer, async (request) => { const id = RouteId.parse(request.params).id; await ownership.goal(id, principal(request)); return services.compilation.compile(id, trace(request.headers)); });
   app.post("/v1/goals/:id/funding-candidate", customer, async (request) => { const id = RouteId.parse(request.params).id; await ownership.goal(id, principal(request)); return services.investmentFunding.propose(id, request.body, trace(request.headers)); });
   app.post("/v1/goal-bundles/:id/compile", customer, async (request) => { const id = RouteId.parse(request.params).id; await ownership.bundle(id, principal(request)); return services.bundleCompilation.compile(id, trace(request.headers)); });
-  app.get("/v1/webauthn/registration/status", customer, async (request) => { requireDemoPrincipal(principal(request).userId); return services.webauthn.registrationStatus(); });
-  app.post("/v1/webauthn/registration/options", customer, async (request) => { EmptyInput.parse(request.body ?? {}); requireDemoPrincipal(principal(request).userId); return services.webauthn.registrationOptions(); });
-  app.post("/v1/webauthn/registration/verify", customer, async (request) => { const body = RegistrationVerificationInput.parse(request.body); await ownership.registrationChallenge(body.challengeId, principal(request)); return services.webauthn.verifyRegistration(body.challengeId, body.credential as RegistrationResponseJSON); });
+  app.get("/v1/webauthn/registration/status", customer, async (request) => services.webauthn.registrationStatus(principal(request).userId));
+  app.post("/v1/webauthn/registration/options", customer, async (request) => { EmptyInput.parse(request.body ?? {}); return services.webauthn.registrationOptions(principal(request).userId); });
+  app.post("/v1/webauthn/registration/verify", customer, async (request) => { const body = RegistrationVerificationInput.parse(request.body); await ownership.registrationChallenge(body.challengeId, principal(request)); return services.webauthn.verifyRegistration(principal(request).userId, body.challengeId, body.credential as RegistrationResponseJSON); });
   app.post("/v1/plans/:id/approval-options", customer, async (request) => { const id = RouteId.parse(request.params).id; EmptyInput.parse(request.body ?? {}); await ownership.plan(id, principal(request)); return services.webauthn.approvalOptions(id, trace(request.headers)); });
   app.post("/v1/plans/:id/approval-verify", customer, async (request) => { const id = RouteId.parse(request.params).id; const body = ApprovalVerificationInput.parse(request.body); await ownership.plan(id, principal(request)); await ownership.registrationChallenge(body.challengeId, principal(request)); return services.webauthn.verifyApproval(id, body.challengeId, body.credential as AuthenticationResponseJSON, trace(request.headers)); });
   app.post("/v1/executions/:id/run", customer, async (request) => { const id = RouteId.parse(request.params).id; await ownership.execution(id, principal(request)); return services.execution.run(id, trace(request.headers)); });
@@ -87,10 +87,4 @@ export async function registerRoutes(app: FastifyInstance, options: { services: 
   app.post("/v1/ops/executions/:id/run", operator, async (request) => services.execution.run(RouteId.parse(request.params).id, trace(request.headers)));
   app.get("/v1/ops/executions/:id/detail", operator, async (request, reply) => { const value = await services.execution.opsDetail(RouteId.parse(request.params).id); return value ?? reply.code(404).send({ code: "EXECUTION_NOT_FOUND" }); });
   app.get("/v1/traces/:id/events", operator, async (_request, reply) => { reply.header("content-type", "text/event-stream"); return "event: ready\ndata: {\"authoritative\":false}\n\n"; });
-}
-
-function requireDemoPrincipal(userId: string): void {
-  const demo = process.env.PARLANCE_DEMO_USER_ID?.trim();
-  const customer = process.env.PARLANCE_CUSTOMER_USER_ID?.trim();
-  if (!demo || !customer || demo !== customer || demo !== userId) throw new Error("CUSTOMER_RESOURCE_NOT_FOUND");
 }

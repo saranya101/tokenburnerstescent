@@ -142,6 +142,8 @@ model User {
   updatedAt           DateTime             @updatedAt
   externalIdentities  ExternalIdentity[]
   mobileSessions      MobileSession[]
+  syntheticBankOperations SyntheticBankOperation[]
+  syntheticAssetQuotes SyntheticAssetQuote[]
 }
 
 model ExternalIdentity {
@@ -262,6 +264,7 @@ model Asset {
   settlementCurrency String
   metadata           Json?
   holdings           Holding[]
+  syntheticQuotes    SyntheticAssetQuote[]
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 }
@@ -660,12 +663,45 @@ model FxQuote {
   rate          Decimal  @db.Decimal(36, 18)
   feeCurrency   String?
   feeMinorUnits BigInt?
+  amountMinorUnits BigInt?
   stateVersion  Int
   quotedAt      DateTime
   expiresAt     DateTime
   createdAt     DateTime @default(now())
 
   @@index([userId, expiresAt])
+}
+
+// The synthetic bank records accepted financial effects in the same
+// transaction as account and holding changes. API idempotency is separate.
+model SyntheticBankOperation {
+  idempotencyKey String   @id
+  userId         String
+  user           User     @relation(fields: [userId], references: [id])
+  operation      String
+  requestHash    String
+  bankReference  String   @unique
+  stateVersion   Int
+  response       Json
+  createdAt      DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model SyntheticAssetQuote {
+  id                 String   @id
+  userId             String
+  user               User     @relation(fields: [userId], references: [id])
+  assetId            String
+  asset              Asset    @relation(fields: [assetId], references: [id])
+  settlementCurrency String
+  unitPriceMinor     BigInt
+  feeMinor           BigInt
+  stateVersion       Int
+  expiresAt          DateTime
+  createdAt          DateTime @default(now())
+
+  @@index([userId, stateVersion, expiresAt])
 }
 
 

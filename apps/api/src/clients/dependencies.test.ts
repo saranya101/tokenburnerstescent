@@ -46,6 +46,13 @@ describe("dependency clients", () => {
     await expect(client.execute("fx", {}, "fx-key", "trace-503")).rejects.toThrow("FX_UNAVAILABLE");
   });
 
+  it("binds a financial write to the bank snapshot version reviewed by the gateway", async () => {
+    const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ accepted: true, bankReference: "synthetic-ref", stateVersion: 8 }), { status: 200 }));
+    vi.stubGlobal("fetch", request);
+    await new MockBankClient("http://bank.internal", "bank-test-token").execute("transfer", { userId: "customer" }, "write-key", "trace-version", 7);
+    expect((request.mock.calls[0]?.[1] as RequestInit).headers).toEqual(expect.objectContaining({ "x-expected-bank-state-version": "7" }));
+  });
+
   it("preserves an explicit compiler URL and omits a null optional validity timestamp", async () => {
     const result = fixture("compiler-result.json") as { plan: { validity: { validUntil?: string | null } } }; result.plan.validity.validUntil = null;
     const request = vi.fn().mockResolvedValue(new Response(JSON.stringify(result), { status: 200, headers: { "content-type": "application/json" } })); vi.stubGlobal("fetch", request);

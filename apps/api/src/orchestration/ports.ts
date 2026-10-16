@@ -150,6 +150,6 @@ export class BankOutcomeUnknownError extends Error {
 }
 export interface BankPort {
   getState(userId: string, traceId: string): Promise<BankStateSnapshotV1>;
-  execute(path: "fx" | "transfer" | "payment" | "buy", payload: unknown, idempotencyKey: string, traceId: string): Promise<BankWriteResult>;
+  execute(path: "fx" | "transfer" | "payment" | "buy", payload: unknown, idempotencyKey: string, traceId: string, expectedStateVersion?: number): Promise<BankWriteResult>;
   lookupByIdempotencyKey(idempotencyKey: string, traceId: string): Promise<BankLookupResult>;
 }
