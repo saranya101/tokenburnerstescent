@@ -31,7 +31,7 @@ it("preserves exactly two headline actions, conditional funding and the SGD rese
   expect(bundle.items[0]?.goal).toMatchObject({ recipientReference: "John Lim", amount: { minorUnits: "10000" } });
   expect(bundle.items[1]?.goal).toEqual({ type: "ACQUIRE_ASSET", quantity: "1", assetReference: "Apple" });
   expect(bundle.items[1]?.preferences).toEqual([{ type: "PREFER_ACCOUNT", accountReference: "SGD" }]);
-  expect(bundle.globalConstraints).toEqual([{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" } }]);
+  expect(bundle.globalConstraints).toEqual([{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountReference: "my SGD account" }]);
   expect(bundle.explicitDependencies).toHaveLength(1);
 });
 

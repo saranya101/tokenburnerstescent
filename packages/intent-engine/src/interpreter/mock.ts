@@ -44,7 +44,11 @@ export class MockIntentBundleInterpreter extends ModelBackedIntentBundleInterpre
 }
 
 function constraints(text: string): IntentGoalConstraintV1[] {
-  return sourceMinimumBalanceMoney(text).map((money) => ({ type: "MIN_AVAILABLE_BALANCE", money }));
+  return sourceMinimumBalanceMoney(text).map((money) => {
+    const accountReference = [...text.matchAll(/\b(?:my|the)\s+(SGD|USD)\s+account\b/giu)]
+      .find((match) => match[1]?.toUpperCase() === money.currency)?.[0];
+    return { type: "MIN_AVAILABLE_BALANCE", money, ...(accountReference === undefined ? {} : { accountReference }) };
+  });
 }
 
 function preferences(text: string): IntentPreferenceV1[] {
