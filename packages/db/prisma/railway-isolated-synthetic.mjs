@@ -53,6 +53,12 @@ try {
   if (mode === "--inspect") {
     const state = await databaseState(db);
     console.log(`ISOLATED_DATABASE_INSPECTION ${JSON.stringify(state)}`);
+  } else if (mode === "--verify" && process.env.PARLANCE_AUTH_JWT_SECRET) {
+    await databaseState(db);
+    const credentials = await db.passwordCredential.findMany({ select: { userId: true } });
+    const identities = await db.externalIdentity.findMany({ where: { issuer: "parlance:password" }, select: { userId: true, subject: true } });
+    if (credentials.some((credential) => !identities.some((identity) => identity.userId === credential.userId && identity.subject === credential.userId))) throw new Error("PASSWORD_IDENTITY_MAPPING_MISMATCH");
+    console.log(`PASSWORD_AUTH_VERIFIED ${JSON.stringify({ credentialCount: credentials.length })}`);
   } else if (mode === "--verify") {
     await databaseState(db);
     const issuer = process.env.PARLANCE_MOBILE_OIDC_ISSUER;

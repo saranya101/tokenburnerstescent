@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StatusBar, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
-import * as AuthSession from "expo-auth-session";
 import * as SecureStore from "expo-secure-store";
-import * as WebBrowser from "expo-web-browser";
 import Constants from "expo-constants";
 import { ZodError } from "zod";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
@@ -11,9 +9,8 @@ import type { Activity, BankState, Clarification, Interpretation, Journey, Mobil
 import { ApiError, MobileTokens as MobileTokensSchema, mobileApi, publicConfig } from "./api";
 import { describeCandidate, holdingValue, money, quotedPortfolioValues, sgdReserveMinorUnits } from "./presentation";
 import { verifiedCustomerSnapshot } from "./sync";
-import { connectionConfigured, discoveryUrl, trustedDiscovery } from "./connection";
+import { connectionConfigured } from "./connection";
 
-WebBrowser.maybeCompleteAuthSession();
 const C = { red: "#b3272d", ink: "#18222d", muted: "#64717f", bg: "#f5f6f7", line: "#e5e8eb", white: "#fff", pale: "#fff1f1", green: "#1d795b" };
 type Tab = "Home" | "Pay & Transfer" | "Investments" | "Activity" | "Profile";
 type Flow = { phase: "COMPOSE"; draft: string; voice?: { rawTranscript: string; provider: string; transcribedAt: string } }
@@ -36,25 +33,11 @@ function Empty({ title, detail }: { title: string; detail: string }) { return <C
 function Section({ title, action }: { title: string; action?: string }) { return <View style={styles.sectionHead}><Text style={styles.sectionTitle}>{title}</Text>{action && <Text style={styles.sectionAction}>{action}</Text>}</View>; }
 
 function useSession() {
-  const configurationKey = `${publicConfig.apiBaseUrl}\0${publicConfig.oidcIssuer}\0${publicConfig.oidcClientId}\0${publicConfig.oidcAudience}`;
-  const [discovery, setDiscovery] = useState<AuthSession.DiscoveryDocument | null>(null);
-  const redirectUri = AuthSession.makeRedirectUri({ scheme: "parlance", path: "auth" });
-  const [request, response, prompt] = AuthSession.useAuthRequest({ clientId: publicConfig.oidcClientId || "unconfigured", responseType: AuthSession.ResponseType.Code, redirectUri, scopes: ["openid", "profile"], usePKCE: true, extraParams: { audience: publicConfig.oidcAudience } }, discovery);
+  const configurationKey = `${publicConfig.apiBaseUrl}\0password-jwt-v1`;
   const [tokens, setTokens] = useState<MobileTokens>(); const [loading, setLoading] = useState(true); const [error, setError] = useState<string>();
   const refreshing = useRef<Promise<string | undefined> | null>(null);
   const token = tokens?.accessToken;
   const configured = connectionConfigured(publicConfig);
-  useEffect(() => {
-    if (!configured) return;
-    let active = true;
-    void fetch(discoveryUrl(publicConfig.oidcIssuer)).then(async (response) => {
-      if (!response.ok) throw new Error("IDENTITY_DISCOVERY_UNAVAILABLE");
-      const value = trustedDiscovery(publicConfig.oidcIssuer, await response.json());
-      if (!value) throw new Error("IDENTITY_DISCOVERY_UNTRUSTED");
-      if (active) setDiscovery(value);
-    }).catch((failure) => { if (active) setError(failure instanceof Error && failure.message === "IDENTITY_DISCOVERY_UNTRUSTED" ? "Identity provider configuration could not be verified." : "Identity provider is unavailable. Try again later."); });
-    return () => { active = false; };
-  }, [configured]);
   const persist = useCallback(async (next: MobileTokens) => { await SecureStore.setItemAsync("parlance.mobile.session", JSON.stringify({ configurationKey, tokens: next })); setTokens(next); }, [configurationKey]);
   useEffect(() => { void (async () => {
     try {
@@ -64,16 +47,6 @@ function useSession() {
     } catch { setError("Secure session storage is unavailable."); }
     finally { setLoading(false); }
   })(); }, [configurationKey]);
-  useEffect(() => {
-    if (response?.type !== "success" || !discovery || !request?.codeVerifier) return;
-    void (async () => {
-      try {
-        const result = await AuthSession.exchangeCodeAsync({ clientId: publicConfig.oidcClientId, code: response.params.code, redirectUri, extraParams: { code_verifier: request.codeVerifier! } }, discovery);
-        await persist(await mobileApi.exchange(result.accessToken));
-        setError(undefined);
-      } catch { setError("Sign-in could not be completed. Try again."); }
-    })();
-  }, [response, discovery, request?.codeVerifier, redirectUri, persist]);
   const renew = useCallback(async (): Promise<string | undefined> => {
     if (!tokens) return;
     if (refreshing.current) return refreshing.current;
@@ -104,8 +77,35 @@ function useSession() {
     try { await mobileApi.revokeSession(tokens.refreshToken); await SecureStore.deleteItemAsync("parlance.mobile.session"); setTokens(undefined); setError(undefined); }
     catch { setError("Could not revoke your session. Check your connection and try again."); }
   }, [tokens]);
-  const signIn = () => { if (!discovery) { setError("Identity provider is not ready. Check your connection and try again."); return; } void prompt().catch(() => setError("Sign-in could not be opened. Try again.")); };
+  const signIn = async (mode: "login" | "signup", email: string, password: string) => {
+    setError(undefined);
+    try { await persist(await mobileApi.passwordSession(mode, email, password)); }
+    catch (failure) {
+      setError(failure instanceof ApiError && failure.code === "LOGIN_FAILED" ? "Email or password is incorrect." : failure instanceof ApiError && failure.code === "ACCOUNT_UNAVAILABLE" ? "Unable to create this account. If already registered, log in." : failure instanceof ApiError && failure.code === "TOO_MANY_ATTEMPTS" ? "Too many attempts. Try again in 15 minutes." : failure instanceof ApiError && failure.code === "INVALID_CREDENTIALS" ? "Use a valid email and a password of 10–128 characters." : "Could not sign in. Check your connection and try again.");
+    }
+  };
   return { token, loading, configured, error, signIn, signOut, call };
+}
+
+function NativeAuth({ configured, error, onSubmit }: { configured: boolean; error?: string; onSubmit(mode: "login" | "signup", email: string, password: string): Promise<void> }) {
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [email, setEmail] = useState(""); const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false); const inFlight = useRef(false);
+  const submit = async () => {
+    if (inFlight.current) return; inFlight.current = true; setBusy(true);
+    try { await onSubmit(mode, email, password); } finally { inFlight.current = false; setBusy(false); }
+  };
+  return <SafeAreaView style={styles.signedOut}><KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"}><ScrollView keyboardShouldPersistTaps="handled">
+    <Text style={styles.brand}>PARLANCE</Text><Text style={styles.hero}>Banking, in your own words.</Text>
+    <Card title={configured ? mode === "signup" ? "Create your account" : "Log in to Parlance" : "Connection setup required"}>
+      <Text style={styles.body}>{configured ? "Use any email, including Gmail. No email verification required. New accounts start with an empty synthetic banking profile." : "Configure the HTTPS customer API before signing in."}</Text>
+      {configured && <><TextInput style={styles.input} value={email} onChangeText={setEmail} autoCapitalize="none" autoCorrect={false} keyboardType="email-address" autoComplete="email" placeholder="Email address" accessibilityLabel="Email address" editable={!busy} maxLength={254} />
+      <TextInput style={styles.input} value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" autoComplete={mode === "signup" ? "new-password" : "current-password"} placeholder="Password (10–128 characters)" accessibilityLabel="Password" editable={!busy} maxLength={128} />
+      <Btn title={busy ? "Please wait…" : mode === "signup" ? "Create account" : "Log in"} disabled={busy || !email.trim() || password.length < 10} onPress={() => void submit()} />
+      <Btn title={mode === "login" ? "Create an account" : "Already registered? Log in"} secondary disabled={busy} onPress={() => { setMode(mode === "login" ? "signup" : "login"); setPassword(""); }} /></>}
+      {error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
+    </Card><Text style={styles.footnote}>Plan review only. Financial authorization remains unavailable on Android.</Text>
+  </ScrollView></KeyboardAvoidingView></SafeAreaView>;
 }
 
 function AppContent() {
@@ -181,7 +181,7 @@ function AppContent() {
 
   if (session.loading) return <SafeAreaView style={styles.center}><Text style={styles.brand}>PARLANCE</Text><Text style={styles.body}>Opening secure session…</Text></SafeAreaView>;
   if (session.token && !userId) return <SafeAreaView style={styles.signedOut}><Text style={styles.brand}>PARLANCE</Text><Text style={styles.hero}>Connecting securely…</Text><Text style={styles.body}>{syncError ? `Could not load customer data: ${syncError}` : "Verifying your session and loading current banking data."}</Text>{syncError && <><Btn title="Try again" onPress={() => void load()} /><Btn title="Sign out" secondary onPress={() => void session.signOut()} /></>}</SafeAreaView>;
-  if (!session.configured || !session.token) return <SafeAreaView style={styles.signedOut}><Text style={styles.brand}>PARLANCE</Text><Text style={styles.hero}>Banking, in your own words.</Text><Text style={styles.body}>Your accounts and transactions appear after secure customer sign-in.</Text><Card title={session.configured ? "Secure sign-in" : "Connection setup required"}><Text style={styles.body}>{session.configured ? "Continue with your bank identity provider. Your banking credentials are never stored in the app." : "An HTTPS customer API and OIDC identity provider must be configured before customer data can be accessed."}</Text>{session.configured && <Btn title="Sign in securely" onPress={session.signIn} />}{session.error && <Text style={styles.error}>{session.error}</Text>}</Card><Text style={styles.footnote}>Financial authorization is unavailable on Android until native passkey verification is completed.</Text></SafeAreaView>;
+  if (!session.configured || !session.token) return <NativeAuth configured={session.configured} error={session.error} onSubmit={session.signIn} />;
   return <SafeAreaView style={styles.root}><StatusBar barStyle="dark-content" backgroundColor={C.bg} /><View style={styles.top}><View><Text style={styles.eyebrow}>DBS · PARLANCE</Text><Text style={styles.topTitle}>{tab}</Text></View><Pressable onPress={() => session.token && void load()} accessibilityRole="button" accessibilityLabel="Refresh banking data"><Text style={styles.refresh}>↻</Text></Pressable></View>
     {session.error && <View style={styles.notice}><Text style={styles.error}>{session.error}</Text></View>}
     {syncError && <View style={styles.notice}><Text style={styles.error}>Connection issue: {syncError}</Text><Text style={styles.footnote}>Displayed data may be out of date. Refresh before reviewing a plan.</Text></View>}

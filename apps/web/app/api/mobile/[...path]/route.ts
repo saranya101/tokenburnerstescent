@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBaseUrl, CUSTOMER_PRINCIPAL_HEADER, INTERNAL_TOKEN_HEADER, webSecurityConfigurationValid } from "../../../../lib/server-api-auth";
-import { createMobileSession, mobileSessionCustomer, revokeMobileSession, rotateMobileSession, verifiedMobileIdentity } from "../../../../lib/mobile-auth";
+import { mobileSessionCustomer, revokeMobileSession, rotateMobileSession } from "../../../../lib/mobile-auth";
+
+import { passwordAuthResponse } from "../../../../lib/password-auth-route";
 
 // Only pre-authorization customer routes are reachable through this gateway.
 const GET_ROUTES = [/^session$/u, /^customer\/(?:state|activity|operations|journeys)$/u, /^executions\/[^/]+\/detail$/u];
 const POST_ROUTES = [
-  /^session\/(?:exchange|refresh|logout)$/u,
+  /^session\/(?:exchange|login|signup|refresh|logout)$/u,
   /^messages$/u, /^clarifications\/[^/]+\/answer$/u, /^bundle-clarifications\/[^/]+\/answer$/u,
   /^goal-candidates\/[^/]+\/confirm$/u, /^goal-bundle-candidates\/[^/]+\/confirm$/u,
   /^goals\/[^/]+\/(?:compile|funding-candidate)$/u, /^goal-bundles\/[^/]+\/compile$/u,
@@ -18,11 +20,8 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   if (!(method === "GET" ? GET_ROUTES : POST_ROUTES).some((pattern) => pattern.test(path))) return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
   if (method === "POST" && path.startsWith("session/")) {
     try {
-      if (path === "session/exchange") {
-        const identity = await verifiedMobileIdentity(request.headers.get("authorization"));
-        if (!identity) return NextResponse.json({ code: "UNAUTHORIZED" }, { status: 401 });
-        return NextResponse.json(await createMobileSession(identity), { headers: { "cache-control": "no-store" } });
-      }
+      if (path === "session/login" || path === "session/signup") return passwordAuthResponse(request, path === "session/login" ? "login" : "signup", false);
+      if (path === "session/exchange") return NextResponse.json({ code: "PROVIDER_LOGIN_REMOVED" }, { status: 410 });
       const input = await request.text();
       if (input.length > 1024) return NextResponse.json({ code: "REQUEST_TOO_LARGE" }, { status: 413 });
       let value: unknown;

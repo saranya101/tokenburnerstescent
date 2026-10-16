@@ -4,9 +4,7 @@ import { BankStateSnapshotV1, CustomerActivityV1, CompilerResultV1, FinancialPla
 
 export const publicConfig = {
   apiBaseUrl: String(Constants.expoConfig?.extra?.apiBaseUrl ?? "").replace(/\/$/u, ""),
-  oidcIssuer: String(Constants.expoConfig?.extra?.oidcIssuer ?? ""),
-  oidcClientId: String(Constants.expoConfig?.extra?.oidcClientId ?? ""),
-  oidcAudience: String(Constants.expoConfig?.extra?.oidcAudience ?? ""),
+
 };
 
 export type BankState = BankStateSnapshotV1;
@@ -60,7 +58,7 @@ async function request(token: string, path: string, body?: unknown): Promise<unk
 }
 
 export const mobileApi = {
-  exchange: async (oidcAccessToken: string) => MobileTokens.parse(await sessionPost("exchange", {}, oidcAccessToken)),
+  passwordSession: async (mode: "login" | "signup", email: string, password: string) => MobileTokens.parse(await sessionPost(mode, { email, password })),
   refreshSession: async (refreshToken: string) => MobileTokens.parse(await sessionPost("refresh", { refreshToken })),
   revokeSession: async (refreshToken: string) => { await sessionPost("logout", { refreshToken }); },
   session: async (token: string) => CustomerSession.parse(await request(token, "session")),

@@ -12,8 +12,8 @@ export function BankingShell({ active, children }: { active: BankingSection; chi
         <button type="button" className="icon-button" aria-label="Help"><Icon name="help" /></button>
         <button type="button" className="icon-button notification-button" aria-label="Notifications"><Icon name="bell" /><span /></button>
         <button type="button" className="profile-button" aria-label="Customer profile">
-          <span>{active === "parlance" ? <Icon name="recipient" /> : "AT"}</span>
-          {active !== "parlance" && <><b>Alex Tan</b><i>⌄</i></>}
+          <span><Icon name="recipient" /></span>
+          {active !== "parlance" && <><b>Customer</b><i>⌄</i></>}
         </button>
       </div>
     </header>
