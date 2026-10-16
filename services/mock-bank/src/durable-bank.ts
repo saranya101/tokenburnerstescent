@@ -175,6 +175,7 @@ export class PrismaDurableBank implements DurableBank {
           if (accounts.length !== 2 || accounts.some((item) => item.stateVersion !== service.stateVersion)) throw new BankRejection("BANK_STATE_INCONSISTENT", 503);
           const state: State = {
             stateVersion: service.stateVersion,
+            accountCurrencies: Object.fromEntries(accounts.map((item) => [item.id, item.currency])),
             balances: Object.fromEntries(accounts.map((item) => [item.id, item.availableMinorUnits])),
             holdings: Object.fromEntries(holdings.map((item) => [item.assetId, item.quantity.toString()])),
             assets: assets.map((item) => AssetV1.parse({ id: item.id, symbol: item.symbol, name: item.name, assetType: item.assetType,

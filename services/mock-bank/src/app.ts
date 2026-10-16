@@ -11,6 +11,7 @@ type FxQuote = z.infer<typeof FxQuoteV1>;
 type IssuedFxQuote = { quote: FxQuote; amount?: z.infer<typeof MoneyV1> };
 export interface State {
   stateVersion: number;
+  accountCurrencies: Record<string, string>;
   balances: Record<string, bigint>;
   holdings: Record<string, string>;
   assets: Asset[];
@@ -81,9 +82,10 @@ const DEMO_ASSET_QUOTE = AssetQuoteV1.parse({
   quoteId: "asset-quote-aapl-usd-v1", assetId: "asset-aapl", settlementCurrency: "USD",
   unitPriceMinor: "20000", feeMinor: "100", expiresAt: "2099-01-01T00:00:00.000Z",
 });
-const fxDestinationAccountId = (currency: string): string | undefined => ACCOUNT_DEFINITIONS.find((account) => account.currency === currency)?.id;
+const fxDestinationAccountId = (state: State, currency: string): string | undefined => Object.entries(state.accountCurrencies).find(([, accountCurrency]) => accountCurrency === currency)?.[0];
 const initialState = (stateVersion: number): State => ({
   stateVersion,
+  accountCurrencies: Object.fromEntries(ACCOUNT_DEFINITIONS.map((account) => [account.id, account.currency])),
   balances: { ...DEFAULT_INITIAL_BALANCES },
   holdings: {},
   assets: ASSET_DEFINITIONS.map((asset) => ({ ...asset })),
@@ -222,10 +224,10 @@ export function buildApp(options: MockBankOptions = {}) {
   }); });
   app.post("/v1/fx/quote", async (request, reply) => { const body = QuoteBody.parse(request.body); if (options.durableBank) return options.durableBank.issueFxQuote(body.userId, body.fromCurrency, body.toCurrency, body.amount); const state = getState(body.userId); if (state.scenarios.has("FX_UNAVAILABLE")) return reply.code(503).send({ code: "FX_UNAVAILABLE" }); return issueFxQuote(body.userId, state, body.fromCurrency, body.toCurrency, body.amount).quote; });
   const debit = (state: State, accountId: string, money: { minorUnits: string }): void => { const balance = state.balances[accountId]; if (balance === undefined) throw new Error("ACCOUNT_NOT_FOUND"); const amount = BigInt(money.minorUnits); if (amount <= 0n) throw new Error("AMOUNT_MUST_BE_POSITIVE"); if (balance < amount) throw new Error("INSUFFICIENT_FUNDS"); state.balances[accountId] = balance - amount; };
-  const requireAccountCurrency = (accountId: string, currency: string): void => {
-    const account = ACCOUNT_DEFINITIONS.find((candidate) => candidate.id === accountId);
-    if (!account) throw new Error("ACCOUNT_NOT_FOUND");
-    if (account.currency !== currency) throw new Error("ACCOUNT_CURRENCY_MISMATCH");
+  const requireAccountCurrency = (state: State, accountId: string, currency: string): void => {
+    const accountCurrency = state.accountCurrencies[accountId];
+    if (!accountCurrency) throw new Error("ACCOUNT_NOT_FOUND");
+    if (accountCurrency !== currency) throw new Error("ACCOUNT_CURRENCY_MISMATCH");
   };
   const execute = <T extends WriteBody>(path: "fx" | "transfer" | "payment" | "buy", schema: z.ZodType<T>, blocked: Scenario, mutate: (state: State, body: T) => void) => app.post(`/v1/execute/${path}`, async (request, reply) => {
     if (options.customerSnapshot && !options.durableBank) return reply.code(403).send({ code: "BANK_EXECUTION_DISABLED" });
@@ -254,8 +256,8 @@ export function buildApp(options: MockBankOptions = {}) {
     if (!issued) throw new Error(state.expiredFxQuoteIds.has(body.quoteId) ? "QUOTE_EXPIRED" : "FX_QUOTE_NOT_FOUND");
     if (issued.quote.fromCurrency !== body.fromAmount.currency || issued.quote.toCurrency !== body.toCurrency) throw new Error("FX_QUOTE_CURRENCY_MISMATCH");
     if (issued.amount && (issued.amount.currency !== body.fromAmount.currency || issued.amount.minorUnits !== body.fromAmount.minorUnits)) throw new Error("FX_QUOTE_AMOUNT_MISMATCH");
-    requireAccountCurrency(body.accountId, body.fromAmount.currency);
-    const target = fxDestinationAccountId(body.toCurrency); if (!target) throw new Error("FX_DESTINATION_ACCOUNT_NOT_FOUND");
+    requireAccountCurrency(state, body.accountId, body.fromAmount.currency);
+    const target = fxDestinationAccountId(state, body.toCurrency); if (!target) throw new Error("FX_DESTINATION_ACCOUNT_NOT_FOUND");
     const feeMinorUnits = issued.quote.fee?.minorUnits ?? "0";
     if (issued.quote.fee && issued.quote.fee.currency !== body.fromAmount.currency) throw new Error("FX_QUOTE_FEE_CURRENCY_MISMATCH");
     debit(state, body.accountId, { minorUnits: (BigInt(body.fromAmount.minorUnits) + BigInt(feeMinorUnits)).toString() });
@@ -263,24 +265,27 @@ export function buildApp(options: MockBankOptions = {}) {
     state.balances[target] = (state.balances[target] ?? 0n) + multiplyRateHalfEven(body.fromAmount.minorUnits, rate.numerator, rate.denominator);
   });
   execute("transfer", TransferBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => {
-    requireAccountCurrency(body.sourceAccountId, body.amount.currency);
+    requireAccountCurrency(state, body.sourceAccountId, body.amount.currency);
     if ("beneficiaryId" in body) {
       const beneficiary = state.beneficiaries.find((candidate) => candidate.id === body.beneficiaryId);
       if (!beneficiary) throw new Error("BENEFICIARY_NOT_FOUND");
       if (beneficiary.status !== "ACTIVE") throw new Error("BENEFICIARY_UNAVAILABLE");
       if (!beneficiary.supportedCurrencies.some((currency) => currency === body.amount.currency)) throw new Error("BENEFICIARY_CURRENCY_UNSUPPORTED");
     } else {
-      requireAccountCurrency(body.destinationAccountId, body.amount.currency);
+      requireAccountCurrency(state, body.destinationAccountId, body.amount.currency);
     }
     debit(state, body.sourceAccountId, body.amount);
     if ("destinationAccountId" in body) state.balances[body.destinationAccountId] = (state.balances[body.destinationAccountId] ?? 0n) + BigInt(body.amount.minorUnits);
   });
-  execute("payment", PaymentBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => debit(state, body.sourceAccountId, body.amount)); execute("buy", BuyBody, "ASSET_UNAVAILABLE", (state, body) => {
+  execute("payment", PaymentBody, "TRANSFER_RAIL_UNAVAILABLE", (state, body) => {
+    requireAccountCurrency(state, body.sourceAccountId, body.amount.currency);
+    debit(state, body.sourceAccountId, body.amount);
+  }); execute("buy", BuyBody, "ASSET_UNAVAILABLE", (state, body) => {
     const quote = state.assetQuotes.find((item) => item.quoteId === body.quoteId); if (!quote) throw new Error("ASSET_QUOTE_NOT_FOUND");
     if (quote.assetId !== body.assetId) throw new Error("ASSET_QUOTE_ASSET_MISMATCH");
     const asset = state.assets.find((item) => item.id === body.assetId); if (!asset?.tradable) throw new Error("ASSET_NOT_TRADABLE");
     if (quote.settlementCurrency !== body.settlementCurrency || asset.settlementCurrency !== body.settlementCurrency) throw new Error("ASSET_QUOTE_SETTLEMENT_CURRENCY_MISMATCH");
-    const account = ACCOUNT_DEFINITIONS.find((item) => item.id === body.sourceAccountId); if (!account || account.currency !== body.settlementCurrency) throw new Error("SOURCE_ACCOUNT_CURRENCY_MISMATCH");
+    if (state.accountCurrencies[body.sourceAccountId] !== body.settlementCurrency) throw new Error("SOURCE_ACCOUNT_CURRENCY_MISMATCH");
     if (Date.parse(quote.expiresAt) <= now().getTime()) throw new Error("ASSET_QUOTE_EXPIRED");
     if (body.quotedUnitPriceMinor !== quote.unitPriceMinor) throw new Error("ASSET_QUOTE_UNIT_PRICE_MISMATCH");
     if (body.quotedFeeMinor !== quote.feeMinor) throw new Error("ASSET_QUOTE_FEE_MISMATCH");

@@ -186,4 +186,42 @@ describe.runIf(local)("durable synthetic bank against disposable local PostgreSQ
     expect(after.accounts).toEqual(before.accounts);
     await expired.close();
   });
+
+  it("uses each customer's own account IDs and rejects another customer's accounts", async () => {
+    const otherUser = "durable-test-other-customer";
+    const sgd = "other-acc-sgd";
+    const usd = "other-acc-usd";
+    await db.user.create({ data: { id: otherUser } });
+    await db.account.createMany({ data: [
+      { id: sgd, providerRef: sgd, userId: otherUser, type: "CHECKING", currency: "SGD", ledgerMinorUnits: 100_000n, availableMinorUnits: 100_000n, status: "ACTIVE", capabilities: ["SEND_TRANSFER", "CONVERT_FX", "TRADE_ASSET"], stateVersion: 1 },
+      { id: usd, providerRef: usd, userId: otherUser, type: "CHECKING", currency: "USD", ledgerMinorUnits: 50_000n, availableMinorUnits: 50_000n, status: "ACTIVE", capabilities: ["SEND_TRANSFER", "CONVERT_FX", "TRADE_ASSET"], stateVersion: 1 },
+    ] });
+    await db.beneficiary.create({ data: { id: "other-ben-john-lim", userId: otherUser, name: "John Lim", supportedCurrencies: ["SGD"], status: "ACTIVE" } });
+    const bank = app();
+    const snapshot = async () => (await bank.inject({ method: "GET", url: `/v1/state/${otherUser}`, headers })).json();
+    const before = await snapshot();
+    const originalCustomerBefore = await state(bank);
+    expect(before.accounts.map((account: { id: string }) => account.id).sort()).toEqual([sgd, usd].sort());
+    const foreign = await bank.inject({ method: "POST", url: "/v1/execute/transfer",
+      headers: { ...headers, "idempotency-key": "other-foreign-account", "x-expected-bank-state-version": "1" },
+      payload: { userId: otherUser, sourceAccountId: "acc-sgd", beneficiaryId: "other-ben-john-lim", amount: { currency: "SGD", minorUnits: "100" } } });
+    expect(foreign.statusCode).toBe(409);
+    expect(foreign.json()).toEqual({ code: "ACCOUNT_NOT_FOUND" });
+    const transfer = await bank.inject({ method: "POST", url: "/v1/execute/transfer",
+      headers: { ...headers, "idempotency-key": "other-own-transfer", "x-expected-bank-state-version": "1" },
+      payload: { userId: otherUser, sourceAccountId: sgd, beneficiaryId: "other-ben-john-lim", amount: { currency: "SGD", minorUnits: "100" } } });
+    expect(transfer.statusCode).toBe(200);
+    const quote = await bank.inject({ method: "POST", url: "/v1/fx/quote", headers,
+      payload: { userId: otherUser, fromCurrency: "SGD", toCurrency: "USD", amount: { currency: "SGD", minorUnits: "1000" } } });
+    expect(quote.statusCode).toBe(200);
+    const fx = await bank.inject({ method: "POST", url: "/v1/execute/fx",
+      headers: { ...headers, "idempotency-key": "other-own-fx", "x-expected-bank-state-version": "2" },
+      payload: { userId: otherUser, accountId: sgd, fromAmount: { currency: "SGD", minorUnits: "1000" }, toCurrency: "USD", quoteId: quote.json().id } });
+    expect(fx.statusCode).toBe(200);
+    const after = await snapshot();
+    expect(after.accounts.find((account: { id: string }) => account.id === sgd).availableMinorUnits).toBe("98900");
+    expect(after.accounts.find((account: { id: string }) => account.id === usd).availableMinorUnits).toBe("50750");
+    expect((await state(bank)).accounts).toEqual(originalCustomerBefore.accounts);
+    await bank.close();
+  });
 });
