@@ -50,6 +50,12 @@ export function buildApp(services = productionServices(), authorization: ApiAuth
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof z.ZodError) return reply.code(400).send({ code: "INVALID_REQUEST", details: error.issues });
     if (error instanceof IntentInterpreterError) {
+      const demoMessages = {
+        DEMO_FX_UNAVAILABLE: "Standalone currency conversion isn't available in this demo because no exchange-rate quote is connected. You can review a transfer or an Apple share purchase instead. No money has moved.",
+        DEMO_BILL_UNAVAILABLE: "Bill payments aren't available in this demo because no biller or outstanding bill is connected. You can review a transfer to a saved payee instead. No money has moved.",
+        DEMO_REQUEST_UNSUPPORTED: "This demo supports transfers to saved payees and Apple share purchases. Try ‘Send SGD 100 to John Tan’ or ‘Buy one share of Apple’. No money has moved.",
+      };
+      if (error.code in demoMessages) return reply.code(200).send({ status: "SEMANTIC_VALIDATION_FAILED", message: demoMessages[error.code as keyof typeof demoMessages] });
       if (error.code === "EMPTY_INPUT") return reply.code(400).send({ code: "INVALID_REQUEST" });
       if (error.code === "MODEL_ERROR") return reply.code(503).send({ code: "INTERPRETER_UNAVAILABLE" });
       return reply.code(422).send({ code: "INTENT_INTERPRETATION_FAILED" });

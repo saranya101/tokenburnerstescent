@@ -38,6 +38,7 @@ export class ModelBackedIntentInterpreter implements IntentInterpreter {
         promptVersion: INTENT_PROMPT_VERSION,
       });
     } catch (error) {
+      if (error instanceof IntentInterpreterError && error.code.startsWith("DEMO_")) throw error;
       // Provider errors may contain credentials or implementation details.
       throw new IntentInterpreterError("MODEL_ERROR", "The intent model could not generate an interpretation.", undefined, modelDiagnostic(error));
     }

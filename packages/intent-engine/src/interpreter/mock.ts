@@ -2,13 +2,15 @@ import { IntentBundleDraftV1, IntentDraftV1, type IntentGoalConstraintV1, type I
 import { ModelBackedIntentBundleInterpreter } from "../bundle/interpreter.js";
 import { moneyEvidence, sourceActionClause, sourceActionSignals, sourceConditionalFundingCurrencies, sourceMinimumBalanceMoney } from "../validation/evidence.js";
 import { ModelBackedIntentInterpreter } from "./interpreter.js";
+import { IntentInterpreterError } from "./errors.js";
 import type { IntentModelClient, IntentModelInput } from "./types.js";
 
 /** Bounded deterministic demo parser. No provider calls, identity inference, or canonical IDs. */
 export class MockIntentModelClient implements IntentModelClient {
   async generateIntent(input: IntentModelInput): Promise<unknown> {
+    rejectUnavailableDemoAction(input.text);
     const signals = sourceActionSignals(input.text);
-    if (signals.length !== 1) throw new Error("MOCK_REQUEST_UNSUPPORTED");
+    if (signals.length !== 1) throw new IntentInterpreterError("DEMO_REQUEST_UNSUPPORTED", "Unsupported demo request");
     return draftForClause(sourceActionClause(input.text, signals, 0)!, input.text);
   }
 }
@@ -21,15 +23,16 @@ export class MockIntentInterpreter extends ModelBackedIntentInterpreter {
 export class MockIntentBundleInterpreter extends ModelBackedIntentBundleInterpreter {
   constructor() {
     super({ async generateIntentBundle({ text }) {
+      rejectUnavailableDemoAction(text);
       const signals = sourceActionSignals(text);
-      if (signals.length !== 2) throw new Error("MOCK_REQUEST_UNSUPPORTED");
+      if (signals.length !== 2) throw new IntentInterpreterError("DEMO_REQUEST_UNSUPPORTED", "Unsupported demo request");
       const items = signals.map((_signal, index) => {
         const clause = sourceActionClause(text, signals, index)!;
         const draft = draftForClause(clause, text);
         // Bundle schema requires money. A spoken-dollar placeholder is never a candidate:
         // coverage validation must produce the existing explicit SGD/USD clarification first.
         if (draft.goal.type === "DELIVER_MONEY" && draft.goal.amount?.currency === undefined) {
-          if (!moneyEvidence(clause).some((item) => item.kind === "SPOKEN_DOLLARS" && item.currency === undefined)) throw new Error("MOCK_REQUEST_UNSUPPORTED");
+          if (!moneyEvidence(clause).some((item) => item.kind === "SPOKEN_DOLLARS" && item.currency === undefined)) throw new IntentInterpreterError("DEMO_REQUEST_UNSUPPORTED", "Unsupported demo request");
           draft.goal.amount = { ...draft.goal.amount, currency: "USD" };
         }
         const complete = IntentDraftV1.parse({ ...draft, originalText: clause });
@@ -68,11 +71,18 @@ function draftForClause(clause: string, fullText: string) {
     return { ...common, goal: { type: "DELIVER_MONEY" as const, ...(amount === undefined ? {} : { amount }), ...(recipientReference === undefined ? {} : { recipientReference }) } };
   }
   const asset = /^(?:buy|purchase|acquire)\s+(one|[0-9]+(?:\.[0-9]+)?)\s+shares?\s+(?:of\s+)?(.+?)(?=\s+(?:and|then|using|use|but|while|with|keeping)\b|[!?,;]|\.(?:\s|$)|$)/iu.exec(clause);
-  if (!asset) throw new Error("MOCK_REQUEST_UNSUPPORTED");
+  if (!asset) throw new IntentInterpreterError("DEMO_REQUEST_UNSUPPORTED", "Unsupported demo request");
   return { ...common, goal: { type: "ACQUIRE_ASSET" as const, quantity: asset[1]!.toLowerCase() === "one" ? "1" : asset[1]!, assetReference: asset[2]!.replace(/\s+stock$/iu, "").trim() } };
 }
 
 function decimalMinorUnits(value: string): string {
   const [whole, fraction = ""] = value.replaceAll(",", "").split(".");
   return (BigInt(whole!) * 100n + BigInt(fraction.padEnd(2, "0"))).toString();
+}
+
+// These actions have no authoritative quote/bill catalogue in the bounded demo.
+// Refuse the entire request (including mixed requests), never silently drop an action.
+function rejectUnavailableDemoAction(text: string): void {
+  if (/(?:^|[.!?;]|\b(?:and|then)\s+)(?:okay\s+|please\s+|i\s+want\s+to\s+)*(?:convert|exchange|swap)\b/iu.test(text)) throw new IntentInterpreterError("DEMO_FX_UNAVAILABLE", "Demo FX unavailable");
+  if (sourceActionSignals(text).some((signal) => signal.type === "PAY_BILL")) throw new IntentInterpreterError("DEMO_BILL_UNAVAILABLE", "Demo bills unavailable");
 }

@@ -84,6 +84,14 @@ describe("API status handling", () => {
     expect(response.statusCode).toBe(status); expect(response.json()).toEqual({ code }); await app.close();
   });
 
+  it.each(["DEMO_FX_UNAVAILABLE", "DEMO_BILL_UNAVAILABLE", "DEMO_REQUEST_UNSUPPORTED"] as const)("explains %s without leaking internal details or treating it as an outage", async (code) => {
+    const injected = services(); injected.messages = { receive: async () => { throw new IntentInterpreterError(code, "private provider details"); } } as unknown as ApiServices["messages"];
+    injected.bundles = { handles: () => false } as unknown as ApiServices["bundles"];
+    const app = appFor(injected); const response = await asCustomer(app, { method: "POST", url: "/v1/messages", payload: { text: "Convert SGD 100 to USD" } });
+    expect(response.statusCode).toBe(200); expect(response.json()).toMatchObject({ status: "SEMANTIC_VALIDATION_FAILED", message: expect.stringContaining("demo") });
+    expect(response.body).not.toContain("private provider details"); expect(response.body).not.toContain("INTERPRETER_UNAVAILABLE"); await app.close();
+  });
+
   it.each([
     { compilerReady: false, mockBankReady: true },
     { compilerReady: true, mockBankReady: false },

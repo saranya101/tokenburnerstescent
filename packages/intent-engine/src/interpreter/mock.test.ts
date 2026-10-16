@@ -38,3 +38,21 @@ it("preserves exactly two headline actions, conditional funding and the SGD rese
 it.each(["hello", "do not send SGD 100 to John", "send SGD 100 to John and send SGD 20 to Jane"])("fails closed for unsupported single requests: %s", async (text) => {
   await expect(new MockIntentInterpreter().interpretUserRequest({ text, userId: "u1" })).rejects.toThrow();
 });
+
+
+it.each([
+  ["Convert SGD 100 to USD", "DEMO_FX_UNAVAILABLE"],
+  ["Pay my electricity bill", "DEMO_BILL_UNAVAILABLE"],
+  ["Hello", "DEMO_REQUEST_UNSUPPORTED"],
+])("returns a capability refusal instead of a provider outage: %s", async (text, code) => {
+  await expect(new MockIntentInterpreter().interpretUserRequest({ text, userId: "u1" })).rejects.toMatchObject({ code });
+});
+it("does not silently omit an unavailable action in a bundle", async () => {
+  await expect(new MockIntentBundleInterpreter().interpretUserRequest({ text: "Send SGD 100 to John and pay my electricity bill", userId: "u1" })).rejects.toMatchObject({ code: "DEMO_BILL_UNAVAILABLE" });
+});
+it("does not mistake a payee name for an FX instruction", async () => {
+  expect((await new MockIntentInterpreter().interpretUserRequest({ text: "Send SGD 100 to Exchange", userId: "u1" })).goal).toMatchObject({ type: "DELIVER_MONEY", recipientReference: "Exchange" });
+});
+it("refuses a mixed request containing an unsupported conversion", async () => {
+  await expect(new MockIntentBundleInterpreter().interpretUserRequest({ text: "Send SGD 100 to John and then convert SGD 50 to USD", userId: "u1" })).rejects.toMatchObject({ code: "DEMO_FX_UNAVAILABLE" });
+});
