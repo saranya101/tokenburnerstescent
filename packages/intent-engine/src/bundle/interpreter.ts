@@ -36,6 +36,7 @@ export class ModelBackedIntentBundleInterpreter implements IntentBundleInterpret
         promptVersion: INTENT_BUNDLE_PROMPT_VERSION,
       });
     } catch (error) {
+      if (error instanceof IntentInterpreterError && error.code.startsWith("DEMO_")) throw error;
       throw new IntentInterpreterError("MODEL_ERROR", "The intent model could not generate an intent bundle.", undefined, modelDiagnostic(error));
     }
 

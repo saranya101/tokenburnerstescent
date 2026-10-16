@@ -1,3 +1,4 @@
+import { accountLabel } from "./banking-state";
 import type { BankStateSnapshotV1, FinancialPlanStepV1, FinancialPlanV1, GoalBundleContractV1, GoalContractV1, MoneyV1 } from "@parlance/contracts";
 
 export type GoalDetail = { label: string; value: string };
@@ -35,8 +36,12 @@ function customerName(id: string, reference: string | undefined, entityType: Goa
   return safeFallback(entityType);
 }
 
-function names(goal: Pick<GoalContractV1, "entityBindings">, referenceLabels: ReadonlyMap<string, string> = new Map()): Map<string, string> {
-  return new Map(goal.entityBindings.map((binding) => [binding.entityId, customerName(binding.entityId, referenceLabels.get(binding.reference) ?? binding.reference, binding.entityType)]));
+function names(goal: Pick<GoalContractV1, "entityBindings">, referenceLabels: ReadonlyMap<string, string> = new Map(), state?: BankStateSnapshotV1): Map<string, string> {
+  const map = new Map(goal.entityBindings.map((binding) => [binding.entityId, customerName(binding.entityId, referenceLabels.get(binding.reference) ?? binding.reference, binding.entityType)]));
+  for (const account of state?.accounts ?? []) if (!customerLabels[account.id] && (!map.has(account.id) || map.get(account.id) === "Selected account")) map.set(account.id, accountLabel(account));
+  for (const payee of state?.beneficiaries ?? []) map.set(payee.id, payee.name);
+  for (const asset of state?.assets ?? []) if (!customerLabels[asset.id] && !map.has(asset.id)) map.set(asset.id, asset.name);
+  return map;
 }
 
 function authoritativeReferenceLabels(goal: Pick<GoalContractV1, "entityBindings">, state?: BankStateSnapshotV1): Map<string, string> {
@@ -135,7 +140,7 @@ function presentStep(step: FinancialPlanStepV1, map: Map<string, string>, snapsh
 
 export function presentPlan(goal: GoalContractV1, plan: FinancialPlanV1, liveState?: BankStateSnapshotV1): PlanPresentation {
   const referenceLabels = authoritativeReferenceLabels(goal, liveState);
-  const map = names(goal, referenceLabels); const warnings = plan.projectedOutcome.warnings;
+  const map = names(goal, referenceLabels, liveState); const warnings = plan.projectedOutcome.warnings;
   const snapshot = liveState?.stateVersion === plan.bankStateVersion ? liveState : undefined;
   const funding = plan.steps.flatMap((step): FundingItem[] => {
     if (step.action !== "FX_CONVERT") return [];
@@ -177,7 +182,7 @@ export function presentBundle(bundle: Pick<GoalBundleContractV1, "items" | "glob
 
 export function presentBundlePlan(bundle: GoalBundleContractV1, plan: FinancialPlanV1, liveState?: BankStateSnapshotV1): PlanPresentation {
   const entityBindings = bundle.items.flatMap(({ bindings }) => bindings);
-  const map = names({ entityBindings }); const warnings = plan.projectedOutcome.warnings; const summary = presentBundle(bundle);
+  const map = names({ entityBindings }, new Map(), liveState); const warnings = plan.projectedOutcome.warnings; const summary = presentBundle(bundle);
   const snapshot = liveState?.stateVersion === plan.bankStateVersion ? liveState : undefined;
   const funding = plan.steps.flatMap((step): FundingItem[] => {
     if (step.action !== "FX_CONVERT") return [];

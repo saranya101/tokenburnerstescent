@@ -21,6 +21,13 @@ it("derives account, recipient, FX quote, and latest-state presentation from con
   expect(presentation.steps[1]).toMatchObject({ title: "Send USD 5,000.00", summary: "USD Wallet to NTU" });
   expect(presentation.projectedBalances).toEqual([{ account: "Everyday Account", amount: "SGD 3,100.00" }, { account: "USD Wallet", amount: "USD 175.00" }]);
   expect(presentation.validUntil).toBe("2099-01-01T00:00:00.000Z");
+  // A new password customer has generated account IDs, without account bindings in a transfer.
+  const generated = (value: unknown) => JSON.parse(JSON.stringify(value).replaceAll('"sgd"', '"customer-sgd"').replaceAll('"usd"', '"customer-usd"'));
+  const newGoal = GoalContractV1.parse({ ...generated(goal), entityBindings: goal.entityBindings.filter((binding) => binding.entityType !== "ACCOUNT") });
+  const newReview = presentPlan(newGoal, FinancialPlanV1.parse(generated(plan)), BankStateSnapshotV1.parse(generated(state)));
+  expect(newReview.projectedBalances).toEqual([{ account: "SGD Checking", amount: "SGD 3,100.00" }, { account: "USD Wallet", amount: "USD 175.00" }]);
+  expect(newReview.steps[0]?.summary).toBe("SGD Checking to USD Wallet");
+
 });
 
 it("uses customer account and recipient names instead of raw financial identifiers", () => {
