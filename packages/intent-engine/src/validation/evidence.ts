@@ -71,7 +71,12 @@ export function sourceActionClause(sourceText: string, signals: readonly SourceA
   if (signal === undefined) return undefined;
   const nextActionStart = signals[index + 1]?.start ?? sourceText.length;
   const remainder = sourceText.slice(signal.end, nextActionStart);
-  const sentenceBoundary = remainder.search(/[;!?\n]|\.(?=\s|$)/u);
+  const sentenceBoundary = [...remainder.matchAll(/[;!?\n]|\.(?=\s|$)/gu)].find((match) => {
+    // A catalogue name followed by its ticker is one reference, not a new sentence.
+    const companySuffix = /\b(?:Inc|Corp|Ltd|Co)$/iu.test(remainder.slice(0, match.index));
+    const followedByTicker = /^\.\s+\([A-Z0-9.-]+\)/u.test(remainder.slice(match.index));
+    return !(match[0] === "." && companySuffix && followedByTicker);
+  })?.index ?? -1;
   const clauseEnd = sentenceBoundary < 0 ? nextActionStart : signal.end + sentenceBoundary;
   return sourceText.slice(signal.start, clauseEnd);
 }

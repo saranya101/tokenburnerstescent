@@ -70,7 +70,7 @@ function draftForClause(clause: string, fullText: string) {
       : numeric === undefined ? undefined : { minorUnits: decimalMinorUnits(numeric) };
     return { ...common, goal: { type: "DELIVER_MONEY" as const, ...(amount === undefined ? {} : { amount }), ...(recipientReference === undefined ? {} : { recipientReference }) } };
   }
-  const asset = /^(?:buy|purchase|acquire)\s+(one|[0-9]+(?:\.[0-9]+)?)\s+shares?\s+(?:of\s+)?(.+?)(?=\s+(?:and|then|using|use|but|while|with|keeping)\b|[!?,;]|\.(?:\s|$)|$)/iu.exec(clause);
+  const asset = /^(?:buy|purchase|acquire)\s+(one|[0-9]+(?:\.[0-9]+)?)\s+shares?\s+(?:of\s+)?(.+?)(?=\s+(?:and|then|using|use|but|while|with|keeping)\b|[!?,;]|\.(?=\s*$)|$)/iu.exec(clause);
   if (!asset) throw new IntentInterpreterError("DEMO_REQUEST_UNSUPPORTED", "Unsupported demo request");
   return { ...common, goal: { type: "ACQUIRE_ASSET" as const, quantity: asset[1]!.toLowerCase() === "one" ? "1" : asset[1]!, assetReference: asset[2]!.replace(/\s+stock$/iu, "").trim() } };
 }
