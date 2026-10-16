@@ -30,3 +30,11 @@ describe("banking display values", () => {
     ]);
   });
 });
+
+
+it("resolves generated entity IDs using this customer's current catalogue", () => {
+  const state = { accounts: [{ id: "customer-account", currency: "SGD", type: "CHECKING" }], beneficiaries: [{ id: "customer-payee", name: "John Tan" }], assets: [{ id: "customer-asset", name: "Apple Inc." }] } as Parameters<typeof describeCandidate>[1];
+  expect(describeCandidate({ goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientId: "customer-payee" }, constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "customer-account" }] }, state)).toEqual(["Send S$100.00 to John Tan", "Keep at least S$1,000.00 available in SGD checking"]);
+  expect(describeCandidate({ goal: { type: "ACQUIRE_ASSET", quantity: "1", assetId: "customer-asset" } }, state)).toEqual(["Buy 1 Apple Inc."]);
+  expect(describeCandidate({ goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientId: "other-customer-private-id" } }, state).join()).not.toContain("other-customer-private-id");
+});

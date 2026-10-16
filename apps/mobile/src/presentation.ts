@@ -1,3 +1,5 @@
+import type { BankState } from "./api";
+
 export function money(currency: string, minor: string): string {
   const amount = BigInt(minor); const abs = amount < 0n ? -amount : amount;
   const whole = (abs / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/gu, ",");
@@ -33,41 +35,47 @@ export function sgdReserveMinorUnits(input: string): string | undefined {
   return (BigInt(major!) * 100n + BigInt(cents.padEnd(2, "0"))).toString();
 }
 
-export function describeCandidate(value: unknown): string[] {
+export function describeCandidate(value: unknown, state?: Pick<BankState, "accounts" | "beneficiaries" | "assets">): string[] {
+  const label = (reference: unknown, id: unknown, fallback: string): string => {
+    const payee = state?.beneficiaries.find((item) => item.id === id); if (payee) return payee.name;
+    const asset = state?.assets.find((item) => item.id === id); if (asset) return asset.name;
+    const account = state?.accounts.find((item) => item.id === id); if (account) return `${account.currency} ${account.type.toLowerCase()}`;
+    return typeof reference === "string" ? reference : fallback;
+  };
   if (!value || typeof value !== "object") return ["Review your requested action"];
   const candidate = value as Record<string, unknown>;
   const items = Array.isArray(candidate.items) ? candidate.items : [candidate];
   const lines = items.map((item, index) => {
     const goal = item && typeof item === "object" ? (item as Record<string, unknown>).goal : undefined;
-    return `${items.length > 1 ? `${index + 1}. ` : ""}${describeGoal(goal)}`;
+    return `${items.length > 1 ? `${index + 1}. ` : ""}${describeGoal(goal, label)}`;
   });
   const terms = [...(Array.isArray(candidate.constraints) ? candidate.constraints : []), ...(Array.isArray(candidate.globalConstraints) ? candidate.globalConstraints : []),
-    ...items.flatMap((item) => item && typeof item === "object" && Array.isArray((item as Record<string, unknown>).constraints) ? (item as { constraints: unknown[] }).constraints : [])];
+    ...(Array.isArray(candidate.items) ? items : []).flatMap((item) => item && typeof item === "object" && Array.isArray((item as Record<string, unknown>).constraints) ? (item as { constraints: unknown[] }).constraints : [])];
   for (const term of terms) {
     if (!term || typeof term !== "object") continue;
     const constraint = term as Record<string, unknown>; const amount = constraint.money;
     if (constraint.type !== "MIN_AVAILABLE_BALANCE" || !amount || typeof amount !== "object") continue;
     const value = amount as Record<string, unknown>;
-    if (typeof value.currency === "string" && typeof value.minorUnits === "string") lines.push(`Keep at least ${money(value.currency, value.minorUnits)} available in ${String(constraint.accountReference ?? constraint.accountId ?? "the selected account")}`);
+    if (typeof value.currency === "string" && typeof value.minorUnits === "string") lines.push(`Keep at least ${money(value.currency, value.minorUnits)} available in ${label(constraint.accountReference, constraint.accountId, "the selected account")}`);
   }
   const preferences = [...(Array.isArray(candidate.preferences) ? candidate.preferences : []),
-    ...items.flatMap((item) => item && typeof item === "object" && Array.isArray((item as Record<string, unknown>).preferences) ? (item as { preferences: unknown[] }).preferences : [])];
+    ...(Array.isArray(candidate.items) ? items : []).flatMap((item) => item && typeof item === "object" && Array.isArray((item as Record<string, unknown>).preferences) ? (item as { preferences: unknown[] }).preferences : [])];
   for (const term of preferences) {
     if (!term || typeof term !== "object") continue;
     const preference = term as Record<string, unknown>;
-    if (preference.type === "PREFER_ACCOUNT") lines.push(`Prefer ${String(preference.accountReference ?? preference.accountId ?? "the selected account")} for funding if needed`);
+    if (preference.type === "PREFER_ACCOUNT") lines.push(`Prefer ${label(preference.accountReference, preference.accountId, "the selected account")} for funding if needed`);
   }
   return lines;
 }
 
-function describeGoal(value: unknown): string {
+function describeGoal(value: unknown, label: (reference: unknown, id: unknown, fallback: string) => string): string {
   if (!value || typeof value !== "object") return "Review your requested action";
   const goal = value as Record<string, unknown>;
   if (goal.type === "DELIVER_MONEY") {
     const amount = goal.amount && typeof goal.amount === "object" ? goal.amount as Record<string, unknown> : {};
     const displayed = typeof amount.currency === "string" && typeof amount.minorUnits === "string" ? money(amount.currency, amount.minorUnits) : "an amount to confirm";
-    return `Send ${displayed} to ${String(goal.recipientReference ?? goal.recipientId ?? "the selected recipient")}`;
+    return `Send ${displayed} to ${label(goal.recipientReference, goal.recipientId, "the selected recipient")}`;
   }
-  if (goal.type === "ACQUIRE_ASSET") return `Buy ${String(goal.quantity ?? "a quantity to confirm")} ${String(goal.assetReference ?? goal.assetId ?? "selected asset")}`;
+  if (goal.type === "ACQUIRE_ASSET") return `Buy ${String(goal.quantity ?? "a quantity to confirm")} ${label(goal.assetReference, goal.assetId, "selected asset")}`;
   return "Review your requested action";
 }
