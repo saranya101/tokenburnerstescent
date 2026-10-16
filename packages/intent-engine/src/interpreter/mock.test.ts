@@ -56,3 +56,7 @@ it("does not mistake a payee name for an FX instruction", async () => {
 it("refuses a mixed request containing an unsupported conversion", async () => {
   await expect(new MockIntentBundleInterpreter().interpretUserRequest({ text: "Send SGD 100 to John and then convert SGD 50 to USD", userId: "u1" })).rejects.toMatchObject({ code: "DEMO_FX_UNAVAILABLE" });
 });
+
+it("preserves company punctuation and ticker in the investment shortcut", async () => {
+  expect((await new MockIntentInterpreter().interpretUserRequest({ text: "Buy 1 share of Apple Inc. (AAPL).", userId: "u1" })).goal).toEqual({ type: "ACQUIRE_ASSET", quantity: "1", assetReference: "Apple Inc. (AAPL)" });
+});
