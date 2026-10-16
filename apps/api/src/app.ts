@@ -5,7 +5,7 @@ import { getPrismaClient } from "@parlance/db";
 import { registerRoutes } from "./routes/index.js";
 import { CompilerClient } from "./clients/compiler.js";
 import { MockBankClient } from "./clients/mock-bank.js";
-import { createTokenHubIntentBundleInterpreter, createTokenHubIntentInterpreter, IntentInterpreterError, MockIntentInterpreter, type IntentBundleInterpreter } from "@parlance/intent-engine";
+import { createTokenHubIntentBundleInterpreter, createTokenHubIntentInterpreter, IntentInterpreterError, MockIntentInterpreter, MockIntentBundleInterpreter, type IntentBundleInterpreter } from "@parlance/intent-engine";
 import { CompilationService, ExecutionService, InvestmentFundingService, MessageOrchestrationService } from "./orchestration/services.js";
 import { BundleMessageOrchestrationService } from "./orchestration/bundle-services.js";
 import { BundleCompilationService } from "./orchestration/bundle-compilation.js";
@@ -32,7 +32,7 @@ export function productionServices(): ApiServices {
   const intentMode = process.env.INTENT_INTERPRETER_MODE ?? "TOKENHUB";
   if (intentMode !== "TOKENHUB" && intentMode !== "MOCK") throw new Error("INTENT_INTERPRETER_MODE_INVALID");
   const interpreter = intentMode === "MOCK" ? new MockIntentInterpreter() : createTokenHubIntentInterpreter();
-  const bundleInterpreter: IntentBundleInterpreter = intentMode === "TOKENHUB" ? createTokenHubIntentBundleInterpreter() : { async interpretUserRequest() { throw new Error("BUNDLE_INTERPRETER_UNAVAILABLE"); } };
+  const bundleInterpreter: IntentBundleInterpreter = intentMode === "TOKENHUB" ? createTokenHubIntentBundleInterpreter() : new MockIntentBundleInterpreter();
   const grounder = (userId: string) => new PrismaEntityGrounder(db, userId);
   return { repository, messages: new MessageOrchestrationService(repository, interpreter, grounder), investmentFunding: new InvestmentFundingService(repository, bank), bundles: new BundleMessageOrchestrationService(repository, bundleInterpreter, grounder), compilation: new CompilationService(repository, bank, compiler), bundleCompilation: new BundleCompilationService(repository, bank, compiler), execution: new ExecutionService(repository, bank, compiler, undefined, executionRiskGate), webauthn: new WebAuthnService(repository, bank, undefined, undefined, undefined, riskGate), ops: new PrismaOpsReadService(db), customerActivity: new PrismaCustomerActivityReadService(db), customerOperations: new PrismaCustomerOperationsReadService(db), customerJourneys: new PrismaCustomerJourneysReadService(db, repository), dependencies: { compiler, bank } };
 }

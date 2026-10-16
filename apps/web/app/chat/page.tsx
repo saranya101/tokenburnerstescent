@@ -7,5 +7,5 @@ export default async function ChatPage({ searchParams }: { searchParams: Promise
   await connection();
   const draft = (await searchParams).draft;
   const initialRequest = typeof draft === "string" && draft.length <= 240 ? draft : "";
-  return <BankingShell active="parlance"><ChatExperience initialRequest={initialRequest} financialExecutionAvailable={process.env.PARLANCE_PUBLIC_SAFE_MODE !== "true" || publicPasskeyExecutionEnabled()} /></BankingShell>;
+  return <BankingShell active="parlance"><ChatExperience deterministicDemo={process.env.INTENT_INTERPRETER_MODE === "MOCK"} initialRequest={initialRequest} financialExecutionAvailable={process.env.PARLANCE_PUBLIC_SAFE_MODE !== "true" || publicPasskeyExecutionEnabled()} /></BankingShell>;
 }

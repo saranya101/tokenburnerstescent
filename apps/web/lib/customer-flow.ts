@@ -130,7 +130,13 @@ export class CustomerFlowController {
       } else {
         this.applyInterpretation(response, requestText, [...answers, { reference: clarification.originalReference, answer: displayAnswer }]);
       }
-    } catch (error) { this.transition({ phase: "ERROR", requestText, message: message(error) }); }
+    } catch (error) {
+      this.transition({ phase: "CLARIFICATION", requestText, clarificationId, clarifications, answers, bundle, submitting: false,
+        error: /CLARIFICATION_(?:ANSWER|OPTION)_INVALID/u.test(message(error))
+          ? clarification.questionKey === "clarify.transfer.currency" ? "Choose SGD or USD to continue." : "That answer did not match an eligible saved record. Choose an option or check the name and try again."
+          : "I couldn’t check that answer just now. Your request is saved; please try again.",
+      });
+    }
     finally { this.clarificationInFlight = false; }
   }
   private applyInterpretation(response: MessageResponse, requestText: string, answers: ClarificationAnswer[]): void {

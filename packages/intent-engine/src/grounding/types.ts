@@ -46,5 +46,7 @@ export interface EntityRepository {
 }
 
 export interface EntityGrounder {
+  /** Customer-scoped active saved payees for explicit fallback selection only. */
+  eligibleBeneficiaries?(): Promise<readonly GroundingCandidate[]>;
   ground(input: EntityGroundingInput): Promise<EntityGroundingResult>;
 }

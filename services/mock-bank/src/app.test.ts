@@ -31,6 +31,12 @@ it("serves a persisted customer snapshot while blocking all bank execution", asy
   await fixtureBank.close();
   const app = bankApp({ customerSnapshot: async (userId) => ({ ...fixture, userId, stateVersion: 9, holdings: [{ assetId: "asset-aapl", quantity: "2" }] }) });
   expect(await bankState(app, "approved-customer")).toMatchObject({ userId: "approved-customer", stateVersion: 9, holdings: [{ assetId: "asset-aapl", quantity: "2" }] });
+  const review = await bankState(app, "approved-customer");
+  expect(review.fxQuotes).toEqual([expect.objectContaining({ fromCurrency: "SGD", toCurrency: "USD", rate: "0.75" })]);
+  const transfer = await app.inject({ method: "POST", url: "/v1/execute/transfer", headers: bankHeaders, payload: { userId: "approved-customer", sourceAccountId: "acc-sgd", beneficiaryId: "ben-john-lim", amount: { currency: "SGD", minorUnits: "10000" } } });
+  expect(transfer.statusCode).toBe(403);
+  expect(transfer.json()).toEqual({ code: "BANK_EXECUTION_DISABLED" });
+  expect((await bankState(app, "approved-customer")).accounts).toEqual(review.accounts);
   expect((await buy(app)).statusCode).toBe(403);
   expect((await executeFx(app, "quote-id")).statusCode).toBe(403);
   const lookup = await app.inject({ method: "GET", url: "/v1/executions/idempotency/restarted-key", headers: bankHeaders });

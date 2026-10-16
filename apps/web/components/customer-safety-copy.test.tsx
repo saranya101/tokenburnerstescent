@@ -418,3 +418,12 @@ describe("ClarificationCard", () => {
     expect(html).not.toContain("Available account");
   });
 });
+
+
+it.each(["UNRESOLVED", "RECIPIENT_UNRESOLVED", "UNKNOWN"])("never renders the internal recipient sentinel %s", (originalReference) => {
+  const html = renderToStaticMarkup(createElement(ClarificationCard, { clarification: { reason: "ENTITY_NOT_FOUND", field: "goal.recipientReference", originalReference, questionKey: "clarify.entity.not_found", options: [{ entityId: "ben-john-lim", entityType: "BENEFICIARY", displayName: "John Lim" }] }, onSelect: vi.fn(), onCancel: vi.fn() }));
+  expect(html).not.toContain(originalReference);
+  expect(html).toContain("Choose a saved payee");
+  expect(html).toContain("John Lim");
+  expect(html).toContain("couldn’t find an eligible saved payee");
+});

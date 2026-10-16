@@ -2,7 +2,8 @@ import { BankStateSnapshotV1 } from "@parlance/contracts";
 import { getPrismaClient } from "@parlance/db";
 
 // In the isolated Railway demo, PostgreSQL owns the customer catalogue and
-// balances. The mock bank supplies illustrative quotes but cannot execute.
+// balances. Service availability describes synthetic plan modelling only;
+// every financial write is separately rejected in customerSnapshot mode.
 export async function databaseCustomerSnapshot(userId: string) {
   const db = getPrismaClient();
   const user = await db.user.findUnique({ where: { id: userId }, select: { id: true } });
@@ -37,7 +38,7 @@ export async function databaseCustomerSnapshot(userId: string) {
     })),
     holdings: holdings.map((item) => ({ assetId: item.assetId, quantity: item.quantity.toString() })),
     obligations: [],
-    serviceAvailability: { transfers: false, fx: true, billPayments: false, investments: true },
+    serviceAvailability: { transfers: true, fx: true, billPayments: false, investments: true },
     fxQuotes: [], assetQuotes,
   });
 }

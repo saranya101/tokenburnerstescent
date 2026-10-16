@@ -28,7 +28,7 @@ export type { GoalContractBuildInput, GoalContractBuilder, GoalContractCandidate
 export { DeterministicGoalContractBuilder } from "./goal-contract/builder.js";
 export { GoalContractBuilderError } from "./goal-contract/errors.js";
 export { DeterministicReadOnlyIntentValidator } from "./validation/validator.js";
-export { sourceActionClause, sourceActionSignals, sourceContainsReference, sourceSupportsAmbiguousSpokenDollarAmount, sourceSupportsMoney } from "./validation/evidence.js";
+export { moneyEvidence, sourceActionClause, sourceActionSignals, sourceContainsReference, sourceSupportsAmbiguousSpokenDollarAmount, sourceSupportsMoney } from "./validation/evidence.js";
 export type { SourceActionGoalType, SourceActionSignal } from "./validation/evidence.js";
 export type { IndependentIntentValidationInput, IndependentIntentValidationResult, IndependentIntentValidator, IntentValidationMismatch, IntentValidationMismatchCode } from "./validation/types.js";
 export { ModelBackedIntentBundleInterpreter, replaceClarifiedIntentBundleItem } from "./bundle/interpreter.js";
@@ -40,4 +40,4 @@ export type { ClarifiedIntentBundleItem, IntentBundleAmbiguityAnalysisInput, Int
 export type { DeterministicExplanationV1, ExplanationInput, ExplanationKind, ExplanationRenderer, ExplanationStatement, ExplanationStatementKind } from "./explanation/types.js";
 export { DeterministicExplanationRenderer, renderExplanationText } from "./explanation/renderer.js";
 export { ExplanationInputError } from "./explanation/errors.js";
-export { MockIntentInterpreter, MockIntentModelClient } from "./interpreter/mock.js";
+export { MockIntentInterpreter, MockIntentModelClient, MockIntentBundleInterpreter } from "./interpreter/mock.js";

@@ -8,6 +8,16 @@ import {
 export class PrismaEntityGrounder implements EntityGrounder {
   constructor(private readonly db: PrismaClient, private readonly userId: string) {}
 
+  async eligibleBeneficiaries() {
+    const beneficiaries = await this.db.beneficiary.findMany({
+      where: { userId: this.userId, status: "ACTIVE", providerRef: { not: null } },
+      select: { providerRef: true, name: true },
+    });
+    return beneficiaries.flatMap((item) => item.providerRef === null ? [] : [{
+      entityType: "BENEFICIARY" as const, entityId: item.providerRef, canonicalName: item.name,
+    }]);
+  }
+
   async ground(input: EntityGroundingInput): Promise<EntityGroundingResult> {
     const [accounts, beneficiaries, assets, aliases] = await Promise.all([
       this.db.account.findMany({ where: { userId: this.userId, status: "ACTIVE" }, select: { providerRef: true, type: true, currency: true, availableMinorUnits: true } }),

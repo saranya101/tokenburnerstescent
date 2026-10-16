@@ -90,12 +90,12 @@ const statusText: Record<TrustStageStatus, string> = {
   stopped: "Stopped safely",
 };
 
-export function FinancialTrustJourney({ state }: { state: TrustJourneyState }) {
-  const items = trustJourneyForState(state);
+export function FinancialTrustJourney({ state, deterministicDemo = false }: { state: TrustJourneyState; deterministicDemo?: boolean }) {
+  const items = trustJourneyForState(state).map((item) => item.id === "interpretation" && deterministicDemo ? { ...item, label: "Demo interpretation" } : item);
   return <section className="trust-journey" aria-labelledby="trust-journey-heading">
     <header>
       <div><p>Parlance trust journey</p><h2 id="trust-journey-heading">Every step is independently verified</h2></div>
-      <span>Live transaction state</span>
+      <span>{deterministicDemo ? "Demo journey status" : "Live transaction state"}</span>
     </header>
     <ol>
       {items.map((item, index) => <li key={item.id} className={`is-${item.status}`} aria-current={item.status === "active" ? "step" : undefined}>
