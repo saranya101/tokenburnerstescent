@@ -216,7 +216,12 @@ export function buildApp(options: MockBankOptions = {}) {
     const prior = idempotency.get(key);
     return prior ? { status: "COMPLETED" as const, idempotencyKey: key, operation: prior.operation, requestHash: prior.requestHash, ...prior.response } : { status: "NOT_FOUND" as const, idempotencyKey: key };
   });
-  app.get("/v1/state/:userId", async (request) => { const { userId } = z.object({ userId: Id }).parse(request.params); if (options.durableBank) return options.durableBank.snapshot(userId); if (options.customerSnapshot) return options.customerSnapshot(userId); const state = getState(userId); return BankStateSnapshotV1.parse({
+  app.get("/v1/state/:userId", async (request) => { const { userId } = z.object({ userId: Id }).parse(request.params); if (options.durableBank) return options.durableBank.snapshot(userId); if (options.customerSnapshot) {
+    const snapshot = await options.customerSnapshot(userId);
+    // Illustrative, expiring quotes for plan review; persisted balances remain authoritative.
+    const canModelFx = snapshot.serviceAvailability.fx && ["SGD", "USD"].every((currency) => snapshot.accounts.some((account) => account.currency === currency && account.status === "ACTIVE"));
+    return BankStateSnapshotV1.parse({ ...snapshot, fxQuotes: canModelFx ? activeFxQuotes(userId, getState(userId)) : [] });
+  } const state = getState(userId); return BankStateSnapshotV1.parse({
     schemaVersion: "1", userId, stateVersion: state.stateVersion, capturedAt: new Date().toISOString(),
     accounts: ACCOUNT_DEFINITIONS.map((account) => ({ ...account, capabilities: [...account.capabilities], ledgerMinorUnits: state.balances[account.id]!.toString(), availableMinorUnits: state.balances[account.id]!.toString(), status: "ACTIVE" as const })), beneficiaries: state.beneficiaries.map((beneficiary) => ({ ...beneficiary, supportedCurrencies: [...beneficiary.supportedCurrencies] })), assets: state.assets,
     holdings: Object.entries(state.holdings).map(([assetId, quantity]) => ({ assetId, quantity })), obligations: [], serviceAvailability: { transfers: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), fx: !state.scenarios.has("FX_UNAVAILABLE"), billPayments: !state.scenarios.has("TRANSFER_RAIL_UNAVAILABLE"), investments: !state.scenarios.has("ASSET_UNAVAILABLE") },

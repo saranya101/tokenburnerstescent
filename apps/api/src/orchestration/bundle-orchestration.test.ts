@@ -1,3 +1,4 @@
+import { MockIntentBundleInterpreter } from "@parlance/intent-engine";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -61,7 +62,7 @@ function grounder(ambiguousJohn = false): EntityGrounder {
     if (input.reference === "John" || input.reference === "John Tan") return { status: "RESOLVED" as const, reference: input.reference, entityType: "BENEFICIARY" as const, entityId: "ben-john-tan", resolutionMethod: "EXACT" as const };
     if (input.reference === "John Lim") return { status: "RESOLVED" as const, reference: input.reference, entityType: "BENEFICIARY" as const, entityId: "ben-john-lim", resolutionMethod: "EXACT" as const };
     if (input.reference === "Apple" || input.reference === "Apple (AAPL)") return { status: "RESOLVED" as const, reference: input.reference, entityType: "ASSET" as const, entityId: "asset-aapl", resolutionMethod: "EXACT" as const };
-    if (input.reference === "my SGD account") return { status: "RESOLVED" as const, reference: input.reference, entityType: "ACCOUNT" as const, entityId: "acc-sgd", resolutionMethod: "ALIAS" as const };
+    if (input.reference === "my SGD account" || input.reference === "SGD") return { status: "RESOLVED" as const, reference: input.reference, entityType: "ACCOUNT" as const, entityId: "acc-sgd", resolutionMethod: "ALIAS" as const };
     return { status: "NOT_FOUND" as const, reference: input.reference, ...(input.expectedEntityType ? { expectedEntityType: input.expectedEntityType } : {}) };
   } };
 }
@@ -126,7 +127,7 @@ describe("production bundle message orchestration", () => {
     });
     expect(repository.rejected).toBe(0);
     await expect(service.answerClarification("voice-1", { selectedCandidateId: "currency-eur-10000" }, "trace-arbitrary")).rejects.toThrow("CLARIFICATION_OPTION_INVALID");
-    await expect(service.answerClarification("voice-1", { answerText: "SGD" }, "trace-unissued")).rejects.toThrow("CLARIFICATION_OPTION_INVALID");
+    await expect(service.answerClarification("voice-1", { answerText: "dollars" }, "trace-unissued")).rejects.toThrow("CLARIFICATION_OPTION_INVALID");
 
     const continued = await service.answerClarification("voice-1", { selectedCandidateId: "currency-sgd-10000" }, "trace-currency");
     expect(continued, JSON.stringify(repository.lastValidation)).toMatchObject({
@@ -319,4 +320,20 @@ describe("bundle compiler trust boundary", () => {
     await expect(new BundleCompilationService(repository, { getState: vi.fn().mockResolvedValue(state) } as never, compiler).compile(bundle.bundleId, "trace-invalid-proof")).rejects.toThrow("BUNDLE_PROOF_MISSING_ITEM_COVERAGE");
     expect(repository.saveBundlePlan).not.toHaveBeenCalled();
   });
+});
+
+
+it("runs the exact headline using the real deterministic mock, then resumes two grounded actions", async () => {
+  const repository = new MemoryBundleRepository();
+  const text = "Okay send hundred dollars to John Lim and then buy one share of Apple stock and use SGD if needed but at least keep $1000 in my SGD account.";
+  const service = new BundleMessageOrchestrationService(repository, new MockIntentBundleInterpreter(), () => grounder());
+  const pending = await service.receive({ userId: "user-1", text }, "headline-mock");
+  expect(pending).toMatchObject({ status: "NEEDS_BUNDLE_CLARIFICATION", clarifications: [{ questionKey: "clarify.transfer.currency" }] });
+  if (pending.status !== "NEEDS_BUNDLE_CLARIFICATION") throw new Error("Expected clarification");
+  const result = await service.answerClarification(pending.clarificationId, { selectedCandidateId: "currency-sgd-10000" }, "headline-currency");
+  expect(result).toMatchObject({ status: "AWAITING_BUNDLE_CONFIRMATION", goalBundleCandidate: {
+    items: [{ goal: { type: "DELIVER_MONEY", recipientId: "ben-john-lim", amount: { currency: "SGD", minorUnits: "10000" } } }, { goal: { type: "ACQUIRE_ASSET", quantity: "1", assetId: "asset-aapl" } }],
+    globalConstraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" } }],
+  } });
+  expect(repository.confirmed).toBeUndefined();
 });

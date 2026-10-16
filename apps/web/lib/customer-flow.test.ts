@@ -641,3 +641,18 @@ it("never recompiles the original request for reapproval after any step settled"
   await reachPlan(values); await values.flow.authorizeAndExecute(); expect(values.flow.state.phase).toBe("PARTIALLY_COMPLETED");
   await expect(values.flow.reviewUpdatedPlan()).rejects.toThrow("INVALID_FLOW_STATE"); expect(values.api.compileGoal).toHaveBeenCalledOnce();
 });
+
+
+it.each(["CLARIFICATION_OPTION_INVALID", "NETWORK_ERROR"])("keeps the same request editable after %s", async (code) => {
+  const clarification = { reason: "AMBIGUOUS_ENTITY", field: "goal.recipientReference", originalReference: "John", questionKey: "clarify.entity.ambiguous", options: [{ entityId: "ben-john-lim", entityType: "BENEFICIARY" as const, displayName: "John Lim" }] };
+  const answerClarification = vi.fn().mockRejectedValueOnce(new Error(code)).mockResolvedValueOnce({ status: "AWAITING_GOAL_CONFIRMATION", candidateId: "candidate-1", goalCandidate: candidate });
+  const values = setup({ sendMessage: vi.fn().mockResolvedValue({ status: "NEEDS_CLARIFICATION", clarificationId: "pending-john", clarifications: [clarification] }), answerClarification });
+  await values.flow.submitMessage("i want to send 20000 to john");
+  await values.flow.answerClarification(clarification, clarification.options[0]!);
+  expect(values.flow.state).toMatchObject({ phase: "CLARIFICATION", requestText: "i want to send 20000 to john", clarificationId: "pending-john", answers: [], submitting: false, error: expect.any(String) });
+  await values.flow.answerClarification(clarification, clarification.options[0]!);
+  expect(values.flow.state.phase).toBe("GOAL_REVIEW");
+  expect(values.api.sendMessage).toHaveBeenCalledOnce();
+  expect(values.api.confirmGoal).not.toHaveBeenCalled();
+  expect(values.api.runExecution).not.toHaveBeenCalled();
+});

@@ -17,6 +17,7 @@ it("reads the customer's persisted accounts, payees, and investment holdings", a
   const state = await databaseCustomerSnapshot("synthetic-customer");
   expect(state).toMatchObject({
     userId: "synthetic-customer", stateVersion: 7,
+    serviceAvailability: { transfers: true },
     accounts: [
       { id: "acc-sgd", currency: "SGD", availableMinorUnits: "2000000" },
       { id: "acc-usd", currency: "USD", availableMinorUnits: "500000" },

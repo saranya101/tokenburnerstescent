@@ -5,7 +5,7 @@ import {
 } from "@parlance/contracts";
 import { hashGoalBundleContract } from "@parlance/contracts/server";
 import {
-  DeterministicGoalContractBuilder, DeterministicIntentAmbiguityDetector, DeterministicReadOnlyIntentValidator, GoalContractCandidateV1, intentReferenceOccurrences, sourceContainsReference, sourceSupportsMoney,
+  DeterministicGoalContractBuilder, DeterministicIntentAmbiguityDetector, DeterministicReadOnlyIntentValidator, GoalContractCandidateV1, moneyEvidence, intentReferenceOccurrences, sourceContainsReference, sourceSupportsMoney,
   type ClarificationItem, type EntityGrounder, type EntityGroundingResult, type GoalContractBuilder, type GroundableEntityType, type IndependentIntentValidator, type IntentAmbiguityDetector, type IntentInterpreter,
 } from "@parlance/intent-engine";
 import { z } from "zod";
@@ -18,6 +18,8 @@ import type { BundlePlanRepository } from "./ports.js";
 import { verifyBundleCompilerResult } from "./bundle-compilation.js";
 import { ConversationalMessageInput, inputProvenance, type ConversationalInputProvenance } from "./input-provenance.js";
 import type { ExecutionRiskGate } from "../risk/execution-gate.js";
+
+import { withEligiblePayees } from "./clarification-options.js";
 
 const ClarificationAnswerInput = z.union([
   z.object({ selectedCandidateId: z.string().min(1) }).strict(),
@@ -50,7 +52,7 @@ export class MessageOrchestrationService {
     const grounder = this.grounderForUser(input.userId);
     const groundingResults = await groundingForIntent(intentDraft, [], grounder);
     const ambiguity = this.ambiguityDetector.analyze({ draft: intentDraft, groundingResults });
-    const clarifications = clarificationQueue(intentDraft, ambiguity);
+    const clarifications = await withEligiblePayees(clarificationQueue(intentDraft, ambiguity), grounder);
     if (clarifications.length > 0) {
       const stored = await this.repository.saveClarification({
         clarificationId: this.newId(), goalContractId: this.newId(), userId: input.userId, version: 1,
@@ -102,12 +104,13 @@ export class MessageOrchestrationService {
       : answer.answerText;
     let nextDraft = pending.intentDraft;
     let groundingResults = [...pending.groundingResults];
-    let invalidField: string | undefined;
     if (isMissingFieldClarification(clarification)) {
-      if (!("answerText" in answer)) throw new Error("CLARIFICATION_ANSWER_INVALID");
-      const updated = applyMissingFieldAnswer(nextDraft, clarification, answer.answerText);
+      if ("selectedCandidateId" in answer && !clarification.options.some((option) => option.entityId === answer.selectedCandidateId)) throw new Error("CLARIFICATION_OPTION_INVALID");
+      const option = "selectedCandidateId" in answer ? clarification.options.find((item) => item.entityId === answer.selectedCandidateId) : undefined;
+      const fieldAnswer = option?.entityType === "CURRENCY" ? option.currency! : answerText;
+      const updated = applyMissingFieldAnswer(nextDraft, clarification, fieldAnswer);
       nextDraft = updated.draft;
-      if (!updated.accepted) invalidField = clarification.field;
+      if (!updated.accepted) return { status: "NEEDS_CLARIFICATION" as const, clarificationId, clarifications: pending.clarifications.map((item, index) => index === 0 ? { ...item, reason: "INVALID_FIELD" as const } : item) };
       groundingResults = await groundingForIntent(nextDraft, groundingResults, grounder);
     } else {
       const requirement = intentReferenceOccurrences(nextDraft).find((item) => item.field === clarification.field && item.reference === clarification.originalReference);
@@ -117,13 +120,14 @@ export class MessageOrchestrationService {
         : rebaseGrounding(await grounder.ground(requirement.expectedEntityType === undefined
           ? { reference: answer.answerText }
           : { reference: answer.answerText, expectedEntityType: requirement.expectedEntityType }), clarification.originalReference, requirement.expectedEntityType);
+      if (resolved.status === "NOT_FOUND") return { status: "NEEDS_CLARIFICATION" as const, clarificationId, clarifications: pending.clarifications };
       groundingResults = replaceGrounding(groundingResults, clarification, resolved);
     }
     const provenance = pending.inputProvenance ?? { inputMode: "TYPED" as const, submittedText: pending.originalText, edited: false as const };
     const clarificationAnswers = [...(pending.clarificationAnswers ?? []), answerText];
     nextDraft = InterpretedIntentDraftV1.parse({ ...nextDraft, originalText: conversationEvidence(pending.originalText, clarificationAnswers, nextDraft) });
     const ambiguity = this.ambiguityDetector.analyze({ draft: nextDraft, groundingResults });
-    const clarifications = clarificationQueue(nextDraft, ambiguity, invalidField);
+    const clarifications = await withEligiblePayees(clarificationQueue(nextDraft, ambiguity), grounder);
     const completeDraft = clarifications.length === 0 ? IntentDraftV1.parse(nextDraft) : undefined;
     const candidate = completeDraft === undefined
       ? undefined
@@ -230,7 +234,10 @@ function clarificationQueue(
     missing.push({
       reason: invalidField === "goal.amount.currency" ? "INVALID_FIELD" : "MISSING_FIELD",
       field: "goal.amount.currency", originalReference: "transfer currency",
-      questionKey: "clarify.transfer.currency", options: [],
+      questionKey: "clarify.transfer.currency", options: [
+        { entityType: "CURRENCY", entityId: "SGD", currency: "SGD", displayName: "SGD" },
+        { entityType: "CURRENCY", entityId: "USD", currency: "USD", displayName: "USD" },
+      ],
     });
   }
   return [...entityClarifications, ...missing];
@@ -280,6 +287,8 @@ function parseTransferAmount(value: string, establishedCurrency?: string): { cur
 }
 
 function partialTransferMoneyFromSource(value: string): { currency?: string; minorUnits: string } | undefined {
+  const observed = moneyEvidence(value.slice(0, /\bto\b/iu.exec(value)?.index ?? value.length))[0];
+  if (observed !== undefined) return { minorUnits: observed.minorUnits, ...(observed.currency === undefined ? {} : { currency: observed.currency }) };
   const match = value.match(/\b(?:send|deliver|remit|wire|transfer)\s+(?:money\s+)?(?:(SGD|USD|S\$|US\$|\$)\s*)?((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)(?:\s*(SGD|USD))?\b/iu);
   if (match === null) return undefined;
   return parseTransferAmount(`${match[1] ?? ""}${match[2] ?? ""}${match[3] ?? ""}`, undefined);

@@ -85,7 +85,7 @@ export function authoritativeOutcomeRefreshKey(state: CustomerFlowState): string
   return `${state.phase}:${state.result.executionId}:${state.result.finalStateVersion ?? "unknown"}`;
 }
 
-export function ChatExperience({ initialRequest = "", financialExecutionAvailable = true }: { initialRequest?: string; financialExecutionAvailable?: boolean }) {
+export function ChatExperience({ initialRequest = "", financialExecutionAvailable = true, deterministicDemo = false }: { initialRequest?: string; financialExecutionAvailable?: boolean; deterministicDemo?: boolean }) {
   const flow = useCustomerFlow(); const { state } = flow; const message = requestText(state); const isInitial = state.phase === "COMPOSE";
   const banking = useBankingState(); const investment = isInvestmentState(state);
   const refreshedExecution = useRef<string | undefined>(undefined);
@@ -119,11 +119,12 @@ export function ChatExperience({ initialRequest = "", financialExecutionAvailabl
       <section className="chat-primary" aria-label="Pay and transfer conversation">
     <header className="workspace-header"><div className="workspace-title"><div><p>{isInitial ? chatWelcomeGreeting : investment ? "Investments" : knownGoalType ? "Pay & Transfer" : "Your request"}</p><h1>{isInitial ? "What would you like to do today?" : investment ? "Your investment request" : knownGoalType ? "Your payment request" : "Reviewing your request"}</h1>{isInitial && <span>Tell me what you&apos;d like to achieve. You&apos;ll review the exact plan before anything moves.</span>}</div></div>{isInitial && <Link className="workspace-payees-link" href="/payees"><Icon name="recipient" /> Saved payees</Link>}</header>
     <div className="workspace-body">
+      {deterministicDemo && <p className="card-description" role="status">Deterministic demo interpretation · No live AI calls</p>}
       {state.phase === "RESTORING_EXECUTION" && <WorkingState title="Checking your latest transaction status…" detail="Please wait while we check whether a recent transaction still needs your attention." />}
       {isInitial && <><section className="parlance-introduction"><span><Icon name="spark" /></span><div><strong>Parlance</strong><p>Describe what you need in your own words. I’ll confirm the meaning first, then show the exact banking plan for your review.</p></div></section><ConversationComposer initialValue={state.draftText ?? initialRequest} onSubmit={(text, input) => void flow.submitMessage(text, input)} /></>}
       {message && <div className="conversation-stream">
         <div className="request-context"><span className="request-context-icon"><Icon name="transfer" /></span><div><small>Your request</small><strong>“{message}”</strong></div>{!unresolved && state.phase !== "PARTIALLY_COMPLETED" && <button type="button" onClick={flow.reset}>Start over <Icon name="arrow" /></button>}</div>
-        <FinancialTrustJourney state={state} />
+        <FinancialTrustJourney deterministicDemo={deterministicDemo} state={state} />
         {state.phase === "INTERPRETING" && <WorkingState title="Understanding your request…" detail="Checking names and details against your available banking relationships." />}
         {state.phase === "CLARIFICATION" && state.clarifications[0] && <ClarificationCard clarification={state.clarifications[0]} beneficiaries={banking.state?.beneficiaries ?? []} {...(state.submitting === undefined ? {} : { busy: state.submitting })} {...(state.error === undefined ? {} : { error: state.error })} onCancel={flow.reset} onSelect={(option) => void flow.answerClarification(state.clarifications[0]!, option)} onAnswerText={(answer) => void flow.answerClarificationText(state.clarifications[0]!, answer)} />}
         {state.phase === "SEMANTIC_VALIDATION_FAILED" && <OutcomeCard title="Please clarify your request" detail={state.message} onDone={flow.reset} />}

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { PrismaClient } from "@prisma/client";
+import { approvedMigrationState } from "./review-migration-policy.mjs";
 
 const projectId = "55d5cb65-c1ce-4431-877c-63d08969713e";
 const environmentId = "17977510-a832-4949-b083-e24e4b36c7c6";
@@ -30,7 +31,7 @@ async function databaseState(client) {
   if (identity.database_name !== "railway" || identity.schema_name !== "public") throw new Error("UNAPPROVED_DATABASE_IDENTITY");
   const migrations = await client.$queryRaw`SELECT migration_name, finished_at, rolled_back_at FROM "_prisma_migrations"`;
   const applied = migrations.filter((item) => item.finished_at && !item.rolled_back_at).map((item) => item.migration_name).sort();
-  if (JSON.stringify(applied) !== JSON.stringify(expectedMigrations) || migrations.some((item) => !item.finished_at && !item.rolled_back_at)) {
+  if (!approvedMigrationState(applied, expectedMigrations, process.env) || migrations.some((item) => !item.finished_at && !item.rolled_back_at)) {
     throw new Error("MIGRATION_STATE_NOT_APPROVED");
   }
   const tables = await client.$queryRaw`SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name <> '_prisma_migrations' ORDER BY table_name`;

@@ -213,7 +213,7 @@ export function sourceConditionalFundingCurrencies(sourceText: string): Readonly
   return currencies;
 }
 
-function moneyEvidence(sourceText: string): readonly MoneyEvidence[] {
+export function moneyEvidence(sourceText: string): readonly MoneyEvidence[] {
   const evidence: MoneyEvidence[] = [];
   for (const match of sourceText.matchAll(PREFIX_MONEY)) {
     const amount = match[4];

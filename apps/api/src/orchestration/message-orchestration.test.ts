@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BankStateSnapshotV1, GoalContractV1, type IntentDraftV1, type InterpretedIntentDraftV1 } from "@parlance/contracts";
-import { GoalContractCandidateV1, type EntityGrounder, type EntityGroundingInput, type EntityGroundingResult, type GoalContractBuilder, type IntentInterpreter } from "@parlance/intent-engine";
+import { DeterministicEntityGrounder, InMemoryEntityRepository, MockIntentInterpreter, GoalContractCandidateV1, type EntityGrounder, type EntityGroundingInput, type EntityGroundingResult, type GoalContractBuilder, type IntentInterpreter } from "@parlance/intent-engine";
 import { describe, expect, it, vi } from "vitest";
 import { hashGoalContract } from "../security/canonical-hash.js";
 import type { GoalConfirmationMetadata, GoalConfirmationRepository, ParlanceRepository, StoredClarificationRequest, StoredGoal, StoredGoalCandidate } from "./ports.js";
@@ -623,5 +623,68 @@ describe("confirmed investment funding amendment", () => {
     await expect(funding.propose("goal-apple", { sourceAccountId: "acc-sgd", minimumSgdReserveMinorUnits: "100000" }, "trace-funding")).rejects.toThrow("FUNDING_RESERVE_CANNOT_WEAKEN_CONSTRAINT");
     await expect(funding.propose("goal-apple", { sourceAccountId: "acc-brokerage" }, "trace-funding")).rejects.toThrow("FUNDING_ACCOUNT_NOT_ELIGIBLE");
     expect(candidates.candidate).toBeUndefined();
+  });
+});
+
+
+describe("hosted mock conversational regressions", () => {
+  function setupMock(duplicate = true) {
+    const repository = new CandidateRepository();
+    const payees = [
+      { entityType: "BENEFICIARY" as const, entityId: "ben-john-lim", canonicalName: "John Lim", aliases: ["john"] },
+      ...(duplicate ? [{ entityType: "BENEFICIARY" as const, entityId: "ben-john-tan", canonicalName: "John Tan", aliases: ["john"] }] : []),
+    ];
+    const grounder: EntityGrounder = new DeterministicEntityGrounder(new InMemoryEntityRepository(payees));
+    grounder.eligibleBeneficiaries = async () => payees;
+    const messages = new MessageOrchestrationService(repository, new MockIntentInterpreter(), () => grounder);
+    return { repository, messages };
+  }
+
+  it.each(["send 20000 to john", "send hundred dollars to John"])("resumes %s after payee and separate currency choices", async (text) => {
+    const { messages, repository } = setupMock();
+    const result = await messages.receive({ userId: "user-1", text }, "regression");
+    expect(result).toMatchObject({ status: "NEEDS_CLARIFICATION", clarifications: [
+      { originalReference: expect.stringMatching(/^john$/iu), options: [{ entityId: "ben-john-lim" }, { entityId: "ben-john-tan" }] },
+      { field: "goal.amount.currency", options: [{ entityId: "SGD" }, { entityId: "USD" }] },
+    ] });
+    if (result.status !== "NEEDS_CLARIFICATION") throw new Error("Expected clarification");
+    const before = structuredClone(repository.clarification);
+    await expect(messages.answerClarification(result.clarificationId, { selectedCandidateId: "other-customer-payee" }, "invalid")).rejects.toThrow("CLARIFICATION_OPTION_INVALID");
+    expect(repository.clarification).toEqual(before);
+    const unknown = await messages.answerClarification(result.clarificationId, { answerText: "Nobody" }, "no-match");
+    expect(unknown.status).toBe("NEEDS_CLARIFICATION");
+    expect(repository.clarification).toEqual(before);
+    const currency = await messages.answerClarification(result.clarificationId, { selectedCandidateId: "ben-john-lim" }, "payee");
+    expect(currency).toMatchObject({ status: "NEEDS_CLARIFICATION", clarificationId: result.clarificationId, clarifications: [{ field: "goal.amount.currency" }] });
+    const currencyBefore = structuredClone(repository.clarification);
+    await messages.answerClarification(result.clarificationId, { answerText: "dollars" }, "bad-currency");
+    expect(repository.clarification).toEqual(currencyBefore);
+    const candidate = await messages.answerClarification(result.clarificationId, { selectedCandidateId: "SGD" }, "currency");
+    expect(candidate).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { recipientId: "ben-john-lim", amount: { currency: "SGD", minorUnits: text.includes("20000") ? "2000000" : "10000" } } } });
+    expect(repository.goal).toBeUndefined();
+    expect(repository.confirmations).toBe(0);
+  });
+
+  it("grounds a unique John and asks only for missing currency", async () => {
+    const { messages } = setupMock(false);
+    expect(await messages.receive({ userId: "user-1", text: "send 100 to John" }, "unique")).toMatchObject({
+      status: "NEEDS_CLARIFICATION", clarifications: [{ field: "goal.amount.currency" }],
+    });
+  });
+
+  it("keeps John Lim grounded while clarifying bare 100", async () => {
+    const { messages } = setupMock();
+    expect(await messages.receive({ userId: "user-1", text: "send 100 to John Lim" }, "full-name")).toMatchObject({
+      status: "NEEDS_CLARIFICATION", clarifications: [{ field: "goal.amount.currency" }],
+    });
+  });
+
+  it("offers actual customer payees for an unknown recipient and resumes safely", async () => {
+    const { messages, repository } = setupMock();
+    const result = await messages.receive({ userId: "user-1", text: "Send SGD 50 to Nobody" }, "unknown");
+    expect(result).toMatchObject({ status: "NEEDS_CLARIFICATION", clarifications: [{ reason: "ENTITY_NOT_FOUND", originalReference: "Nobody", options: [{ entityId: "ben-john-lim" }, { entityId: "ben-john-tan" }] }] });
+    if (result.status !== "NEEDS_CLARIFICATION") throw new Error("Expected clarification");
+    expect(await messages.answerClarification(result.clarificationId, { selectedCandidateId: "ben-john-lim" }, "saved-payee")).toMatchObject({ status: "AWAITING_GOAL_CONFIRMATION", goalCandidate: { goal: { recipientId: "ben-john-lim" } } });
+    expect(repository.goal).toBeUndefined();
   });
 });

@@ -16,24 +16,28 @@ export function ClarificationCard({ clarification, beneficiaries = [], busy = fa
   const isTransferAmount = clarification.questionKey === "clarify.transfer.amount";
   const isTransferCurrency = clarification.questionKey === "clarify.transfer.currency";
   const isTransferRecipient = clarification.questionKey === "clarify.transfer.recipient";
+  const reference = /^(?:UNRESOLVED|RECIPIENT_UNRESOLVED|UNKNOWN|NOT_FOUND|N\/A)$/iu.test(clarification.originalReference.trim()) ? (isBeneficiary ? "the recipient" : "that detail") : clarification.originalReference;
+  const isUnknownPayee = isBeneficiary && clarification.reason === "ENTITY_NOT_FOUND";
   const accountCurrency = clarification.options.find((option) => option.entityType === "ACCOUNT")?.currency ?? /\b[A-Z]{3}\b/u.exec(clarification.originalReference)?.[0];
   const question = isTransferAmount
     ? "How much would you like to send, and in which currency?"
     : isTransferCurrency
       ? clarification.options.length === 2
-        ? `Do you mean ${clarification.options[0]?.displayName} or ${clarification.options[1]?.displayName} for the ${clarification.originalReference}?`
+        ? `Do you mean ${clarification.options[0]?.displayName} or ${clarification.options[1]?.displayName} for the ${reference}?`
         : "Which currency should I use for this transfer?"
+    : isUnknownPayee
+      ? "Choose a saved payee"
     : isTransferRecipient
       ? "Who would you like to send money to?"
     : clarification.options.length > 1 && accountCurrency
     ? `Which ${accountCurrency} account would you like me to use for the shortfall?`
     : clarification.options.length > 1 && isBeneficiary
-      ? `Which ${clarification.originalReference} would you like to pay?`
+      ? `Which ${reference} would you like to pay?`
     : clarification.options.length > 1
-      ? `Which ${clarification.originalReference} did you mean?`
+      ? `Which ${reference} did you mean?`
     : clarification.options.length === 1
       ? `Did you mean “${clarification.options[0]?.displayName}”?`
-      : `Please clarify “${clarification.originalReference}”`;
+      : isBeneficiary ? "Who would you like to send money to?" : `Please clarify “${reference}”`;
   const submit = (event: FormEvent) => { event.preventDefault(); const value = answer.trim(); if (!busy && value && onAnswerText) onAnswerText(value); };
   return <section className="product-card clarification-card" aria-labelledby="clarification-heading">
     <p className="eyebrow">One detail needs your attention</p>
@@ -42,9 +46,11 @@ export function ClarificationCard({ clarification, beneficiaries = [], busy = fa
       ? clarification.reason === "INVALID_FIELD" ? "Enter a positive amount together with SGD or USD. No amount will be assumed." : "Include the amount and currency so I can preserve the exact transfer you intend."
       : isTransferCurrency
         ? clarification.reason === "INVALID_FIELD" ? "Enter SGD or USD. No currency will be assumed." : "The amount is saved, but I still need the currency before I can continue."
+      : isUnknownPayee
+        ? `I couldn’t find an eligible saved payee matching “${reference}”. Choose one of your saved payees below, or enter the correct name.`
       : isTransferRecipient
         ? "Enter the name of a saved payee. I’ll check it against your beneficiaries before continuing."
-      : isBeneficiary && clarification.options.length > 1 ? `We found more than one saved payee matching ${clarification.originalReference}. Choose the correct recipient to continue.` : clarificationCopy(clarification.options.length)}</p>
+      : isBeneficiary && clarification.options.length > 1 ? `We found more than one saved payee matching ${reference}. Choose the correct recipient to continue.` : clarificationCopy(clarification.options.length)}</p>
     {error && <p className="form-error" role="alert">{error}</p>}
     {clarification.options.length > 0 ? <div className="candidate-list">{clarification.options.map((candidate) => <button type="button" className="candidate" key={`${candidate.entityType}:${candidate.entityId}`} disabled={busy} onClick={() => onSelect(candidate)}>
       <span className="avatar" aria-hidden="true">{candidate.displayName.split(" ").map((part) => part[0]).join("").slice(0, 2)}</span>

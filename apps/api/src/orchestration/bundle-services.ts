@@ -19,6 +19,8 @@ import type {
 } from "./ports.js";
 import { ConversationalMessageInput, inputProvenance, type ConversationalInputProvenance } from "./input-provenance.js";
 
+import { withEligiblePayees } from "./clarification-options.js";
+
 const ClarificationAnswerInput = z.union([
   z.object({ selectedCandidateId: z.string().min(1) }).strict(),
   z.object({ answerText: z.string().trim().min(1) }).strict(),
@@ -57,7 +59,7 @@ export class BundleMessageOrchestrationService {
       if (currencyClarification !== undefined) {
         const grounding = await groundBundle(intentBundle, this.grounderForUser(input.userId));
         const ambiguity = this.ambiguityDetector.analyze({ bundle: intentBundle, ...grounding });
-        const clarifications = [currencyClarification, ...(ambiguity.status === "NEEDS_CLARIFICATION" ? bundleClarifications(ambiguity) : [])];
+        const clarifications = await withEligiblePayees([currencyClarification, ...(ambiguity.status === "NEEDS_CLARIFICATION" ? bundleClarifications(ambiguity) : [])], this.grounderForUser(input.userId));
         const stored = await this.repository.saveBundleClarification({
           clarificationId: recordId, bundleId, userId: input.userId, version: 1, createdAt, originalText: input.text,
           intentBundle, ...grounding, clarifications, clarificationAnswers: [], inputProvenance: provenance, traceId,
@@ -70,7 +72,7 @@ export class BundleMessageOrchestrationService {
     const grounding = await groundBundle(intentBundle, this.grounderForUser(input.userId));
     const ambiguity = this.ambiguityDetector.analyze({ bundle: intentBundle, ...grounding });
     if (ambiguity.status === "NEEDS_CLARIFICATION") {
-      const clarifications = bundleClarifications(ambiguity);
+      const clarifications = await withEligiblePayees(bundleClarifications(ambiguity), this.grounderForUser(input.userId));
       const stored = await this.repository.saveBundleClarification({
         clarificationId: recordId, bundleId, userId: input.userId, version: 1, createdAt, originalText: input.text,
         intentBundle, ...grounding, clarifications, clarificationAnswers: [], inputProvenance: provenance, traceId,
@@ -101,8 +103,8 @@ export class BundleMessageOrchestrationService {
     const clarification = pending.clarifications[0];
     if (clarification === undefined) throw new Error("BUNDLE_CLARIFICATION_NOT_ANSWERABLE");
     if (clarification.questionKey === "clarify.transfer.currency") {
-      if (!("selectedCandidateId" in answer)) throw new Error("CLARIFICATION_OPTION_INVALID");
-      const option = clarification.options.find((item) => item.entityId === answer.selectedCandidateId && item.entityType === "CURRENCY");
+      const selectedId = "selectedCandidateId" in answer ? answer.selectedCandidateId : answer.answerText.toUpperCase();
+      const option = clarification.options.find((item) => item.entityType === "CURRENCY" && (item.entityId === selectedId || "answerText" in answer && item.currency === selectedId));
       if (option?.currency !== "SGD" && option?.currency !== "USD") throw new Error("CLARIFICATION_OPTION_INVALID");
       const intentBundle = updateClarifiedBundle(pending.intentBundle, clarification.field, option.currency);
       const grounding = await groundBundle(intentBundle, this.grounderForUser(pending.userId));
@@ -117,7 +119,7 @@ export class BundleMessageOrchestrationService {
       }
       const progress = await this.repository.advanceBundleClarification({
         ...pending, intentBundle, ...grounding, clarificationAnswers, answerText: option.displayName, traceId,
-        clarifications: ambiguity.status === "CLEAR" ? [] : bundleClarifications(ambiguity),
+        clarifications: ambiguity.status === "CLEAR" ? [] : await withEligiblePayees(bundleClarifications(ambiguity), this.grounderForUser(pending.userId)),
         ...(candidate === undefined ? {} : { candidate, semanticValidation: evidence(validation!, provenance, clarificationAnswers.map(({ answer: item }) => item)) }),
       });
       return progress.status === "AWAITING_BUNDLE_CONFIRMATION" ? bundleCandidateResponse(progress.candidate) : bundleClarificationResponse(progress.request);
@@ -132,6 +134,7 @@ export class BundleMessageOrchestrationService {
       : rebaseGrounding(await this.grounderForUser(pending.userId).ground(requirement.expectedEntityType === undefined
         ? { reference: answer.answerText }
         : { reference: answer.answerText, expectedEntityType: requirement.expectedEntityType }), answerText, requirement.expectedEntityType);
+    if (resolved.status === "NOT_FOUND") throw new Error("CLARIFICATION_ANSWER_INVALID");
     const intentBundle = updateClarifiedBundle(pending.intentBundle, requirement.field, answerText);
     const grounding = replaceBundleGrounding(pending, requirement.scope, requirement.scope === "ITEM" ? requirement.itemId : undefined, clarification.originalReference, resolved);
     const ambiguity = this.ambiguityDetector.analyze({ bundle: intentBundle, ...grounding });
@@ -145,7 +148,7 @@ export class BundleMessageOrchestrationService {
     }
     const progress = await this.repository.advanceBundleClarification({
       ...pending, intentBundle, ...grounding, clarificationAnswers, answerText, traceId,
-      clarifications: ambiguity.status === "CLEAR" ? [] : bundleClarifications(ambiguity),
+      clarifications: ambiguity.status === "CLEAR" ? [] : await withEligiblePayees(bundleClarifications(ambiguity), this.grounderForUser(pending.userId)),
       ...(candidate === undefined ? {} : { candidate, semanticValidation: evidence(validation!, provenance, clarificationAnswers.map(({ answer }) => answer)) }),
     });
     return progress.status === "AWAITING_BUNDLE_CONFIRMATION" ? bundleCandidateResponse(progress.candidate) : bundleClarificationResponse(progress.request);
