@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createHash, createSign, generateKeyPairSync, type KeyObject } from "node:crypto";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON, VerifiedAuthenticationResponse, VerifiedRegistrationResponse } from "@simplewebauthn/server";
 import { BankStateSnapshotV1, ExecutionResultV1, FinancialPlanV1, GoalBundleContractV1, GoalContractV1 } from "@parlance/contracts";
 import { hashGoalBundleContract } from "@parlance/contracts/server";
@@ -119,6 +120,32 @@ class TestVerifier implements RegistrationVerifier {
 const response = (challenge: string, id = "browser-credential"): RegistrationResponseJSON => ({ id, rawId: id, type: "public-key", clientExtensionResults: {}, response: { clientDataJSON: challenge, attestationObject: "attestation", transports: ["internal"] } });
 const assertion = (challenge: string, id = "credential-1", signature = "valid"): AuthenticationResponseJSON => ({ id, rawId: id, type: "public-key", clientExtensionResults: {}, response: { clientDataJSON: challenge, authenticatorData: "authenticator-data", signature } });
 
+// A protocol-level assertion signed by a test authenticator key. The production
+// verifier checks these bytes; this does not stand in for a browser or device test.
+function signedAssertion(input: { challenge: string; origin: string; rpId: string; credentialId: string; privateKey: KeyObject; userVerified?: boolean }): AuthenticationResponseJSON {
+  const clientData = Buffer.from(JSON.stringify({ type: "webauthn.get", challenge: input.challenge, origin: input.origin }));
+  const authenticatorData = Buffer.alloc(37);
+  createHash("sha256").update(input.rpId).digest().copy(authenticatorData);
+  authenticatorData[32] = input.userVerified === false ? 0x01 : 0x05;
+  authenticatorData.writeUInt32BE(1, 33);
+  const signature = createSign("SHA256")
+    .update(Buffer.concat([authenticatorData, createHash("sha256").update(clientData).digest()]))
+    .sign(input.privateKey);
+  return {
+    id: input.credentialId, rawId: input.credentialId, type: "public-key", clientExtensionResults: {},
+    response: { clientDataJSON: clientData.toString("base64url"), authenticatorData: authenticatorData.toString("base64url"), signature: signature.toString("base64url") },
+  };
+}
+
+function coseEc2PublicKey(publicKey: KeyObject): Uint8Array<ArrayBuffer> {
+  const jwk = publicKey.export({ format: "jwk" });
+  if (!jwk.x || !jwk.y) throw new Error("Test EC public key is incomplete");
+  return new Uint8Array(Buffer.concat([
+    Buffer.from([0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20]), Buffer.from(jwk.x, "base64url"),
+    Buffer.from([0x22, 0x58, 0x20]), Buffer.from(jwk.y, "base64url"),
+  ]));
+}
+
 function setup(riskGate?: ApprovalRiskGate) {
   const records = authoritativeRecords(); const repository = new MemoryRepository(records.goal, records.plan); const bank = new ControlledBank(records.state); const verifier = new TestVerifier(); const authenticationVerifier = new TestAuthenticationVerifier();
   let currentNow = new Date(fixedNow);
@@ -141,6 +168,48 @@ beforeEach(() => {
   vi.stubEnv("PARLANCE_WEBAUTHN_RP_ID", "localhost"); vi.stubEnv("PARLANCE_WEBAUTHN_ORIGIN", "http://localhost:3000");
 });
 afterEach(() => vi.unstubAllEnvs());
+
+it("verifies a cryptographically signed, exact-plan WebAuthn assertion and rejects replay, wrong origin, and missing user verification", async () => {
+  const makeCeremony = async () => {
+    const values = setup();
+    const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const credentialId = Buffer.from("test-credential-id").toString("base64url");
+    await values.repository.saveWebAuthnCredential({
+      id: "test-credential-row", userId: values.goal.contract.userId, credentialId,
+      publicKey: coseEc2PublicKey(publicKey), userHandle: new Uint8Array([2]), signCount: 0,
+      transports: ["internal"], deviceType: "singleDevice", backedUp: false,
+    });
+    const service = new WebAuthnService(
+      values.repository as unknown as ParlanceRepository & WebAuthnRepository, values.bank,
+      undefined, undefined, () => fixedNow,
+    );
+    const issued = await service.approvalOptions(values.plan.plan.id, "trace-signed-assertion");
+    return { ...values, service, issued, privateKey, credentialId };
+  };
+  const valid = await makeCeremony();
+  const response = signedAssertion({ challenge: valid.issued.options.challenge, origin: "http://localhost:3000", rpId: "localhost", credentialId: valid.credentialId, privateKey: valid.privateKey });
+  const approved = await valid.service.verifyApproval(valid.plan.plan.id, valid.issued.challengeId, response, "trace-verified-assertion");
+  expect(approved.evidence).toMatchObject({ userVerified: true, financialPlanHash: valid.plan.plan.planHash, authenticatorCounterAfter: 1 });
+  expect(valid.repository).toMatchObject({ approvals: 1, executions: 1 });
+  expect(valid.bank.writes).toBe(0);
+  await expect(valid.service.verifyApproval(valid.plan.plan.id, valid.issued.challengeId, response, "trace-replay")).rejects.toThrow("WEBAUTHN_APPROVAL_CHALLENGE_INVALID");
+
+  const wrongOrigin = await makeCeremony();
+  await expect(wrongOrigin.service.verifyApproval(
+    wrongOrigin.plan.plan.id, wrongOrigin.issued.challengeId,
+    signedAssertion({ challenge: wrongOrigin.issued.options.challenge, origin: "https://attacker.example", rpId: "localhost", credentialId: wrongOrigin.credentialId, privateKey: wrongOrigin.privateKey }),
+    "trace-wrong-origin",
+  )).rejects.toThrow("WEBAUTHN_APPROVAL_VERIFICATION_FAILED");
+  expect(wrongOrigin.repository).toMatchObject({ approvals: 0, executions: 0 });
+
+  const noVerification = await makeCeremony();
+  await expect(noVerification.service.verifyApproval(
+    noVerification.plan.plan.id, noVerification.issued.challengeId,
+    signedAssertion({ challenge: noVerification.issued.options.challenge, origin: "http://localhost:3000", rpId: "localhost", credentialId: noVerification.credentialId, privateKey: noVerification.privateKey, userVerified: false }),
+    "trace-no-user-verification",
+  )).rejects.toThrow("WEBAUTHN_APPROVAL_VERIFICATION_FAILED");
+  expect(noVerification.repository).toMatchObject({ approvals: 0, executions: 0 });
+});
 
 it("binds the existing passkey ceremony and execution creation to a bundle-owned READY plan", async () => {
   const values = setup();
