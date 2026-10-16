@@ -44,6 +44,17 @@ export function durableBankEnabled(environment: NodeJS.ProcessEnv = process.env)
 
 type Transaction = Prisma.TransactionClient;
 async function lockedState(tx: Transaction, userId: string) {
+  // PostgreSQL 15+ records the database-default collation version. If the
+  // underlying OS collation changed, text indexes may no longer be reliable;
+  // financial writes must wait for an approved REINDEX and version refresh.
+  const versions = await tx.$queryRaw<Array<{ version: number }>>`SELECT current_setting('server_version_num')::integer AS version`;
+  if (versions.length !== 1) throw new BankRejection("BANK_COLLATION_STATUS_UNAVAILABLE", 503);
+  if (versions[0]!.version >= 150000) {
+    const collations = await tx.$queryRaw<Array<{ healthy: boolean }>>`
+      SELECT datcollversion IS NOT DISTINCT FROM pg_database_collation_actual_version(oid) AS healthy
+      FROM pg_database WHERE datname = current_database()`;
+    if (collations.length !== 1 || !collations[0]!.healthy) throw new BankRejection("BANK_COLLATION_MISMATCH", 503);
+  }
   const users = await tx.$queryRaw<Array<{ id: string }>>`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
   if (users.length !== 1) throw new BankRejection("CUSTOMER_NOT_FOUND", 404);
   const existing = await tx.bankServiceState.findUnique({ where: { userId } });

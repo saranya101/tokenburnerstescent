@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PrismaClient } from "@parlance/db";
 import { buildApp } from "./app.js";
 import { PrismaDurableBank, durableBankEnabled } from "./durable-bank.js";
@@ -11,6 +11,13 @@ const local = (() => {
 })();
 const userId = "durable-test-customer";
 const headers = { "x-parlance-bank-token": "durable-test-bank-token" };
+
+it("refuses a collation-version mismatch before looking up a customer or writing money", async () => {
+  const query = vi.fn().mockResolvedValueOnce([{ version: 180000 }]).mockResolvedValueOnce([{ healthy: false }]);
+  const db = { $transaction: async (fn: (tx: { $queryRaw: typeof query }) => unknown) => fn({ $queryRaw: query }) } as unknown as PrismaClient;
+  await expect(new PrismaDurableBank(db).snapshot("synthetic-customer")).rejects.toThrow("BANK_COLLATION_MISMATCH");
+  expect(query).toHaveBeenCalledTimes(2);
+});
 
 describe.runIf(local)("durable synthetic bank against disposable local PostgreSQL", () => {
   const db = new PrismaClient({ datasourceUrl: url! });
