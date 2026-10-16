@@ -146,6 +146,28 @@ function coseEc2PublicKey(publicKey: KeyObject): Uint8Array<ArrayBuffer> {
   ]));
 }
 
+function registrationResponse(input: { challenge: string; origin: string; rpId: string; credentialId: Buffer; publicKey: KeyObject; userVerified?: boolean }): RegistrationResponseJSON {
+  const clientData = Buffer.from(JSON.stringify({ type: "webauthn.create", challenge: input.challenge, origin: input.origin }));
+  const authenticatorData = Buffer.concat([
+    createHash("sha256").update(input.rpId).digest(),
+    Buffer.from([input.userVerified === false ? 0x41 : 0x45, 0, 0, 0, 0]),
+    Buffer.alloc(16),
+    Buffer.from([input.credentialId.length >> 8, input.credentialId.length & 0xff]),
+    input.credentialId,
+    Buffer.from(coseEc2PublicKey(input.publicKey)),
+  ]);
+  if (authenticatorData.length > 255) throw new Error("Test authenticator data is too long");
+  const attestationObject = Buffer.concat([
+    Buffer.from([0xa3, 0x63]), Buffer.from("fmt"), Buffer.from([0x64]), Buffer.from("none"),
+    Buffer.from([0x68]), Buffer.from("authData"), Buffer.from([0x58, authenticatorData.length]), authenticatorData,
+    Buffer.from([0x67]), Buffer.from("attStmt"), Buffer.from([0xa0]),
+  ]);
+  const id = input.credentialId.toString("base64url");
+  return { id, rawId: id, type: "public-key", clientExtensionResults: {}, response: {
+    clientDataJSON: clientData.toString("base64url"), attestationObject: attestationObject.toString("base64url"), transports: ["internal"],
+  } };
+}
+
 function setup(riskGate?: ApprovalRiskGate) {
   const records = authoritativeRecords(); const repository = new MemoryRepository(records.goal, records.plan); const bank = new ControlledBank(records.state); const verifier = new TestVerifier(); const authenticationVerifier = new TestAuthenticationVerifier();
   let currentNow = new Date(fixedNow);
@@ -168,6 +190,27 @@ beforeEach(() => {
   vi.stubEnv("PARLANCE_WEBAUTHN_RP_ID", "localhost"); vi.stubEnv("PARLANCE_WEBAUTHN_ORIGIN", "http://localhost:3000");
 });
 afterEach(() => vi.unstubAllEnvs());
+
+it("verifies a protocol-encoded WebAuthn registration and rejects replay and missing user verification", async () => {
+  const values = setup();
+  const service = new WebAuthnService(values.repository as unknown as ParlanceRepository & WebAuthnRepository, values.bank, undefined, undefined, () => fixedNow);
+  const issued = await service.registrationOptions("demo-user");
+  const { publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const credentialId = Buffer.from("registered-test-credential");
+  const response = registrationResponse({ challenge: issued.options.challenge, origin: "http://localhost:3000", rpId: "localhost", credentialId, publicKey });
+  const result = await service.verifyRegistration("demo-user", issued.challengeId, response);
+  expect(result).toMatchObject({ userId: "demo-user", credentialId: credentialId.toString("base64url"), verified: true });
+  expect(values.repository.credentials.size).toBe(1);
+  await expect(service.verifyRegistration("demo-user", issued.challengeId, response)).rejects.toThrow("WEBAUTHN_REGISTRATION_CHALLENGE_INVALID");
+
+  const noUv = setup();
+  const noUvService = new WebAuthnService(noUv.repository as unknown as ParlanceRepository & WebAuthnRepository, noUv.bank, undefined, undefined, () => fixedNow);
+  const noUvIssued = await noUvService.registrationOptions("demo-user");
+  await expect(noUvService.verifyRegistration("demo-user", noUvIssued.challengeId,
+    registrationResponse({ challenge: noUvIssued.options.challenge, origin: "http://localhost:3000", rpId: "localhost", credentialId, publicKey, userVerified: false }),
+  )).rejects.toThrow("WEBAUTHN_REGISTRATION_VERIFICATION_FAILED");
+  expect(noUv.repository.credentials.size).toBe(0);
+});
 
 it("verifies a cryptographically signed, exact-plan WebAuthn assertion and rejects replay, wrong origin, and missing user verification", async () => {
   const makeCeremony = async () => {
