@@ -153,4 +153,30 @@ describe.runIf(local)("durable synthetic bank against disposable local PostgreSQ
     expect(after.holdings).toEqual([{ assetId: "asset-aapl", quantity: "4" }]);
     await bank.close();
   });
+
+  it("rejects expired FX and asset quotes without changing authoritative balances", async () => {
+    const bank = app();
+    const before = await state(bank);
+    const fx = await bank.inject({ method: "POST", url: "/v1/fx/quote", headers,
+      payload: { userId, fromCurrency: "SGD", toCurrency: "USD", amount: { currency: "SGD", minorUnits: "1000" } } });
+    expect(fx.statusCode).toBe(200);
+    await bank.close();
+    const expired = buildApp({ bankApiToken: "durable-test-bank-token", durableBank: new PrismaDurableBank(db,
+      () => new Date(Date.now() + 10 * 60_000)) });
+    const fxResult = await expired.inject({ method: "POST", url: "/v1/execute/fx",
+      headers: { ...headers, "idempotency-key": "durable-expired-fx", "x-expected-bank-state-version": String(before.stateVersion) },
+      payload: { userId, accountId: "acc-sgd", fromAmount: { currency: "SGD", minorUnits: "1000" }, toCurrency: "USD", quoteId: fx.json().id } });
+    expect(fxResult.json()).toEqual({ code: "QUOTE_EXPIRED" });
+    const quote = before.assetQuotes[0];
+    const buyResult = await expired.inject({ method: "POST", url: "/v1/execute/buy",
+      headers: { ...headers, "idempotency-key": "durable-expired-buy", "x-expected-bank-state-version": String(before.stateVersion) },
+      payload: { userId, sourceAccountId: "acc-usd", assetId: "asset-aapl", quantity: "1",
+        maximumSpend: { currency: "USD", minorUnits: "20100" }, quoteId: quote.quoteId,
+        settlementCurrency: "USD", quotedUnitPriceMinor: "20000", quotedFeeMinor: "100", authorizedTotalMinor: "20100" } });
+    expect(buyResult.json()).toEqual({ code: "ASSET_QUOTE_EXPIRED" });
+    const after = await state(expired);
+    expect(after.stateVersion).toBe(before.stateVersion);
+    expect(after.accounts).toEqual(before.accounts);
+    await expired.close();
+  });
 });

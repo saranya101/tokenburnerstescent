@@ -24,14 +24,14 @@ function customerTargetIsolated(environment: NodeJS.ProcessEnv = process.env): b
   if (!direct) return false;
   let directParsed: URL;
   try { directParsed = new URL(direct); } catch { return false; }
-  if (directParsed.protocol !== parsed.protocol || directParsed.hostname !== parsed.hostname || directParsed.pathname !== parsed.pathname || directParsed.username !== parsed.username || directParsed.password !== parsed.password) return false;
+  if (directParsed.protocol !== parsed.protocol || directParsed.hostname !== parsed.hostname || directParsed.port !== parsed.port || directParsed.pathname !== parsed.pathname || directParsed.username !== parsed.username || directParsed.password !== parsed.password) return false;
   if (environment.PARLANCE_LOCAL_TEST_MODE === "true" && environment.NODE_ENV !== "production") {
     return ["localhost", "127.0.0.1"].includes(parsed.hostname) && /^\/parlance_test_[a-z0-9_]+$/u.test(parsed.pathname);
   }
   return environment.RAILWAY_PROJECT_ID === "55d5cb65-c1ce-4431-877c-63d08969713e" &&
     environment.RAILWAY_ENVIRONMENT_ID === "17977510-a832-4949-b083-e24e4b36c7c6" &&
     environment.RAILWAY_SERVICE_ID === "1ff8b7d4-ab42-4edb-a0b8-988291c8c9ad" &&
-    parsed.hostname === "postgres.railway.internal" && parsed.pathname === "/railway";
+    parsed.hostname === "postgres.railway.internal" && (!parsed.port || parsed.port === "5432") && parsed.pathname === "/railway";
 }
 
 export function durableBankEnabled(environment: NodeJS.ProcessEnv = process.env): boolean {
