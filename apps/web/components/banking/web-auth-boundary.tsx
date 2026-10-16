@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 type Status = "loading" | "signed-out" | "authenticated" | "unavailable";
 
-export function WebAuthBoundary({ children }: { children: ReactNode }) {
+export function WebAuthBoundary({ children, executionAvailable = false }: { children: ReactNode; executionAvailable?: boolean }) {
   const [status, setStatus] = useState<Status>("loading");
   useEffect(() => {
     let active = true;
@@ -19,7 +19,7 @@ export function WebAuthBoundary({ children }: { children: ReactNode }) {
     return () => { active = false; clearInterval(timer); };
   }, []);
 
-  if (status === "authenticated") return <><div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 20px" }}><span>Plan review only · Financial execution unavailable</span><button type="button" onClick={async () => {
+  if (status === "authenticated") return <><div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 20px" }}><span>{executionAvailable ? "Synthetic banking · Passkey required for transactions" : "Plan review only · Financial execution unavailable"}</span><button type="button" onClick={async () => {
     const response = await fetch("/api/web-auth/logout", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     if (response.ok) { setStatus("signed-out"); window.location.assign("/"); }
   }}>Sign out</button></div>{children}</>;

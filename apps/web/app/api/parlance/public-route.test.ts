@@ -20,7 +20,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
-  for (const key of ["PARLANCE_PUBLIC_SAFE_MODE", "PARLANCE_PUBLIC_PASSKEY_ENROLLMENT_ENABLED", "PARLANCE_CUSTOMER_USER_ID", "PARLANCE_INTERNAL_API_TOKEN", "API_URL"]) delete process.env[key];
+  for (const key of ["PARLANCE_PUBLIC_SAFE_MODE", "PARLANCE_PUBLIC_PASSKEY_ENROLLMENT_ENABLED", "PARLANCE_PUBLIC_PASSKEY_EXECUTION_ENABLED", "PARLANCE_BANK_DURABLE_EXECUTION", "PARLANCE_ISOLATED_SYNTHETIC_EXECUTION_APPROVED", "PARLANCE_CUSTOMER_USER_ID", "PARLANCE_INTERNAL_API_TOKEN", "API_URL"]) delete process.env[key];
 });
 
 it("rejects anonymous requests even when a fixed legacy customer is configured", async () => {
@@ -79,6 +79,27 @@ it("permits only same-origin enrollment mutations while approval and execution s
   expect((await POST(new NextRequest("https://bank.example/api/parlance/plans/p1/approval-options", { method: "POST", headers: { origin: "https://bank.example" }, body: "{}" }), context("plans", "p1", "approval-options"))).status).toBe(404);
   expect((await POST(new NextRequest("https://bank.example/api/parlance/executions/e1/run", { method: "POST", headers: { origin: "https://bank.example" }, body: "{}" }), context("executions", "e1", "run"))).status).toBe(404);
   expect(upstream).toHaveBeenCalledTimes(1);
+});
+
+it("opens exact-plan routes only with all durable execution gates and a same-origin customer session", async () => {
+  const upstream = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+  vi.stubGlobal("fetch", upstream);
+  const url = "https://bank.example/api/parlance/plans/p1/approval-options";
+  const request = () => new NextRequest(url, { method: "POST", headers: { origin: "https://bank.example" }, body: "{}" });
+  auth.userId = "mapped-customer";
+  process.env.PARLANCE_PUBLIC_PASSKEY_ENROLLMENT_ENABLED = "true";
+  process.env.PARLANCE_PUBLIC_PASSKEY_EXECUTION_ENABLED = "true";
+  process.env.PARLANCE_BANK_DURABLE_EXECUTION = "true";
+  expect((await POST(request(), context("plans", "p1", "approval-options"))).status).toBe(404);
+  process.env.PARLANCE_ISOLATED_SYNTHETIC_EXECUTION_APPROVED = "true";
+  auth.userId = undefined;
+  expect((await POST(request(), context("plans", "p1", "approval-options"))).status).toBe(401);
+  auth.userId = "mapped-customer";
+  expect((await POST(new NextRequest(url, { method: "POST", headers: { origin: "https://evil.example" }, body: "{}" }), context("plans", "p1", "approval-options"))).status).toBe(403);
+  expect((await POST(request(), context("plans", "p1", "approval-options"))).status).toBe(200);
+  const forwarded = upstream.mock.calls[0]![1].headers as Record<string, string>;
+  expect(forwarded["x-parlance-customer-id"]).toBe("mapped-customer");
+  expect((await POST(new NextRequest("https://bank.example/api/parlance/ops/runs", { method: "POST", headers: { origin: "https://bank.example" }, body: "{}" }), context("ops", "runs"))).status).toBe(404);
 });
 
 it("rejects path traversal and oversized public requests", async () => {

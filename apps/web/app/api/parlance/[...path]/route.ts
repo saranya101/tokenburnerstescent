@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiBaseUrl, customerApiHeaders, CUSTOMER_PRINCIPAL_HEADER, INTERNAL_TOKEN_HEADER, webSecurityConfigurationValid } from "../../../../lib/server-api-auth";
 import { sameOrigin, setWebSessionCookies, webAuthEnabled, webCustomer } from "../../../../lib/web-auth";
+import { publicPasskeyExecutionEnabled } from "../../../../lib/financial-capability";
 
 const postRoutes = [
   /^messages$/u,
@@ -42,12 +43,14 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
   const publicSafe = process.env.PARLANCE_PUBLIC_SAFE_MODE === "true";
   const enrollmentEnabled = process.env.PARLANCE_PUBLIC_PASSKEY_ENROLLMENT_ENABLED === "true";
   const enrollmentRoute = method === "GET" ? /^webauthn\/registration\/status$/u.test(path) : /^webauthn\/registration\/(?:options|verify)$/u.test(path);
-  // Enrollment can be enabled independently; approval and execution remain closed.
+  const executionEnabled = publicPasskeyExecutionEnabled();
+  const executionRoute = method === "POST" && [/^plans\/[^/]+\/approval-options$/u, /^plans\/[^/]+\/approval-verify$/u, /^executions\/[^/]+\/run$/u].some((pattern) => pattern.test(path));
+  // A separate gate opens only customer-bound approval and execution after durable bank readiness.
   if (publicSafe && !([/^customer\/(?:state|activity)$/u, /^executions\/[^/]+\/detail$/u].some((pattern) => method === "GET" && pattern.test(path)) ||
       [/^messages$/u, /^clarifications\/[^/]+\/answer$/u, /^bundle-clarifications\/[^/]+\/answer$/u,
         /^goal-candidates\/[^/]+\/confirm$/u, /^goal-bundle-candidates\/[^/]+\/confirm$/u,
         /^goals\/[^/]+\/(?:compile|funding-candidate)$/u, /^goal-bundles\/[^/]+\/compile$/u]
-        .some((pattern) => method === "POST" && pattern.test(path)) || enrollmentEnabled && enrollmentRoute)) return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
+        .some((pattern) => method === "POST" && pattern.test(path)) || enrollmentEnabled && enrollmentRoute || executionEnabled && executionRoute)) return NextResponse.json({ code: "NOT_FOUND" }, { status: 404 });
   if (publicSafe && (!webAuthEnabled() || (method === "POST" && !sameOrigin(request)))) return NextResponse.json({ code: "FORBIDDEN" }, { status: 403 });
   let customer: Awaited<ReturnType<typeof webCustomer>>;
   if (publicSafe) {

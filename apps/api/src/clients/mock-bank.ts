@@ -31,8 +31,8 @@ export class MockBankClient {
     if (!response.ok) { logger.error({ dependency: "mock-bank", traceId, statusCode: response.status }, "dependency returned an error"); throw new Error("MOCK_BANK_UNAVAILABLE"); }
     return BankStateSnapshotV1.parse(await response.json());
   }
-  async execute(path: "fx" | "transfer" | "payment" | "buy", payload: unknown, idempotencyKey: string, traceId: string): Promise<BankWriteResult> {
-    const headers = this.headers({ "content-type": "application/json", "idempotency-key": idempotencyKey, "x-trace-id": traceId }); let response: Response;
+  async execute(path: "fx" | "transfer" | "payment" | "buy", payload: unknown, idempotencyKey: string, traceId: string, expectedStateVersion?: number): Promise<BankWriteResult> {
+    const headers = this.headers({ "content-type": "application/json", "idempotency-key": idempotencyKey, "x-trace-id": traceId, ...(expectedStateVersion === undefined ? {} : { "x-expected-bank-state-version": String(expectedStateVersion) }) }); let response: Response;
     try { response = await fetch(`${this.baseUrl}/v1/execute/${path}`, { method: "POST", headers, body: JSON.stringify(payload) }); }
     catch (error) { logger.error({ err: error, dependency: "mock-bank", traceId }, "bank write response outcome unknown"); throw new BankOutcomeUnknownError(); }
     if (!response.ok) {
