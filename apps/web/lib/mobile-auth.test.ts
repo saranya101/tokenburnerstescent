@@ -21,8 +21,8 @@ vi.mock("@parlance/db", () => ({ getPrismaClient: () => ({
 
 import { createMobileSession, mobileSessionCustomer, revokeAccessSession, revokeMobileSession, rotateMobileSession } from "./mobile-auth";
 
-const identity = { userId: "customer-a", issuer: "https://identity.example", subject: "subject-a" };
-beforeEach(() => { memory.sessions.clear(); memory.identities.clear(); memory.identities.set(`${identity.issuer}\0${identity.subject}`, identity.userId); });
+const identity = { userId: "customer-a", issuer: "parlance:password", subject: "customer-a" };
+beforeEach(() => { process.env.PARLANCE_AUTH_JWT_SECRET = "test-jwt-secret-at-least-32-bytes-long"; memory.sessions.clear(); memory.identities.clear(); memory.identities.set(`${identity.issuer}\0${identity.subject}`, identity.userId); });
 
 describe("mobile sessions", () => {
   it("stores only token hashes and resolves the mapped customer", async () => {
@@ -59,4 +59,12 @@ describe("mobile sessions", () => {
     expect(await mobileSessionCustomer(`Bearer ${tokens.accessToken}`)).toBeUndefined();
     expect(await rotateMobileSession(tokens.refreshToken)).toBeUndefined();
   });
+});
+
+it("does not accept old provider sessions or exchange them into password accounts", async () => {
+  await expect(createMobileSession({ ...identity, issuer: "https://old-provider.example" })).rejects.toThrow("PASSWORD_IDENTITY_REQUIRED");
+  const tokens = await createMobileSession(identity);
+  Object.assign(memory.sessions.get("session-1")!, { issuer: "https://old-provider.example" });
+  expect(await mobileSessionCustomer(`Bearer ${tokens.accessToken}`)).toBeUndefined();
+  expect(await rotateMobileSession(tokens.refreshToken)).toBeUndefined();
 });

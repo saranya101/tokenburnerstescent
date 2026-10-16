@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { proxy } from "./proxy";
 
-const mobileRequired = ["PARLANCE_MOBILE_OIDC_ISSUER", "PARLANCE_MOBILE_OIDC_CLIENT_ID", "PARLANCE_MOBILE_OIDC_AUDIENCE", "PARLANCE_MOBILE_OIDC_JWKS_URI", "DATABASE_URL", "DIRECT_URL", "PARLANCE_INTERNAL_API_TOKEN", "API_URL"];
+const mobileRequired = ["PARLANCE_AUTH_JWT_SECRET", "DATABASE_URL", "DIRECT_URL", "PARLANCE_INTERNAL_API_TOKEN", "API_URL"];
 afterEach(() => { for (const key of ["PARLANCE_PUBLIC_SAFE_MODE", "PARLANCE_PUBLIC_MOBILE_ENABLED", "PARLANCE_PUBLIC_WEB_ENABLED", "PARLANCE_MOBILE_GATEWAY_ONLY", ...mobileRequired]) delete process.env[key]; });
 
 it("keeps development routes available when public safe mode is absent", () => {
@@ -39,7 +39,7 @@ it("permits only the configured authenticated mobile gateway while public safe m
   for (const path of ["/api/parlance/customer/state", "/api/operator/session", "/api/demo/mock-bank", "/ops"]) {
     expect(proxy(new NextRequest(`https://example.test${path}`)).status).toBe(404);
   }
-  delete process.env.PARLANCE_MOBILE_OIDC_AUDIENCE;
+  delete process.env.PARLANCE_AUTH_JWT_SECRET;
   expect(proxy(new NextRequest("https://example.test/api/mobile/customer/state")).status).toBe(404);
 });
 

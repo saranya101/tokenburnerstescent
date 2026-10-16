@@ -25,13 +25,9 @@ describe("mobile customer gateway", () => {
     const request = new NextRequest("https://bank.example/api/mobile/customer/state");
     expect((await GET(request, context("customer", "state"))).status).toBe(401);
   });
-  it("exchanges only verified external identity for a mobile session", async () => {
+  it("retires external identity token exchange", async () => {
     const request = new NextRequest("https://bank.example/api/mobile/session/exchange", { method: "POST", headers: { authorization: "Bearer external-jwt" }, body: "{}" });
-    expect((await POST(request, context("session", "exchange"))).status).toBe(401);
-    identity.oidcUserId = "alice";
-    const response = await POST(request, context("session", "exchange"));
-    expect(response.status).toBe(200);
-    expect((await response.json()).accessToken).toBe("access");
+    expect((await POST(request, context("session", "exchange"))).status).toBe(410);
   });
   it("does not forward authorization or execution routes", async () => {
     identity.userId = "alice";

@@ -6,29 +6,19 @@ vi.mock("./mobile-auth", () => ({
   mobileSessionCustomer: async (authorization: string) => authorization === "Bearer valid-access" || authorization === "Bearer next-access" ? session.userId : undefined,
   rotateMobileSession: async (refresh: string) => refresh === "valid-refresh" ? session.rotated : undefined,
 }));
-import { codeChallenge, sameOrigin, webAuthConfiguration, webCustomer } from "./web-auth";
+import { sameOrigin, webAuthEnabled, webCustomer } from "./web-auth";
 
 beforeEach(() => {
-  process.env.PARLANCE_MOBILE_OIDC_ISSUER = "https://tenant.example/";
-  process.env.PARLANCE_MOBILE_OIDC_AUDIENCE = "https://api.example";
-  process.env.PARLANCE_MOBILE_OIDC_CLIENT_ID = "native-client";
-  process.env.PARLANCE_MOBILE_OIDC_JWKS_URI = "https://tenant.example/.well-known/jwks.json";
+  process.env.PARLANCE_AUTH_JWT_SECRET = "test-signing-secret-with-at-least-32-bytes";
+  process.env.PARLANCE_PUBLIC_WEB_ENABLED = "true";
   session.userId = undefined; session.rotated = undefined;
 });
-afterEach(() => {
-  for (const key of ["PARLANCE_MOBILE_OIDC_ISSUER", "PARLANCE_MOBILE_OIDC_AUDIENCE", "PARLANCE_MOBILE_OIDC_CLIENT_ID", "PARLANCE_MOBILE_OIDC_JWKS_URI", "PARLANCE_WEB_OIDC_CLIENT_ID"]) delete process.env[key];
+afterEach(() => { delete process.env.PARLANCE_AUTH_JWT_SECRET; delete process.env.PARLANCE_PUBLIC_WEB_ENABLED; });
+it("requires a configured signing secret and no identity provider", () => {
+  expect(webAuthEnabled()).toBe(true);
+  delete process.env.PARLANCE_AUTH_JWT_SECRET; expect(webAuthEnabled()).toBe(false);
 });
-
-it("requires coherent HTTPS provider settings and supports a separate public web client", () => {
-  expect(webAuthConfiguration()?.clientId).toBe("native-client");
-  process.env.PARLANCE_WEB_OIDC_CLIENT_ID = "web-client";
-  expect(webAuthConfiguration()?.clientId).toBe("web-client");
-  process.env.PARLANCE_MOBILE_OIDC_JWKS_URI = "https://attacker.example/keys";
-  expect(webAuthConfiguration()).toBeUndefined();
-});
-
-it("uses PKCE S256 and rejects cross-origin writes", () => {
-  expect(codeChallenge("known-verifier")).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+it("rejects cross-origin browser writes", () => {
   expect(sameOrigin(new NextRequest("https://bank.example/api/parlance/messages", { headers: { origin: "https://evil.example" } }))).toBe(false);
   expect(sameOrigin(new NextRequest("https://bank.example/api/parlance/messages", { headers: { origin: "https://tokenburnerstescent-production.up.railway.app" } }))).toBe(true);
 });
