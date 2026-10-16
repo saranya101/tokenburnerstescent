@@ -54,13 +54,13 @@ try {
     const state = await databaseState(db);
     console.log(`ISOLATED_DATABASE_INSPECTION ${JSON.stringify(state)}`);
   } else if (mode === "--verify") {
-    const state = await databaseState(db);
+    await databaseState(db);
     const issuer = process.env.PARLANCE_MOBILE_OIDC_ISSUER;
     const subject = process.env.PARLANCE_AUTH0_TEST_SUB;
     if (!issuer?.startsWith("https://") || !/^auth0\|[A-Za-z0-9]+$/u.test(subject ?? "")) throw new Error("VERIFIED_AUTH0_IDENTITY_REQUIRED");
     const userId = `synthetic-${createHash("sha256").update(`${issuer}\0${subject}`).digest("hex").slice(0, 24)}`;
-    const identities = await db.externalIdentity.findMany({ select: { issuer: true, subject: true, userId: true } });
-    if (state.tableCounts.User !== 1 || identities.length !== 1 || identities[0].issuer !== issuer || identities[0].subject !== subject || identities[0].userId !== userId) {
+    const identities = await db.externalIdentity.findMany({ where: { issuer, subject }, select: { issuer: true, subject: true, userId: true } });
+    if (identities.length !== 1 || identities[0].issuer !== issuer || identities[0].subject !== subject || identities[0].userId !== userId) {
       throw new Error("ISOLATED_IDENTITY_MAPPING_MISMATCH");
     }
     const { databaseCustomerSnapshot } = await import("../../../services/mock-bank/dist/database-snapshot.js");

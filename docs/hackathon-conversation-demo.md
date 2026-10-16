@@ -31,7 +31,7 @@ Other regression prompts: `send 100 to John Lim`, `send hundred dollars to John`
 - The database snapshot disabled transfer planning and supplied no FX quotes. Synthetic plan modelling now permits transfers and uses the mock bank's existing expiring indicative FX quotes. Every bank write in snapshot mode still returns `BANK_EXECUTION_DISABLED`; public passkey execution flags stay disabled.
 - The pending ledger migration is not applied. Startup inspection accepts only that specific missing migration in explicitly safe snapshot mode with migrations disabled. All other missing/unexpected migration states remain rejected; durable execution still requires the full schema.
 
-Public execution remains blocked pending the ledger migration and PostgreSQL collation repair, a real HTTPS browser passkey enrollment and exact-plan approval, and a successful authorized durable synthetic execution with reconciliation. Existing identity, ownership, risk, challenge expiry and replay checks remain in place.
+Public execution remains blocked pending current PostgreSQL collation verification, a ledger readiness check, a real HTTPS browser passkey enrollment and exact-plan approval, and a successful authorized durable synthetic execution with reconciliation. Existing identity, ownership, risk, challenge expiry and replay checks remain in place.
 
 ## Android
 
@@ -44,3 +44,5 @@ This existing APK is installable and debug-signed. Physical-device login/read ve
 Targeted conversation and bundle regression suites cover the original request, exact names, spoken hundreds, duplicate Johns, unknown recipients, independent currency clarification, invalid and valid continuation, and absence of premature confirmation. Browser presentation tests cover sentinel suppression and retry recovery. Compiler regressions cover insufficient available funds and the protected minimum balance. Existing composite compiler tests verify conditional FX, fees, balances and deterministic ordering.
 
 Run all four requested package suites, the database and compiler suites, `pnpm typecheck`, `pnpm lint`, `pnpm security:assurance`, and `pnpm build`. Database concurrency and real passkey integration tests require their separately configured disposable databases and remain skipped locally; do not claim they were exercised.
+
+Startup verification checks the configured Auth0 customer mapping and its customer-scoped snapshot. Additional synthetic test users are permitted; seeding still requires an empty database. On the first rollout, production already had the ledger migration and an additional synthetic test user, so the old global single-user assertion prevented startup. Execution flags remain disabled.
