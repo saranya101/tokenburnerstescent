@@ -79,3 +79,8 @@ function describeGoal(value: unknown, label: (reference: unknown, id: unknown, f
   if (goal.type === "ACQUIRE_ASSET") return `Buy ${String(goal.quantity ?? "a quantity to confirm")} ${label(goal.assetReference, goal.assetId, "selected asset")}`;
   return "Review your requested action";
 }
+
+export function accountName(accountId: string, accounts: readonly Pick<BankState["accounts"][number], "id" | "currency" | "type">[] = []): string {
+  const account = accounts.find((item) => item.id === accountId);
+  return account ? `${account.currency} ${account.type.toLowerCase()}` : "Selected account";
+}

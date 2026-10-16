@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeCandidate, holdingValue, money, quotedPortfolioValues, sgdReserveMinorUnits } from "./presentation";
+import { accountName, describeCandidate, holdingValue, money, quotedPortfolioValues, sgdReserveMinorUnits } from "./presentation";
 
 describe("banking display values", () => {
   it("preserves large balances without floating point loss", () => expect(money("SGD", "900719925474099300")).toBe("S$9,007,199,254,740,993.00"));
@@ -37,4 +37,9 @@ it("resolves generated entity IDs using this customer's current catalogue", () =
   expect(describeCandidate({ goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientId: "customer-payee" }, constraints: [{ type: "MIN_AVAILABLE_BALANCE", money: { currency: "SGD", minorUnits: "100000" }, accountId: "customer-account" }] }, state)).toEqual(["Send S$100.00 to John Tan", "Keep at least S$1,000.00 available in SGD checking"]);
   expect(describeCandidate({ goal: { type: "ACQUIRE_ASSET", quantity: "1", assetId: "customer-asset" } }, state)).toEqual(["Buy 1 Apple Inc."]);
   expect(describeCandidate({ goal: { type: "DELIVER_MONEY", amount: { currency: "SGD", minorUnits: "10000" }, recipientId: "other-customer-private-id" } }, state).join()).not.toContain("other-customer-private-id");
+});
+
+it("labels projected balances without exposing generated account IDs", () => {
+  expect(accountName("private-id", [{ id: "private-id", currency: "USD", type: "CHECKING" }])).toBe("USD checking");
+  expect(accountName("unknown-private-id")).toBe("Selected account");
 });
